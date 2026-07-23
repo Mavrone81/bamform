@@ -1,0 +1,782 @@
+// BamForm — Prisma schema
+// Faithful to BAMFORM-DBD-001 §6 (Data Dictionary) and §5 (Enumerations).
+//
+// What Prisma CANNOT express is added by hand-written SQL migrations
+// (see migrations/*_invariants/migration.sql):
+//   - the uuidv7() default function (Postgres 16 has no native uuidv7())
+//   - partial indexes / partial unique indexes (DBD §7, §8)
+//   - BRIN indexes
+//   - CHECK constraints that need cross-row / cross-table logic (via trigger)
+//   - triggers (INV-02, INV-05, INV-09, INV-10)
+//   - role grants (DBD §7.1 / api/prisma/grants.sql)
+//
+// snake_case DB identifiers are produced via @@map / @map throughout.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- §5 Enums
+
+enum FrequencyT {
+  M1
+  M3
+  M6
+  Y
+
+  @@map("frequency_t")
+}
+
+enum AssetStatusT {
+  active
+  under_repair
+  decommissioned
+
+  @@map("asset_status_t")
+}
+
+enum RevisionStatusT {
+  draft
+  pending_approval
+  current
+  superseded
+  rejected
+
+  @@map("revision_status_t")
+}
+
+enum JobStatusT {
+  scheduled
+  assigned
+  in_progress
+  submitted
+  verified
+  archived
+  voided
+
+  @@map("job_status_t")
+}
+
+enum ItemStatusT {
+  done
+  not_applicable
+  not_done
+
+  @@map("item_status_t")
+}
+
+enum SpecTypeT {
+  range
+  tolerance
+  pass_fail
+  text
+
+  @@map("spec_type_t")
+}
+
+enum JudgementT {
+  pass
+  fail
+  not_evaluated
+
+  @@map("judgement_t")
+}
+
+enum ApprovalActionT {
+  submitted
+  verified
+  returned
+  recalled
+  voidedAction @map("voided")
+  revision_approved
+  revision_rejected
+
+  @@map("approval_action_t")
+}
+
+enum UserStatusT {
+  active
+  suspended
+  deactivated
+
+  @@map("user_status_t")
+}
+
+enum NotificationChannelT {
+  email
+  in_app
+
+  @@map("notification_channel_t")
+}
+
+enum NotificationStateT {
+  queued
+  sent
+  failed
+  read
+
+  @@map("notification_state_t")
+}
+
+enum AuditActionT {
+  create
+  update
+  state_change
+  approve
+  reject
+  voidAction @map("void")
+  login
+  login_failed
+  permission_change
+  key_rotation
+  exportAction @map("export")
+
+  @@map("audit_action_t")
+}
+
+// ----------------------------------------------------------------- §6.1 area
+
+model Area {
+  id       String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code     String  @unique
+  name     String
+  parentId String? @map("parent_id") @db.Uuid
+  active   Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  parent   Area?  @relation("AreaHierarchy", fields: [parentId], references: [id])
+  children Area[] @relation("AreaHierarchy")
+
+  assets          Asset[]
+  userAreaScopes  UserAreaScope[]
+
+  @@map("area")
+}
+
+// ------------------------------------------------------------- §6.2 app_user
+
+model AppUser {
+  id                    String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  employeeIdCt          Bytes?       @map("employee_id_ct")
+  employeeIdBidx        Bytes?       @map("employee_id_bidx")
+  fullNameCt            Bytes        @map("full_name_ct")
+  emailCt               Bytes        @map("email_ct")
+  emailBidx             Bytes        @unique @map("email_bidx")
+  passwordHash          String?      @map("password_hash")
+  passwordChangedAt     DateTime?    @map("password_changed_at") @db.Timestamptz(6)
+  failedLoginCount      Int          @default(0) @map("failed_login_count")
+  lockedUntil           DateTime?    @map("locked_until") @db.Timestamptz(6)
+  lastLoginAt           DateTime?    @map("last_login_at") @db.Timestamptz(6)
+  lastAuthenticatedAt   DateTime?    @map("last_authenticated_at") @db.Timestamptz(6)
+  status                UserStatusT  @default(active)
+  deactivatedAt         DateTime?    @map("deactivated_at") @db.Timestamptz(6)
+  dekVersion            Int          @map("dek_version") @db.SmallInt
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  userRoles          UserRole[]              @relation("UserRoleUser")
+  rolesGranted       UserRole[]              @relation("UserRoleGrantedBy")
+  userAreaScopes     UserAreaScope[]
+  delegationsAsFrom  Delegation[]            @relation("DelegationDelegator")
+  delegationsAsTo    Delegation[]            @relation("DelegationDelegate")
+  delegationsCreated Delegation[]            @relation("DelegationCreatedBy")
+  refreshTokens      RefreshToken[]
+  revisionsAuthored  TemplateRevision[]      @relation("RevisionAuthor")
+  revisionsApproved  TemplateRevision[]      @relation("RevisionApprover")
+  jobsAssigned       Job[]                   @relation("JobAssignedTo")
+  jobsSubmitted      Job[]                   @relation("JobSubmittedBy")
+  jobsVoided         Job[]                   @relation("JobVoidedBy")
+  itemResults        ItemResult[]
+  measurementResults MeasurementResult[]
+  partsUsed          PartUsed[]
+  attachments        Attachment[]
+  approvalStepsActed ApprovalStep[]          @relation("ApprovalStepActor")
+  approvalStepsOnBehalf ApprovalStep[]       @relation("ApprovalStepOnBehalfOf")
+  auditEventsActor   AuditEvent[]            @relation("AuditEventActor")
+  auditEventsOnBehalf AuditEvent[]           @relation("AuditEventOnBehalfOf")
+  notifications      Notification[]
+  idempotencyKeys    IdempotencyKey[]
+
+  @@map("app_user")
+}
+
+// ------------------------------------------------------- §6.3 role/user_role
+
+model Role {
+  id          String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code        String  @unique
+  name        String
+  description String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  userRoles           UserRole[]
+  approvalStageRoles  ApprovalStageRole[]
+  escalationForStages ApprovalStage[]
+
+  @@map("role")
+}
+
+model UserRole {
+  userId     String   @map("user_id") @db.Uuid
+  roleId     String   @map("role_id") @db.Uuid
+  grantedBy  String   @map("granted_by") @db.Uuid
+  grantedAt  DateTime @default(now()) @map("granted_at") @db.Timestamptz(6)
+
+  user    AppUser @relation("UserRoleUser", fields: [userId], references: [id])
+  role    Role    @relation(fields: [roleId], references: [id])
+  granter AppUser @relation("UserRoleGrantedBy", fields: [grantedBy], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_role")
+}
+
+// ------------------------------------------------------- §6.4 user_area_scope
+
+model UserAreaScope {
+  userId String @map("user_id") @db.Uuid
+  areaId String @map("area_id") @db.Uuid
+
+  user AppUser @relation(fields: [userId], references: [id])
+  area Area    @relation(fields: [areaId], references: [id])
+
+  @@id([userId, areaId])
+  @@map("user_area_scope")
+}
+
+// -------------------------------------------------------------- §6.5 delegation
+
+model Delegation {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  delegatorId String    @map("delegator_id") @db.Uuid
+  delegateId  String    @map("delegate_id") @db.Uuid
+  validFrom   DateTime  @map("valid_from") @db.Timestamptz(6)
+  validTo     DateTime  @map("valid_to") @db.Timestamptz(6)
+  reason      String?
+  createdBy   String    @map("created_by") @db.Uuid
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  delegator AppUser @relation("DelegationDelegator", fields: [delegatorId], references: [id])
+  delegate  AppUser @relation("DelegationDelegate", fields: [delegateId], references: [id])
+  creator   AppUser @relation("DelegationCreatedBy", fields: [createdBy], references: [id])
+
+  @@map("delegation")
+}
+
+// ----------------------------------------------------------- §6.6 refresh_token
+
+model RefreshToken {
+  id             String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  tokenHash      Bytes     @unique @map("token_hash")
+  familyId       String    @map("family_id") @db.Uuid
+  issuedAt       DateTime  @map("issued_at") @db.Timestamptz(6)
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt         DateTime? @map("used_at") @db.Timestamptz(6)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedReason  String?   @map("revoked_reason")
+  userAgent      String?   @map("user_agent")
+  sourceIp       String?   @map("source_ip") @db.Inet
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user AppUser @relation(fields: [userId], references: [id])
+
+  @@map("refresh_token")
+}
+
+// ------------------------------------------------------------- §6.7 asset_type
+
+model AssetType {
+  id              String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code            String  @unique
+  name            String
+  description     String?
+  formTemplateId  String  @map("form_template_id") @db.Uuid
+  approvalRouteId String  @map("approval_route_id") @db.Uuid
+  leadTimeDays    Int     @default(30) @map("lead_time_days")
+  active          Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  formTemplate  FormTemplate   @relation(fields: [formTemplateId], references: [id])
+  approvalRoute ApprovalRoute  @relation(fields: [approvalRouteId], references: [id])
+  assets        Asset[]
+
+  @@map("asset_type")
+}
+
+// ------------------------------------------------------------------ §6.8 asset
+
+model Asset {
+  id                   String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code                 String         @unique
+  assetTypeId          String         @map("asset_type_id") @db.Uuid
+  description          String?
+  manufacturer         String?
+  model                String?
+  serialNumber         String?        @map("serial_number")
+  areaId               String?        @map("area_id") @db.Uuid
+  locationDetail       String?        @map("location_detail")
+  commissionedOn       DateTime?      @map("commissioned_on") @db.Date
+  scheduleAnchorDate   DateTime       @map("schedule_anchor_date") @db.Date
+  status               AssetStatusT   @default(active)
+  decommissionedOn     DateTime?      @map("decommissioned_on") @db.Date
+  active               Boolean        @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  assetType     AssetType      @relation(fields: [assetTypeId], references: [id])
+  area          Area?          @relation(fields: [areaId], references: [id])
+  scheduleRules ScheduleRule[]
+  jobs          Job[]
+
+  @@index([assetTypeId, status])
+  @@map("asset")
+}
+
+// ------------------------------------------------------------ §6.9 form_template
+
+// NOTE (contradiction flagged in slice-1-report.md): DBD §6.9 lists a NOT NULL
+// `form_template.asset_type_id` FK in ADDITION to DBD §6.7's NOT NULL
+// `asset_type.form_template_id` FK. Both non-nullable would be a circular FK
+// with no satisfiable insert order. The ERD's single "governed by" edge and
+// the "one template per type" note under `asset_type` indicate asset_type is
+// the owning side, so `form_template.asset_type_id` is dropped here as a
+// documentation duplicate; the relationship is fully represented by
+// `asset_type.form_template_id`.
+model FormTemplate {
+  id             String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  documentNumber String  @unique @map("document_number")
+  title          String
+  active         Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  assetTypes AssetType[]
+  revisions  TemplateRevision[]
+
+  @@map("form_template")
+}
+
+// ------------------------------------------------------- §6.10 template_revision
+
+model TemplateRevision {
+  id                String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  formTemplateId    String            @map("form_template_id") @db.Uuid
+  revisionCode      String            @map("revision_code")
+  sequenceOrdinal   Int               @map("sequence_ordinal")
+  status            RevisionStatusT
+  changeDescription String            @map("change_description")
+  standingContent   Json              @map("standing_content")
+  authoredBy        String            @map("authored_by") @db.Uuid
+  authoredAt        DateTime          @map("authored_at") @db.Timestamptz(6)
+  submittedAt       DateTime?         @map("submitted_at") @db.Timestamptz(6)
+  approvedBy        String?           @map("approved_by") @db.Uuid
+  approvedAt        DateTime?         @map("approved_at") @db.Timestamptz(6)
+  rejectedReason    String?           @map("rejected_reason")
+  effectiveFrom     DateTime?         @map("effective_from") @db.Timestamptz(6)
+  supersededAt      DateTime?         @map("superseded_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  formTemplate FormTemplate @relation(fields: [formTemplateId], references: [id])
+  author       AppUser      @relation("RevisionAuthor", fields: [authoredBy], references: [id])
+  approver     AppUser?     @relation("RevisionApprover", fields: [approvedBy], references: [id])
+
+  items        TemplateItem[]
+  measurements TemplateMeasurement[]
+  jobs         Job[]
+
+  // INV-02 (sequence contiguity, trigger-enforced) relies on this unique
+  // pair existing; INV-01's partial unique index is added by hand-written SQL.
+  @@unique([formTemplateId, sequenceOrdinal])
+  @@map("template_revision")
+}
+
+// ---------------------------------------------------------- §6.11 template_item
+
+model TemplateItem {
+  id                 String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  templateRevisionId String     @map("template_revision_id") @db.Uuid
+  itemNo             Int        @map("item_no")
+  frequency          FrequencyT
+  instruction        String
+  mandatory          Boolean    @default(true)
+  stableKey          String     @map("stable_key")
+  displayOrder       Int        @map("display_order")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  templateRevision TemplateRevision @relation(fields: [templateRevisionId], references: [id])
+  itemResults      ItemResult[]
+
+  @@index([templateRevisionId, displayOrder])
+  @@index([templateRevisionId, frequency])
+  @@map("template_item")
+}
+
+// ----------------------------------------------------- §6.12 template_measurement
+
+model TemplateMeasurement {
+  id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  templateRevisionId String    @map("template_revision_id") @db.Uuid
+  section            String?
+  description        String
+  unit               String?
+  specType           SpecTypeT @map("spec_type")
+  lowerLimit         Decimal?  @map("lower_limit") @db.Decimal(18, 6)
+  upperLimit         Decimal?  @map("upper_limit") @db.Decimal(18, 6)
+  nominal            Decimal?  @db.Decimal(18, 6)
+  tolerance          Decimal?  @db.Decimal(18, 6)
+  specDisplay        String    @map("spec_display")
+  stableKey          String    @map("stable_key")
+  displayOrder       Int       @map("display_order")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  templateRevision   TemplateRevision    @relation(fields: [templateRevisionId], references: [id])
+  measurementResults MeasurementResult[]
+
+  @@index([templateRevisionId, displayOrder])
+  @@index([stableKey])
+  // INV-04 (lower_limit <= upper_limit) is added by hand-written SQL — a
+  // plain CHECK, but kept in the invariants migration alongside the others
+  // for a single, reviewable place to find every DBD §7 invariant.
+  @@map("template_measurement")
+}
+
+// ----------------------------------- §6.13 approval_route/stage/stage_role
+
+model ApprovalRoute {
+  id     String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code   String  @unique
+  name   String
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  assetTypes AssetType[]
+  stages     ApprovalStage[]
+  jobs       Job[]
+
+  @@map("approval_route")
+}
+
+model ApprovalStage {
+  id                 String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  approvalRouteId    String  @map("approval_route_id") @db.Uuid
+  stageOrdinal       Int     @map("stage_ordinal")
+  label              String
+  escalationHours    Int?    @map("escalation_hours")
+  escalateToRoleId   String? @map("escalate_to_role_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  approvalRoute  ApprovalRoute       @relation(fields: [approvalRouteId], references: [id])
+  escalateToRole Role?               @relation(fields: [escalateToRoleId], references: [id])
+  stageRoles     ApprovalStageRole[]
+
+  @@unique([approvalRouteId, stageOrdinal])
+  @@map("approval_stage")
+}
+
+model ApprovalStageRole {
+  approvalStageId String @map("approval_stage_id") @db.Uuid
+  roleId          String @map("role_id") @db.Uuid
+
+  approvalStage ApprovalStage @relation(fields: [approvalStageId], references: [id])
+  role          Role          @relation(fields: [roleId], references: [id])
+
+  @@id([approvalStageId, roleId])
+  @@map("approval_stage_role")
+}
+
+// ------------------------------------------------------------ §6.14 schedule_rule
+
+model ScheduleRule {
+  id               String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  assetId          String     @map("asset_id") @db.Uuid
+  frequency        FrequencyT
+  intervalMonths   Int        @map("interval_months")
+  anchorDate       DateTime   @map("anchor_date") @db.Date
+  lastCompletedOn  DateTime?  @map("last_completed_on") @db.Date
+  nextDueOn        DateTime   @map("next_due_on") @db.Date
+  adjustedReason   String?    @map("adjusted_reason")
+  active           Boolean    @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  asset Asset @relation(fields: [assetId], references: [id])
+
+  @@unique([assetId, frequency])
+  @@map("schedule_rule")
+}
+
+// ------------------------------------------------------------------- §6.15 job
+
+model Job {
+  id                  String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  jobNumber           String       @unique @map("job_number")
+  assetId             String       @map("asset_id") @db.Uuid
+  templateRevisionId  String       @map("template_revision_id") @db.Uuid
+  approvalRouteId     String       @map("approval_route_id") @db.Uuid
+  frequency           FrequencyT
+  frequencyScope      FrequencyT[] @map("frequency_scope")
+  dueOn               DateTime     @map("due_on") @db.Date
+  generatedAt         DateTime     @map("generated_at") @db.Timestamptz(6)
+  isAdhoc             Boolean      @default(false) @map("is_adhoc")
+  adhocReason         String?      @map("adhoc_reason")
+  assignedTo          String?      @map("assigned_to") @db.Uuid
+  assignedAt          DateTime?    @map("assigned_at") @db.Timestamptz(6)
+  status              JobStatusT
+  currentStageOrdinal Int?         @map("current_stage_ordinal")
+  startedAt           DateTime?    @map("started_at") @db.Timestamptz(6)
+  submittedAt         DateTime?    @map("submitted_at") @db.Timestamptz(6)
+  submittedBy         String?      @map("submitted_by") @db.Uuid
+  verifiedAt          DateTime?    @map("verified_at") @db.Timestamptz(6)
+  archivedAt          DateTime?    @map("archived_at") @db.Timestamptz(6)
+  voidReason          String?      @map("void_reason")
+  voidedBy            String?      @map("voided_by") @db.Uuid
+  draftVersion        Int          @default(0) @map("draft_version")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  asset            Asset             @relation(fields: [assetId], references: [id])
+  templateRevision TemplateRevision  @relation(fields: [templateRevisionId], references: [id])
+  approvalRoute    ApprovalRoute     @relation(fields: [approvalRouteId], references: [id])
+  assignee         AppUser?          @relation("JobAssignedTo", fields: [assignedTo], references: [id])
+  submitter        AppUser?          @relation("JobSubmittedBy", fields: [submittedBy], references: [id])
+  voider           AppUser?          @relation("JobVoidedBy", fields: [voidedBy], references: [id])
+
+  itemResults        ItemResult[]
+  measurementResults MeasurementResult[]
+  partsUsed          PartUsed[]
+  attachments        Attachment[]
+  approvalSteps      ApprovalStep[]
+
+  @@index([assetId, dueOn(sort: Desc)])
+  @@map("job")
+}
+
+// ------------------------------------------------------------- §6.16 item_result
+
+model ItemResult {
+  id                 String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  jobId              String        @map("job_id") @db.Uuid
+  templateItemId     String        @map("template_item_id") @db.Uuid
+  status             ItemStatusT
+  remark             String?
+  recordedBy         String        @map("recorded_by") @db.Uuid
+  clientRecordedAt   DateTime      @map("client_recorded_at") @db.Timestamptz(6)
+  recordedAt         DateTime      @map("recorded_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  job          Job          @relation(fields: [jobId], references: [id])
+  templateItem TemplateItem @relation(fields: [templateItemId], references: [id])
+  recorder     AppUser      @relation(fields: [recordedBy], references: [id])
+  attachments  Attachment[]
+
+  @@unique([jobId, templateItemId])
+  @@map("item_result")
+}
+
+// -------------------------------------------------------- §6.17 measurement_result
+
+model MeasurementResult {
+  id                     String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  jobId                  String      @map("job_id") @db.Uuid
+  templateMeasurementId  String      @map("template_measurement_id") @db.Uuid
+  readingNumeric         Decimal?    @map("reading_numeric") @db.Decimal(18, 6)
+  readingText            String?     @map("reading_text")
+  judgement              JudgementT  @default(not_evaluated)
+  remark                 String?
+  recordedBy             String      @map("recorded_by") @db.Uuid
+  clientRecordedAt       DateTime    @map("client_recorded_at") @db.Timestamptz(6)
+  recordedAt             DateTime    @map("recorded_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  job                Job                  @relation(fields: [jobId], references: [id])
+  templateMeasurement TemplateMeasurement @relation(fields: [templateMeasurementId], references: [id])
+  recorder           AppUser              @relation(fields: [recordedBy], references: [id])
+
+  @@unique([jobId, templateMeasurementId])
+  @@index([templateMeasurementId, recordedAt])
+  @@map("measurement_result")
+}
+
+// -------------------------------------------------------------- §6.18 part_used
+
+model PartUsed {
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  jobId       String   @map("job_id") @db.Uuid
+  partNo      String?  @map("part_no")
+  description String
+  quantity    Decimal  @db.Decimal(12, 3)
+  remarks     String?
+  recordedBy  String   @map("recorded_by") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  job      Job     @relation(fields: [jobId], references: [id])
+  recorder AppUser @relation(fields: [recordedBy], references: [id])
+
+  @@map("part_used")
+}
+
+// -------------------------------------------------------------- §6.19 attachment
+
+model Attachment {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  jobId            String   @map("job_id") @db.Uuid
+  itemResultId     String?  @map("item_result_id") @db.Uuid
+  objectKey        String   @map("object_key")
+  originalFilename String?  @map("original_filename")
+  contentType      String   @map("content_type")
+  byteSize         BigInt   @map("byte_size")
+  sha256           Bytes
+  uploadedBy       String   @map("uploaded_by") @db.Uuid
+  uploadedAt       DateTime @map("uploaded_at") @db.Timestamptz(6)
+  uploadState      String   @map("upload_state")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  job        Job         @relation(fields: [jobId], references: [id])
+  itemResult ItemResult? @relation(fields: [itemResultId], references: [id])
+  uploader   AppUser     @relation(fields: [uploadedBy], references: [id])
+
+  @@index([jobId])
+  @@map("attachment")
+}
+
+// ---------------------------------------------------------- §6.20 approval_step
+// Append-only (INV-11): bamform_app holds INSERT + SELECT only — see grants.sql.
+// No updatedAt: this table never receives an UPDATE.
+
+model ApprovalStep {
+  id                String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  jobId             String          @map("job_id") @db.Uuid
+  stageOrdinal      Int             @map("stage_ordinal")
+  action            ApprovalActionT
+  actorId           String          @map("actor_id") @db.Uuid
+  onBehalfOfId      String?         @map("on_behalf_of_id") @db.Uuid
+  actorRoleCode     String          @map("actor_role_code")
+  reason            String?
+  actedAt           DateTime        @map("acted_at") @db.Timestamptz(6)
+  sourceIp          String?         @map("source_ip") @db.Inet
+  contentHash       Bytes           @map("content_hash")
+  signature         Bytes
+  signingKeyId      String          @map("signing_key_id")
+  stepUpVerifiedAt  DateTime?       @map("step_up_verified_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job        Job      @relation(fields: [jobId], references: [id])
+  actor      AppUser  @relation("ApprovalStepActor", fields: [actorId], references: [id])
+  onBehalfOf AppUser? @relation("ApprovalStepOnBehalfOf", fields: [onBehalfOfId], references: [id])
+
+  @@index([jobId, actedAt])
+  @@index([actorId, actedAt(sort: Desc)])
+  @@map("approval_step")
+}
+
+// ------------------------------------------------------------- §6.21 audit_event
+// Append-only and hash-chained (INV-10): no UPDATE, no DELETE for bamform_app.
+// No updatedAt: this table never receives an UPDATE.
+
+model AuditEvent {
+  id           String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sequence     BigInt        @unique @default(autoincrement())
+  occurredAt   DateTime      @map("occurred_at") @db.Timestamptz(6)
+  actorId      String?       @map("actor_id") @db.Uuid
+  onBehalfOfId String?       @map("on_behalf_of_id") @db.Uuid
+  action       AuditActionT
+  entityType   String        @map("entity_type")
+  entityId     String?       @map("entity_id") @db.Uuid
+  before       Json?
+  after        Json?
+  sourceIp     String?       @map("source_ip") @db.Inet
+  requestId    String?       @map("request_id")
+  prevHash     Bytes?        @map("prev_hash")
+  hash         Bytes
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor      AppUser? @relation("AuditEventActor", fields: [actorId], references: [id])
+  onBehalfOf AppUser? @relation("AuditEventOnBehalfOf", fields: [onBehalfOfId], references: [id])
+
+  @@index([entityType, entityId, sequence])
+  @@map("audit_event")
+}
+
+// ------------------------------------------------------------ §6.22 notification
+
+model Notification {
+  id            String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  recipientId   String                 @map("recipient_id") @db.Uuid
+  channel       NotificationChannelT
+  templateCode  String                 @map("template_code")
+  entityType    String?                @map("entity_type")
+  entityId      String?                @map("entity_id") @db.Uuid
+  payload       Json
+  state         NotificationStateT
+  queuedAt      DateTime               @map("queued_at") @db.Timestamptz(6)
+  sentAt        DateTime?              @map("sent_at") @db.Timestamptz(6)
+  failedReason  String?                @map("failed_reason")
+  attempts      Int                    @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  recipient AppUser @relation(fields: [recipientId], references: [id])
+
+  @@index([recipientId, state, queuedAt(sort: Desc)])
+  @@map("notification")
+}
+
+// --------------------------------------------------------- §6.23 idempotency_key
+
+model IdempotencyKey {
+  key                 String   @id @db.Uuid
+  userId              String   @map("user_id") @db.Uuid
+  endpoint            String
+  requestFingerprint  Bytes    @map("request_fingerprint")
+  responseStatus      Int      @map("response_status")
+  responseBody        Json?    @map("response_body")
+  expiresAt           DateTime @map("expires_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user AppUser @relation(fields: [userId], references: [id])
+
+  @@map("idempotency_key")
+}
