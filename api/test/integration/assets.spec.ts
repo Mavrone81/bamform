@@ -1,0 +1,266 @@
+import type { INestApplication } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import request from 'supertest';
+import { adminPool, closeAll, resetDatabase } from './helpers/db';
+import {
+  createArea,
+  createAssetType,
+  createFormTemplate,
+  createUser,
+  getSeededApprovalRouteId,
+  grantRole,
+  scopeUserToArea,
+} from './helpers/fixtures';
+import { authHeader, mintAccessToken } from './helpers/test-auth';
+import { createTestApp } from './helpers/app';
+import { closeRedis, resetRedis } from './helpers/redis';
+
+describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    app = await createTestApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await closeAll();
+    await closeRedis();
+  });
+
+  beforeEach(async () => {
+    await resetDatabase();
+    await resetRedis();
+  });
+
+  async function engineerToken(): Promise<string> {
+    const userId = await createUser('engineer');
+    await grantRole(userId, 'ENGINEER');
+    return mintAccessToken(app, userId, ['ENGINEER']);
+  }
+
+  async function makeAssetType(): Promise<string> {
+    const approvalRouteId = await getSeededApprovalRouteId();
+    const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+    return createAssetType(formTemplateId, approvalRouteId, `AT-${randomUUID()}`);
+  }
+
+  it('rejects an unauthenticated request', async () => {
+    await request(app.getHttpServer()).get('/api/v1/assets').expect(401);
+  });
+
+  it('ENGINEER creates an asset (PR-020)', async () => {
+    const token = await engineerToken();
+    const assetTypeId = await makeAssetType();
+    const code = `AW-${randomUUID()}`;
+
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(201);
+
+    expect(res.body).toMatchObject({ code, assetTypeId, status: 'ACTIVE', active: true });
+  });
+
+  it('writes an audit_event in the same transaction as creation (PR-098)', async () => {
+    const token = await engineerToken();
+    const assetTypeId = await makeAssetType();
+
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code: `AW-${randomUUID()}`, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(201);
+
+    const audit = await adminPool.query(
+      `SELECT action FROM "audit_event" WHERE entity_type = 'asset' AND entity_id = $1`,
+      [res.body.id],
+    );
+    expect(audit.rows[0]?.action).toBe('create');
+  });
+
+  it('a MAINTAINER is forbidden from creating an asset (permission matrix §4.1)', async () => {
+    const userId = await createUser('maintainer');
+    await grantRole(userId, 'MAINTAINER');
+    const token = await mintAccessToken(app, userId, ['MAINTAINER']);
+    const assetTypeId = await makeAssetType();
+
+    await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code: `AW-${randomUUID()}`, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(403);
+  });
+
+  it('rejects a duplicate asset code with 409 (INV-06, defect B-09)', async () => {
+    const token = await engineerToken();
+    const assetTypeId = await makeAssetType();
+    const code = `AW-${randomUUID()}`;
+
+    await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(409);
+  });
+
+  it('GET /assets/{id} 404s for an unknown id', async () => {
+    const token = await engineerToken();
+    await request(app.getHttpServer())
+      .get(`/api/v1/assets/${randomUUID()}`)
+      .set(...authHeader(token))
+      .expect(404);
+  });
+
+  it('GET /assets/{id}/history is a real, paginated, area-scoped endpoint (empty until slice 5/6/7 generate jobs)', async () => {
+    const token = await engineerToken();
+    const assetTypeId = await makeAssetType();
+    const createRes = await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code: `AW-${randomUUID()}`, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(201);
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/assets/${createRes.body.id}/history`)
+      .set(...authHeader(token))
+      .expect(200);
+    expect(res.body).toMatchObject({ data: [], page: { hasMore: false, nextCursor: null } });
+
+    await request(app.getHttpServer())
+      .get(`/api/v1/assets/${randomUUID()}/history`)
+      .set(...authHeader(token))
+      .expect(404);
+  });
+
+  it('PATCH deactivates an asset — status/active only, never deletion (PR-039)', async () => {
+    const token = await engineerToken();
+    const assetTypeId = await makeAssetType();
+    const createRes = await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code: `AW-${randomUUID()}`, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(201);
+
+    const patchRes = await request(app.getHttpServer())
+      .patch(`/api/v1/assets/${createRes.body.id}`)
+      .set(...authHeader(token))
+      .send({ status: 'DECOMMISSIONED', active: false })
+      .expect(200);
+
+    expect(patchRes.body).toMatchObject({ status: 'DECOMMISSIONED', active: false });
+
+    const stillThere = await adminPool.query('SELECT id FROM "asset" WHERE id = $1', [
+      createRes.body.id,
+    ]);
+    expect(stillThere.rowCount).toBe(1);
+  });
+
+  it('a MAINTAINER is forbidden from PATCHing an asset', async () => {
+    const engineer = await engineerToken();
+    const assetTypeId = await makeAssetType();
+    const createRes = await request(app.getHttpServer())
+      .post('/api/v1/assets')
+      .set(...authHeader(engineer))
+      .send({ code: `AW-${randomUUID()}`, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+      .expect(201);
+
+    const userId = await createUser('maintainer');
+    await grantRole(userId, 'MAINTAINER');
+    const token = await mintAccessToken(app, userId, ['MAINTAINER']);
+
+    await request(app.getHttpServer())
+      .patch(`/api/v1/assets/${createRes.body.id}`)
+      .set(...authHeader(token))
+      .send({ active: false })
+      .expect(403);
+  });
+
+  describe('area scoping (PR-API-10, ADR-005 — repository-layer, mandatory)', () => {
+    it('an unrestricted user (no user_area_scope rows) sees assets in every area', async () => {
+      const token = await engineerToken();
+      const assetTypeId = await makeAssetType();
+      const areaA = await createArea(`AREA-${randomUUID()}`);
+      const areaB = await createArea(`AREA-${randomUUID()}`);
+      const server = app.getHttpServer();
+
+      const idA = await createAssetCode(server, token, assetTypeId, areaA);
+      const idB = await createAssetCode(server, token, assetTypeId, areaB);
+
+      const res = await request(server)
+        .get('/api/v1/assets?limit=100')
+        .set(...authHeader(token))
+        .expect(200);
+      const ids: string[] = res.body.data.map((a: { id: string }) => a.id);
+      expect(ids).toEqual(expect.arrayContaining([idA, idB]));
+    });
+
+    it("a user scoped to one area only sees that area's assets in the collection", async () => {
+      const assetTypeId = await makeAssetType();
+      const areaA = await createArea(`AREA-${randomUUID()}`);
+      const areaB = await createArea(`AREA-${randomUUID()}`);
+
+      const engineer = await engineerToken();
+      const server = app.getHttpServer();
+      const assetInA = await createAssetCode(server, engineer, assetTypeId, areaA);
+      await createAssetCode(server, engineer, assetTypeId, areaB);
+
+      const scopedUserId = await createUser('scoped');
+      await grantRole(scopedUserId, 'ENGINEER');
+      await scopeUserToArea(scopedUserId, areaA);
+      const scopedToken = await mintAccessToken(app, scopedUserId, ['ENGINEER']);
+
+      const res = await request(server)
+        .get('/api/v1/assets?limit=100')
+        .set(...authHeader(scopedToken))
+        .expect(200);
+
+      const ids: string[] = res.body.data.map((a: { id: string }) => a.id);
+      expect(ids).toContain(assetInA);
+      expect(res.body.data.every((a: { areaId: string | null }) => a.areaId === areaA)).toBe(true);
+    });
+
+    it("GET /assets/{id} for an asset outside the caller's scope is 403 out-of-scope, not 404", async () => {
+      const assetTypeId = await makeAssetType();
+      const areaA = await createArea(`AREA-${randomUUID()}`);
+      const areaB = await createArea(`AREA-${randomUUID()}`);
+
+      const engineer = await engineerToken();
+      const server = app.getHttpServer();
+      const assetInB = await createAssetCode(server, engineer, assetTypeId, areaB);
+
+      const scopedUserId = await createUser('scoped2');
+      await grantRole(scopedUserId, 'ENGINEER');
+      await scopeUserToArea(scopedUserId, areaA);
+      const scopedToken = await mintAccessToken(app, scopedUserId, ['ENGINEER']);
+
+      const res = await request(server)
+        .get(`/api/v1/assets/${assetInB}`)
+        .set(...authHeader(scopedToken))
+        .expect(403);
+      expect(res.body).toMatchObject({ type: '/errors/out-of-scope' });
+    });
+  });
+
+  /** Creates an asset directly in the given area via POST, returns its id. */
+  async function createAssetCode(
+    server: unknown,
+    token: string,
+    assetTypeId: string,
+    areaId: string,
+  ): Promise<string> {
+    const res = await request(server as never)
+      .post('/api/v1/assets')
+      .set(...authHeader(token))
+      .send({ code: `AW-${randomUUID()}`, assetTypeId, scheduleAnchorDate: '2026-01-01', areaId })
+      .expect(201);
+    return res.body.id as string;
+  }
+});
