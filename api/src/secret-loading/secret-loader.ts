@@ -21,7 +21,9 @@ export function findRepoRoot(startDir: string = __dirname): string {
     }
     dir = parent;
   }
-  throw new Error(`Could not locate repository root (looked for ${REPO_ROOT_MARKER} above ${startDir})`);
+  throw new Error(
+    `Could not locate repository root (looked for ${REPO_ROOT_MARKER} above ${startDir})`,
+  );
 }
 
 /**
