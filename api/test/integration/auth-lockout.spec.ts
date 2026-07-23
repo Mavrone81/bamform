@@ -81,4 +81,44 @@ describe('S-09 account lockout after repeated failed logins (PR-092, threat S-5)
     );
     expect(lockoutAudit.rowCount).toBe(1);
   });
+
+  it('reports Retry-After that matches the stored, exponentially-backed-off lockedUntil on a second lockout cycle', async () => {
+    const { userId } = await createLoginableUser({
+      email: 's09b@bevorasg.com',
+      password: 'CorrectHorseBattery1!',
+      roleCodes: ['MAINTAINER'],
+    });
+    const server = app.getHttpServer();
+
+    // Simulate an account that is already at the failure threshold with an
+    // EXPIRED prior lockout (a real "second cycle": the first lockout window
+    // has already passed, and the very next wrong attempt crosses the
+    // threshold again). The next failure should double the base lockout
+    // window (PR-092 exponential backoff), landing well above
+    // LOGIN_LOCKOUT_SECONDS (900s default).
+    await adminPool.query(
+      `UPDATE "app_user" SET "failed_login_count" = 5, "locked_until" = now() - interval '1 second' WHERE id = $1`,
+      [userId],
+    );
+
+    const res = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: 's09b@bevorasg.com', password: 'definitely-the-wrong-password' })
+      .expect(429);
+
+    const retryAfter = Number(res.headers['retry-after']);
+
+    const row = await adminPool.query(`SELECT locked_until FROM "app_user" WHERE id = $1`, [
+      userId,
+    ]);
+    const storedLockedUntil = new Date(row.rows[0].locked_until as string).getTime();
+    const expectedRetryAfter = Math.ceil((storedLockedUntil - Date.now()) / 1000);
+
+    // The bug being fixed: the response used to always report the
+    // un-multiplied LOGIN_LOCKOUT_SECONDS base (900s) instead of the actual
+    // remaining time until the doubled `lockedUntil` (~1800s) — so assert
+    // the header tracks the real stored value, not just "greater than 0".
+    expect(retryAfter).toBeGreaterThan(900);
+    expect(Math.abs(retryAfter - expectedRetryAfter)).toBeLessThanOrEqual(2);
+  });
 });

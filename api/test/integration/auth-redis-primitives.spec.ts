@@ -1,14 +1,13 @@
-import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { LoginRateLimiterService } from '../../src/auth/redis/login-rate-limiter.service';
+import { RateLimiterService } from '../../src/auth/redis/rate-limiter.service';
 import { TokenDenylistService } from '../../src/auth/redis/token-denylist.service';
 import { closeRedis, resetRedis } from './helpers/redis';
 
 /**
- * PR-088 (jti denylist) / PR-092 (login rate limiting) against a REAL Redis
- * instance (ADR-006), not a mock — these primitives are pure Redis
- * key/TTL semantics, worth proving directly rather than only indirectly
- * through the HTTP-level auth specs.
+ * PR-088 (jti denylist) / PR-092 (login + step-up rate limiting) against a
+ * REAL Redis instance (ADR-006), not a mock — these primitives are pure
+ * Redis key/TTL semantics, worth proving directly rather than only
+ * indirectly through the HTTP-level auth specs.
  */
 describe('Redis-backed auth primitives (real Redis, ADR-006)', () => {
   let redis: Redis;
@@ -56,40 +55,79 @@ describe('Redis-backed auth primitives (real Redis, ADR-006)', () => {
     });
   });
 
-  describe('LoginRateLimiterService (PR-092, API_SPEC §9: 10/min per IP)', () => {
+  describe('RateLimiterService — login scope (PR-092, API_SPEC §9: 10/min per IP)', () => {
     it('allows requests under the configured limit', async () => {
-      const config = new ConfigService({ RATE_LIMIT_LOGIN_PER_MIN: '3' });
-      const service = new LoginRateLimiterService(redis, config);
+      const service = new RateLimiterService(redis);
 
       const results = await Promise.all([
-        service.checkAndIncrement('1.2.3.4'),
-        service.checkAndIncrement('1.2.3.4'),
-        service.checkAndIncrement('1.2.3.4'),
+        service.checkAndIncrement('login', '1.2.3.4', 3),
+        service.checkAndIncrement('login', '1.2.3.4', 3),
+        service.checkAndIncrement('login', '1.2.3.4', 3),
       ]);
       expect(results.every((r) => r.limited === false)).toBe(true);
     });
 
     it('rejects the request that exceeds the limit, with a positive Retry-After', async () => {
-      const config = new ConfigService({ RATE_LIMIT_LOGIN_PER_MIN: '2' });
-      const service = new LoginRateLimiterService(redis, config);
+      const service = new RateLimiterService(redis);
 
-      await service.checkAndIncrement('5.6.7.8');
-      await service.checkAndIncrement('5.6.7.8');
-      const third = await service.checkAndIncrement('5.6.7.8');
+      await service.checkAndIncrement('login', '5.6.7.8', 2);
+      await service.checkAndIncrement('login', '5.6.7.8', 2);
+      const third = await service.checkAndIncrement('login', '5.6.7.8', 2);
 
       expect(third.limited).toBe(true);
       expect(third.retryAfterSeconds).toBeGreaterThan(0);
     });
 
     it('tracks distinct IPs independently', async () => {
-      const config = new ConfigService({ RATE_LIMIT_LOGIN_PER_MIN: '1' });
-      const service = new LoginRateLimiterService(redis, config);
+      const service = new RateLimiterService(redis);
 
-      const first = await service.checkAndIncrement('9.9.9.9');
-      const second = await service.checkAndIncrement('10.10.10.10');
+      const first = await service.checkAndIncrement('login', '9.9.9.9', 1);
+      const second = await service.checkAndIncrement('login', '10.10.10.10', 1);
 
       expect(first.limited).toBe(false);
       expect(second.limited).toBe(false);
+    });
+  });
+
+  describe('RateLimiterService — step-up scope (PR-091/PR-092, API_SPEC §9: 10/min per user)', () => {
+    it('allows requests under the configured limit', async () => {
+      const service = new RateLimiterService(redis);
+
+      const results = await Promise.all([
+        service.checkAndIncrement('step-up', 'user-a', 3),
+        service.checkAndIncrement('step-up', 'user-a', 3),
+        service.checkAndIncrement('step-up', 'user-a', 3),
+      ]);
+      expect(results.every((r) => r.limited === false)).toBe(true);
+    });
+
+    it('rejects the request that exceeds the limit, with a positive Retry-After', async () => {
+      const service = new RateLimiterService(redis);
+
+      await service.checkAndIncrement('step-up', 'user-b', 2);
+      await service.checkAndIncrement('step-up', 'user-b', 2);
+      const third = await service.checkAndIncrement('step-up', 'user-b', 2);
+
+      expect(third.limited).toBe(true);
+      expect(third.retryAfterSeconds).toBeGreaterThan(0);
+    });
+
+    it('tracks distinct users independently, and independently of the login scope', async () => {
+      const service = new RateLimiterService(redis);
+
+      // Exhaust user-c's step-up limit.
+      await service.checkAndIncrement('step-up', 'user-c', 1);
+      const userC = await service.checkAndIncrement('step-up', 'user-c', 1);
+
+      // A different user's step-up attempts are unaffected...
+      const userD = await service.checkAndIncrement('step-up', 'user-d', 1);
+      // ...and a login attempt keyed by the SAME id (user-c as a literal
+      // string) does not share the counter — scope is part of the key.
+      const loginSameId = await service.checkAndIncrement('login', 'user-c', 1);
+
+      expect(userC.limited).toBe(true);
+      expect(userD.limited).toBe(false);
+      expect(loginSameId.limited).toBe(false);
     });
   });
 });

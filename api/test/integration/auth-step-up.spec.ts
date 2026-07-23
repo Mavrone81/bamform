@@ -129,4 +129,41 @@ describe('S-07/S-08 step-up authentication (PR-091, threat S-4)', () => {
     );
     expect(auditRows.rows[0].after).toMatchObject({ event: 'step_up_failed' });
   });
+
+  it('S-08b step-up is rate limited at 10 attempts/min per user (PR-092, API_SPECIFICATION.md §9)', async () => {
+    await createLoginableUser({
+      email: 's08d@bevorasg.com',
+      password: 'CorrectHorseBattery1!',
+      roleCodes: ['ENGINEER'],
+    });
+    const server = app.getHttpServer();
+    const loginRes = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: 's08d@bevorasg.com', password: 'CorrectHorseBattery1!' })
+      .expect(200);
+    const accessToken = loginRes.body.accessToken as string;
+
+    // Attempts 1-10 are UNDER the limit: the request still runs the real
+    // password check (proved here by using a wrong password and getting a
+    // genuine 401, not a 429) — this is the brute-force scenario the
+    // reviewer flagged: without a rate limiter, a stolen access token lets
+    // an attacker guess the password indefinitely via step-up.
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      await request(server)
+        .post('/api/v1/auth/step-up')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ password: 'wrong-password-attempt' })
+        .expect(401);
+    }
+
+    // 11th attempt in the same 60s window: rate-limited regardless of
+    // whether the password is correct — this is what closes the hole.
+    const eleventh = await request(server)
+      .post('/api/v1/auth/step-up')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ password: 'CorrectHorseBattery1!' })
+      .expect(429);
+    expect(eleventh.body).toMatchObject({ type: '/errors/rate-limited' });
+    expect(Number(eleventh.headers['retry-after'])).toBeGreaterThan(0);
+  });
 });
