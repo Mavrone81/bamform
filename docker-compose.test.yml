@@ -1,0 +1,24 @@
+# LOCAL DEV ONLY — ephemeral Postgres for running the integration suite
+# (I-INV-01..11) outside CI. CI uses its own service container defined in
+# .github/workflows/ci.yml; this file is never used there.
+#
+# Publishes to loopback only, on a high port, so it never collides with a
+# real deployment. The committed production docker-compose.yml publishes NO
+# data-service ports at all (PR-ENV-11) — that rule is unaffected by this file.
+name: bamform-test
+services:
+  bamform-test-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bamform_test
+      POSTGRES_USER: bamform
+      POSTGRES_PASSWORD: test_ephemeral_not_a_real_secret
+    ports:
+      - '127.0.0.1:15432:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bamform']
+      interval: 3s
+      timeout: 3s
+      retries: 20
