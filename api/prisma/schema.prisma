@@ -305,7 +305,7 @@ model AssetType {
   code            String  @unique
   name            String
   description     String?
-  formTemplateId  String  @map("form_template_id") @db.Uuid
+  formTemplateId  String  @unique @map("form_template_id") @db.Uuid
   approvalRouteId String  @map("approval_route_id") @db.Uuid
   leadTimeDays    Int     @default(30) @map("lead_time_days")
   active          Boolean @default(true)

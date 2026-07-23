@@ -18,6 +18,16 @@
 -- Idempotent: REVOKE-then-GRANT the full DBD §7.1 privilege set every run,
 -- so re-running after a schema change never accumulates stale privileges.
 
+-- CI/dev-bootstrap-only fallback, never used in production: the passwords
+-- below are literal, committed, and therefore public. They exist solely so
+-- this script also works unattended against CI's bare `postgres:16-alpine`
+-- service container, which has no init scripts and so does not pre-create
+-- these roles. In production the roles already exist — provisioned by
+-- db/init/01-roles.sql with real, secret-backed passwords, before the
+-- migrate service (and this script) ever runs — so the `IF NOT EXISTS`
+-- guards below are no-ops there and these fallback passwords are never
+-- applied to a production role. Do not rely on this block outside CI/local
+-- dev, and do not "fix" production auth by pointing it at these values.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'bamform_app') THEN
