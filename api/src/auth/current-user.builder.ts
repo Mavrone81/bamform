@@ -1,5 +1,6 @@
 import type { CurrentUser } from '@bamform/shared';
 import type { Prisma } from '@prisma/client';
+import type { FieldEncryptionService } from '../crypto/field-encryption';
 import { decodeIdentityField } from './crypto/identity-codec';
 
 /**
@@ -8,11 +9,15 @@ import { decodeIdentityField } from './crypto/identity-codec';
  * than `PrismaService` so callers can build it either standalone (`/auth/me`)
  * or inside the same transaction as a login/refresh (`PrismaService`
  * satisfies this type structurally).
+ *
+ * `fieldEncryption` decrypts `full_name_ct`/`email_ct` (PR-106) — the single call
+ * site slice 3 replaced (see `crypto/identity-codec.ts`).
  */
 export async function buildCurrentUser(
   prisma: Prisma.TransactionClient,
   userId: string,
   stepUpWindowSeconds: number,
+  fieldEncryption: FieldEncryptionService,
 ): Promise<CurrentUser> {
   const user = await prisma.appUser.findUniqueOrThrow({
     where: { id: userId },
@@ -39,13 +44,28 @@ export async function buildCurrentUser(
 
   return {
     id: user.id,
-    fullName: decodeIdentityField(user.fullNameCt),
-    email: decodeIdentityField(user.emailCt),
+    fullName: decodeIdentityField(
+      user.fullNameCt,
+      user.dekVersion,
+      { column: 'full_name_ct', rowId: user.id },
+      fieldEncryption,
+    ),
+    email: decodeIdentityField(
+      user.emailCt,
+      user.dekVersion,
+      { column: 'email_ct', rowId: user.id },
+      fieldEncryption,
+    ),
     roles: user.userRoles.map((userRole) => userRole.role.code),
     areaScope: user.userAreaScopes.map((scope) => scope.areaId),
     activeDelegations: delegations.map((delegation) => ({
       delegatorId: delegation.delegatorId,
-      delegatorName: decodeIdentityField(delegation.delegator.fullNameCt),
+      delegatorName: decodeIdentityField(
+        delegation.delegator.fullNameCt,
+        delegation.delegator.dekVersion,
+        { column: 'full_name_ct', rowId: delegation.delegator.id },
+        fieldEncryption,
+      ),
       validTo: delegation.validTo.toISOString(),
     })),
     stepUpValidUntil,

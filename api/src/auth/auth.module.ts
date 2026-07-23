@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { CryptoModule } from '../crypto/crypto.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { SecurityAuditService } from './audit/security-audit.service';
@@ -18,7 +19,7 @@ import { RefreshTokenService } from './refresh/refresh-token.service';
  * makes every route require authentication unless `@Public()`.
  */
 @Module({
-  imports: [JwtKeysModule, BlindIndexModule],
+  imports: [JwtKeysModule, BlindIndexModule, CryptoModule],
   controllers: [AuthController, JwksController],
   providers: [
     AuthService,

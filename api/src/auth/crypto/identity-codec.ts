@@ -1,27 +1,46 @@
+import type { FieldContext, FieldEncryptionService } from '../../crypto/field-encryption';
+
 /**
- * TEMPORARY passthrough codec for `app_user.full_name_ct` / `email_ct`.
+ * Real AES-256-GCM field encryption for `app_user`'s personal columns
+ * (`full_name_ct`, `email_ct`, `employee_id_ct` — DATABASE_DESIGN.md §6.2,
+ * PRD PR-106/107). Replaces slice 2's TEMPORARY plaintext passthrough codec
+ * (`git log` this file to see it) at its single call site set:
+ * `current-user.builder.ts` (decode, for `/auth/login`, `/auth/refresh`, `/auth/me` —
+ * `api/openapi.yaml`'s `CurrentUser.fullName`/`.email`) and the auth integration test
+ * fixture that seeds a loginable user (encode).
  *
- * DATABASE_DESIGN.md §6.2 and SECURITY_ARCHITECTURE.md §6 specify these
- * columns as AES-256-GCM ciphertext (PR-106/107, envelope KEK/DEK, PK as
- * AAD) — but that field-encryption pipeline is explicitly slice 3 scope
- * (BUILD_HANDOFF §3 row 3), sequenced AFTER this auth slice. Slice 1's own
- * integration fixtures already establish the accepted interim state
- * (`api/test/integration/helpers/fixtures.ts`: "Field encryption (PR-106)
- * does not exist yet (slice 3) — personal-data columns are filled with
- * placeholder bytes").
- *
- * The auth module cannot avoid reading these columns entirely — `POST
- * /auth/login` and `GET /auth/me` must return `CurrentUser.fullName`
- * (api/openapi.yaml, required field) — so this codec stores/reads them as
- * plain UTF-8 bytes until slice 3 replaces it with real AES-256-GCM
- * encrypt/decrypt. Every auth read of these columns MUST go through this
- * module (not `.toString('utf8')` ad hoc at call sites) so slice 3's change
- * is a one-file swap, not a hunt across the auth module.
+ * Deliberately a thin `app_user`-scoped adapter over `../../crypto/field-encryption.ts`
+ * (the general, reusable crypto primitive — AAD binding, envelope DEK, nonce
+ * handling all live there) rather than the primitive itself, so:
+ *   1. every auth read of these columns keeps going through ONE module (this file),
+ *      matching the doc-comment convention slice 2 established, and
+ *   2. any other table gaining a personal column later reuses `field-encryption.ts`
+ *      directly instead of copying this file.
  */
-export function encodeIdentityField(plaintext: string): Buffer {
-  return Buffer.from(plaintext, 'utf8');
+export interface IdentityFieldContext {
+  readonly column: 'full_name_ct' | 'email_ct' | 'employee_id_ct';
+  readonly rowId: string;
 }
 
-export function decodeIdentityField(stored: Uint8Array): string {
-  return Buffer.from(stored).toString('utf8');
+const TABLE = 'app_user';
+
+export function encodeIdentityField(
+  plaintext: string,
+  context: IdentityFieldContext,
+  fieldEncryption: FieldEncryptionService,
+): { ciphertext: Buffer; dekVersion: number } {
+  return fieldEncryption.encrypt(plaintext, toFieldContext(context));
+}
+
+export function decodeIdentityField(
+  stored: Uint8Array,
+  dekVersion: number,
+  context: IdentityFieldContext,
+  fieldEncryption: FieldEncryptionService,
+): string {
+  return fieldEncryption.decrypt(stored, dekVersion, toFieldContext(context));
+}
+
+function toFieldContext(context: IdentityFieldContext): FieldContext {
+  return { table: TABLE, column: context.column, rowId: context.rowId };
 }

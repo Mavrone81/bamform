@@ -4,6 +4,8 @@ import type { AuthResult, LoginRequest } from '@bamform/shared';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { toBytes } from '../common/prisma-bytes';
+import type { FieldEncryptionService } from '../crypto/field-encryption';
+import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
 import { SecurityAuditService } from './audit/security-audit.service';
 import { ACCESS_TOKEN_SERVICE, BLIND_INDEX_KEY } from './auth.tokens';
 import { computeEmailBlindIndex } from './crypto/blind-index';
@@ -41,6 +43,7 @@ export class AuthService {
     private readonly denylist: TokenDenylistService,
     @Inject(BLIND_INDEX_KEY) private readonly blindIndexKey: Buffer,
     @Inject(ACCESS_TOKEN_SERVICE) private readonly accessTokens: AccessTokenService,
+    @Inject(FIELD_ENCRYPTION_SERVICE) private readonly fieldEncryption: FieldEncryptionService,
   ) {}
 
   private get maxAttempts(): number {
@@ -180,7 +183,12 @@ export class AuthService {
       const refreshToken = await this.refreshTokens.issueNewFamily(tx, user.id, meta);
       const roles = await this.rolesFor(tx, user.id);
       const { token: accessToken } = await this.accessTokens.sign(user.id, roles);
-      const currentUser = await buildCurrentUser(tx, user.id, this.stepUpWindowSeconds);
+      const currentUser = await buildCurrentUser(
+        tx,
+        user.id,
+        this.stepUpWindowSeconds,
+        this.fieldEncryption,
+      );
 
       return {
         refreshToken,
@@ -211,6 +219,7 @@ export class AuthService {
       this.prisma,
       outcome.userId,
       this.stepUpWindowSeconds,
+      this.fieldEncryption,
     );
 
     return {
@@ -287,7 +296,7 @@ export class AuthService {
   }
 
   me(userId: string): ReturnType<typeof buildCurrentUser> {
-    return buildCurrentUser(this.prisma, userId, this.stepUpWindowSeconds);
+    return buildCurrentUser(this.prisma, userId, this.stepUpWindowSeconds, this.fieldEncryption);
   }
 
   private async rolesFor(tx: Prisma.TransactionClient, userId: string): Promise<string[]> {
