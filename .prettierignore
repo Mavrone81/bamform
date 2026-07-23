@@ -1,0 +1,16 @@
+dist
+build
+node_modules
+coverage
+api/prisma/migrations
+.superpowers
+package-lock.json
+
+# Pre-existing scaffolding this slice does not own (BUILD_HANDOFF §2 /
+# slice-1-brief.md constraints) — left in its original formatting.
+docs/
+.github/
+api/openapi.yaml
+docker-compose.yml
+docker-compose.ci.yml
+README.md
