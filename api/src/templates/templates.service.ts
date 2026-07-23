@@ -26,14 +26,25 @@ export class TemplatesService {
     });
 
     const page = paginate(rows, limit);
-    const data = await Promise.all(
-      page.data.map(async (row) => {
-        const current = await this.prisma.templateRevision.findFirst({
-          where: { formTemplateId: row.id, status: 'current' },
-          select: { id: true },
-        });
-        return toFormTemplate(row, row.assetTypes[0]?.id ?? null, current?.id ?? null);
-      }),
+
+    // Perf fix (slice-4-review, Important #2): resolve every page row's
+    // CURRENT revision with one set-based query instead of a `findFirst`
+    // per row — O(1) queries for the page, not O(N). `sequenceOrdinal`
+    // is unique per template (INV-01/02), so `formTemplateId` alone already
+    // identifies at most one CURRENT row each; no extra grouping needed.
+    const templateIds = page.data.map((row) => row.id);
+    const currentRevisions = templateIds.length
+      ? await this.prisma.templateRevision.findMany({
+          where: { formTemplateId: { in: templateIds }, status: 'current' },
+          select: { id: true, formTemplateId: true },
+        })
+      : [];
+    const currentByTemplateId = new Map(
+      currentRevisions.map((rev) => [rev.formTemplateId, rev.id]),
+    );
+
+    const data = page.data.map((row) =>
+      toFormTemplate(row, row.assetTypes[0]?.id ?? null, currentByTemplateId.get(row.id) ?? null),
     );
 
     return { data, page: page.page };

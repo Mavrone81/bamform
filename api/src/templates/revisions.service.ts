@@ -36,10 +36,16 @@ import {
 
 type Tx = Prisma.TransactionClient | PrismaClient;
 
+// `active: true` on both relations — slice-4-review fix (Important #1): a
+// shrinking `PUT /revisions/{id}/items|measurements` edit marks the removed
+// row `active=false` rather than deleting it (no DELETE grant, INV-16).
+// Every read path that enumerates a revision's items/measurements must
+// filter it out, so it lives once here rather than being repeated per call
+// site.
 const REVISION_INCLUDE = {
   formTemplate: true,
-  items: { orderBy: { displayOrder: 'asc' as const } },
-  measurements: { orderBy: { displayOrder: 'asc' as const } },
+  items: { where: { active: true }, orderBy: { displayOrder: 'asc' as const } },
+  measurements: { where: { active: true }, orderBy: { displayOrder: 'asc' as const } },
 };
 
 /**
@@ -50,18 +56,19 @@ const REVISION_INCLUDE = {
  * (`revision-transitions.ts`) and additionally catches the DB's own
  * rejection on a genuine race as a backstop — see the `catch` blocks below.
  *
- * KNOWN LIMITATION (flagged in slice-4-report.md): `replaceItems`/
- * `replaceMeasurements` are documented as "replace wholesale"
+ * `replaceItems`/`replaceMeasurements` are documented as "replace wholesale"
  * (API_SPECIFICATION.md §10.4 / `openapi.yaml`'s `replaceRevisionMeasurements`),
  * but `bamform_app` holds NO `DELETE` grant on any table (non-negotiable #7,
  * `grants.sql`, INV-16) — a literal delete-then-recreate is not possible
  * without violating that non-negotiable. Both are implemented as an
  * upsert-by-`stableKey` instead: existing rows are updated in place, new
  * `stableKey`s are inserted, and a shrinking edit (removing an item/
- * measurement from a draft) cannot remove its row — the stale row remains
- * attached to the revision. This only affects DRAFT content that has never
- * been current/bound to a job. Recommended follow-up: an additive migration
- * giving `template_item`/`template_measurement` a `superseded`/`active` flag.
+ * measurement from a draft) marks the dropped row `active=false` rather
+ * than leaving it dangling (slice-4-review fix, Important #1 — see the
+ * `20260724020000_template_item_measurement_active_flag` migration and the
+ * comment on `REVISION_INCLUDE` below). Only DRAFT revisions reach these
+ * handlers (`assertDraft`), so this soft-remove only ever happens during
+ * authoring; CURRENT/SUPERSEDED content is immutable either way.
  */
 @Injectable()
 export class RevisionsService {
@@ -106,7 +113,13 @@ export class RevisionsService {
 
     const current = await this.prisma.templateRevision.findFirst({
       where: { formTemplateId: templateId, status: RevisionStatusT.current },
-      include: { items: true, measurements: true },
+      // Only carry forward ACTIVE rows — a row the CURRENT revision's own
+      // authoring superseded (soft-removed, see REVISION_INCLUDE above)
+      // must not resurrect itself on the next draft's copy-forward.
+      include: {
+        items: { where: { active: true } },
+        measurements: { where: { active: true } },
+      },
     });
     const maxOrdinal = await this.prisma.templateRevision.aggregate({
       where: { formTemplateId: templateId },
@@ -216,11 +229,16 @@ export class RevisionsService {
     assertDraft(existing.status);
 
     return this.prisma.$transaction(async (tx) => {
+      // ALL rows regardless of `active` — a stableKey reintroduced after a
+      // prior shrinking edit soft-removed it must reactivate the SAME row
+      // (audit/history continuity), not spawn a duplicate.
       const currentItems = await tx.templateItem.findMany({ where: { templateRevisionId: id } });
       const byStableKey = new Map(currentItems.map((item) => [item.stableKey, item]));
+      const seenStableKeys = new Set<string>();
 
       for (const [index, item] of dto.entries()) {
         const stableKey = item.stableKey ?? randomUUID();
+        seenStableKeys.add(stableKey);
         const existingItem = byStableKey.get(stableKey);
         const data = {
           itemNo: item.itemNo,
@@ -228,6 +246,7 @@ export class RevisionsService {
           instruction: item.instruction,
           mandatory: item.mandatory ?? true,
           displayOrder: item.displayOrder ?? index,
+          active: true,
         };
 
         if (existingItem) {
@@ -239,18 +258,32 @@ export class RevisionsService {
         }
       }
 
+      // Slice-4-review fix (Important #1): rows attached to this revision
+      // but absent from this wholesale PUT are superseded, not deleted (no
+      // DELETE grant, INV-16) — retained as `active=false` for audit/
+      // history, filtered out of every read path (REVISION_INCLUDE above).
+      const staleIds = currentItems
+        .filter((item) => item.active && !seenStableKeys.has(item.stableKey))
+        .map((item) => item.id);
+      if (staleIds.length) {
+        await tx.templateItem.updateMany({
+          where: { id: { in: staleIds } },
+          data: { active: false },
+        });
+      }
+
       await this.audit.record(tx, {
         actorId: actor.actorId,
         action: AuditActionT.update,
         entityType: 'template_revision',
         entityId: id,
-        after: { itemsReplaced: dto.length },
+        after: { itemsReplaced: dto.length, itemsRetired: staleIds.length },
         sourceIp: actor.sourceIp,
         requestId: actor.requestId,
       });
 
       const rows = await tx.templateItem.findMany({
-        where: { templateRevisionId: id },
+        where: { templateRevisionId: id, active: true },
         orderBy: { displayOrder: 'asc' },
       });
       return rows.map(toTemplateItem);
@@ -273,12 +306,17 @@ export class RevisionsService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        // ALL rows regardless of `active` — see the matching comment in
+        // `replaceItems` above; a reintroduced stableKey reactivates its
+        // original row instead of spawning a duplicate.
         const currentMeasurements = await tx.templateMeasurement.findMany({
           where: { templateRevisionId: id },
         });
         const byStableKey = new Map(currentMeasurements.map((m) => [m.stableKey, m]));
+        const seenStableKeys = new Set<string>();
 
         for (const [index, m] of dto.entries()) {
+          seenStableKeys.add(m.stableKey);
           const existingMeasurement = byStableKey.get(m.stableKey);
           const data = {
             section: m.section,
@@ -291,6 +329,7 @@ export class RevisionsService {
             tolerance: m.tolerance ?? null,
             specDisplay: m.specDisplay,
             displayOrder: m.displayOrder ?? index,
+            active: true,
           };
 
           if (existingMeasurement) {
@@ -302,18 +341,31 @@ export class RevisionsService {
           }
         }
 
+        // Slice-4-review fix (Important #1) — see `replaceItems`: rows
+        // dropped from this wholesale PUT are superseded (`active=false`),
+        // not deleted.
+        const staleIds = currentMeasurements
+          .filter((m) => m.active && !seenStableKeys.has(m.stableKey))
+          .map((m) => m.id);
+        if (staleIds.length) {
+          await tx.templateMeasurement.updateMany({
+            where: { id: { in: staleIds } },
+            data: { active: false },
+          });
+        }
+
         await this.audit.record(tx, {
           actorId: actor.actorId,
           action: AuditActionT.update,
           entityType: 'template_revision',
           entityId: id,
-          after: { measurementsReplaced: dto.length },
+          after: { measurementsReplaced: dto.length, measurementsRetired: staleIds.length },
           sourceIp: actor.sourceIp,
           requestId: actor.requestId,
         });
 
         const rows = await tx.templateMeasurement.findMany({
-          where: { templateRevisionId: id },
+          where: { templateRevisionId: id, active: true },
           orderBy: { displayOrder: 'asc' },
         });
         return rows.map(toTemplateMeasurement);

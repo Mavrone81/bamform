@@ -422,6 +422,14 @@ model TemplateItem {
   mandatory          Boolean    @default(true)
   stableKey          String     @map("stable_key")
   displayOrder       Int        @map("display_order")
+  // Slice-4-review fix (Important #1): soft-remove flag for the
+  // upsert-by-stableKey `PUT /revisions/{id}/items` handler — `bamform_app`
+  // has no DELETE grant (non-negotiable #7), so a shrinking edit marks the
+  // dropped row `active=false` instead of leaving it dangling. Only DRAFT
+  // revisions are editable, so this only ever flips during authoring; a
+  // CURRENT/SUPERSEDED revision's rows are frozen either way. All read
+  // paths filter `active=true`. See 20260724020000_template_item_measurement_active_flag.
+  active             Boolean    @default(true)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -450,6 +458,9 @@ model TemplateMeasurement {
   specDisplay        String    @map("spec_display")
   stableKey          String    @map("stable_key")
   displayOrder       Int       @map("display_order")
+  // Slice-4-review fix (Important #1) — see TemplateItem.active above; same
+  // soft-remove convention for `PUT /revisions/{id}/measurements`.
+  active             Boolean   @default(true)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)

@@ -73,6 +73,53 @@ describe('Template revisions — lifecycle (PRD §5.2, PR-022..028, PR-047..049)
       .expect(404);
   });
 
+  it('slice-4-review Important #2: GET /templates resolves each template\'s currentRevisionId correctly (single set-based query, not N+1)', async () => {
+    const { token: authorToken } = await tokenFor('author2', 'DOC_CONTROLLER');
+    const { userId: approverId, token: approverToken } = await tokenFor(
+      'approver2',
+      'DOC_CONTROLLER',
+    );
+
+    // Template 1 — has a CURRENT revision.
+    const templateWithCurrent = await createFormTemplate(`DOC-${randomUUID()}`);
+    const draftRes = await request(server())
+      .post(`/api/v1/templates/${templateWithCurrent}/revisions`)
+      .set(...authHeader(authorToken))
+      .send({ revisionCode: '0', changeDescription: 'first' })
+      .expect(201);
+    const revisionId = draftRes.body.id as string;
+    await request(server())
+      .post(`/api/v1/revisions/${revisionId}/submit`)
+      .set(...authHeader(authorToken))
+      .expect(200);
+    await stepUp(approverId);
+    await request(server())
+      .post(`/api/v1/revisions/${revisionId}/approve`)
+      .set(...authHeader(approverToken))
+      .expect(200);
+
+    // Template 2 — only a DRAFT revision, no CURRENT.
+    const templateWithDraftOnly = await createFormTemplate(`DOC-${randomUUID()}`);
+    await request(server())
+      .post(`/api/v1/templates/${templateWithDraftOnly}/revisions`)
+      .set(...authHeader(authorToken))
+      .send({ revisionCode: '0', changeDescription: 'first' })
+      .expect(201);
+
+    // Template 3 — no revisions at all.
+    const templateWithNoRevisions = await createFormTemplate(`DOC-${randomUUID()}`);
+
+    const listRes = await request(server())
+      .get('/api/v1/templates?limit=200')
+      .set(...authHeader(authorToken))
+      .expect(200);
+
+    const byId = new Map(listRes.body.data.map((t: { id: string }) => [t.id, t]));
+    expect(byId.get(templateWithCurrent)).toMatchObject({ currentRevisionId: revisionId });
+    expect(byId.get(templateWithDraftOnly)).toMatchObject({ currentRevisionId: null });
+    expect(byId.get(templateWithNoRevisions)).toMatchObject({ currentRevisionId: null });
+  });
+
   it('ENGINEER creates the first DRAFT revision (sequence 0, empty checklist) and it is audited', async () => {
     const { token } = await tokenFor('engineer', 'ENGINEER');
     const templateId = await createFormTemplate(`DOC-${randomUUID()}`);
@@ -204,6 +251,139 @@ describe('Template revisions — lifecycle (PRD §5.2, PR-022..028, PR-047..049)
     );
     expect(rows.rowCount).toBe(2);
     expect(rows.rows[0].instruction).toBe('Check belt tension (revised wording)');
+  });
+
+  it('slice-4-review Important #1: a shrinking PUT items soft-removes the dropped item (active=false), not left dangling', async () => {
+    const { token } = await tokenFor('engineer', 'ENGINEER');
+    const templateId = await createFormTemplate(`DOC-${randomUUID()}`);
+    const createRes = await request(server())
+      .post(`/api/v1/templates/${templateId}/revisions`)
+      .set(...authHeader(token))
+      .send({ revisionCode: '0', changeDescription: 'first' })
+      .expect(201);
+    const revisionId = createRes.body.id as string;
+
+    const firstPut = await request(server())
+      .put(`/api/v1/revisions/${revisionId}/items`)
+      .set(...authHeader(token))
+      .send([
+        { itemNo: 1, frequency: 'M1', instruction: 'Item A', mandatory: true },
+        { itemNo: 2, frequency: 'M1', instruction: 'Item B', mandatory: true },
+        { itemNo: 3, frequency: 'M1', instruction: 'Item C', mandatory: true },
+      ])
+      .expect(200);
+    expect(firstPut.body).toHaveLength(3);
+    const [keyA, keyB, keyC] = firstPut.body.map((i: { stableKey: string }) => i.stableKey);
+
+    // Author drops item B — a shrinking wholesale PUT of just [A, C].
+    const secondPut = await request(server())
+      .put(`/api/v1/revisions/${revisionId}/items`)
+      .set(...authHeader(token))
+      .send([
+        { itemNo: 1, frequency: 'M1', instruction: 'Item A', mandatory: true, stableKey: keyA },
+        { itemNo: 2, frequency: 'M1', instruction: 'Item C', mandatory: true, stableKey: keyC },
+      ])
+      .expect(200);
+
+    // The PUT's own response reflects only the active items.
+    expect(secondPut.body).toHaveLength(2);
+    expect(secondPut.body.map((i: { stableKey: string }) => i.stableKey).sort()).toEqual(
+      [keyA, keyC].sort(),
+    );
+
+    // B's row is retained for audit/history, not deleted (no DELETE grant) —
+    // but marked inactive so it never resurfaces.
+    const rows = await adminPool.query(
+      `SELECT stable_key, active FROM "template_item" WHERE template_revision_id = $1 ORDER BY item_no`,
+      [revisionId],
+    );
+    expect(rows.rowCount).toBe(3);
+    const activeByKey: Record<string, boolean> = Object.fromEntries(
+      rows.rows.map((r) => [r.stable_key, r.active]),
+    );
+    expect(activeByKey[keyA]).toBe(true);
+    expect(activeByKey[keyB]).toBe(false);
+    expect(activeByKey[keyC]).toBe(true);
+
+    // A fresh read of the revision returns only [A, C].
+    const getRes = await request(server())
+      .get(`/api/v1/revisions/${revisionId}`)
+      .set(...authHeader(token))
+      .expect(200);
+    expect(getRes.body.items).toHaveLength(2);
+    expect(getRes.body.items.map((i: { stableKey: string }) => i.stableKey).sort()).toEqual(
+      [keyA, keyC].sort(),
+    );
+  });
+
+  it('slice-4-review Important #1: a shrinking PUT measurements soft-removes the dropped measurement (active=false)', async () => {
+    const { token } = await tokenFor('engineer', 'ENGINEER');
+    const templateId = await createFormTemplate(`DOC-${randomUUID()}`);
+    const createRes = await request(server())
+      .post(`/api/v1/templates/${templateId}/revisions`)
+      .set(...authHeader(token))
+      .send({ revisionCode: '0', changeDescription: 'first' })
+      .expect(201);
+    const revisionId = createRes.body.id as string;
+    const keyKeep = randomUUID();
+    const keyDrop = randomUUID();
+
+    await request(server())
+      .put(`/api/v1/revisions/${revisionId}/measurements`)
+      .set(...authHeader(token))
+      .send([
+        {
+          description: 'Heater block temperature',
+          specType: 'RANGE',
+          lowerLimit: 95,
+          upperLimit: 105,
+          specDisplay: '95 - 105 g',
+          stableKey: keyKeep,
+        },
+        {
+          description: 'Bond force',
+          specType: 'RANGE',
+          lowerLimit: 10,
+          upperLimit: 20,
+          specDisplay: '10 - 20 g',
+          stableKey: keyDrop,
+        },
+      ])
+      .expect(200);
+
+    const secondPut = await request(server())
+      .put(`/api/v1/revisions/${revisionId}/measurements`)
+      .set(...authHeader(token))
+      .send([
+        {
+          description: 'Heater block temperature',
+          specType: 'RANGE',
+          lowerLimit: 95,
+          upperLimit: 105,
+          specDisplay: '95 - 105 g',
+          stableKey: keyKeep,
+        },
+      ])
+      .expect(200);
+    expect(secondPut.body).toHaveLength(1);
+
+    const rows = await adminPool.query(
+      `SELECT stable_key, active FROM "template_measurement" WHERE template_revision_id = $1 ORDER BY stable_key`,
+      [revisionId],
+    );
+    expect(rows.rowCount).toBe(2);
+    const activeByKey: Record<string, boolean> = Object.fromEntries(
+      rows.rows.map((r) => [r.stable_key, r.active]),
+    );
+    expect(activeByKey[keyKeep]).toBe(true);
+    expect(activeByKey[keyDrop]).toBe(false);
+
+    const getRes = await request(server())
+      .get(`/api/v1/revisions/${revisionId}`)
+      .set(...authHeader(token))
+      .expect(200);
+    expect(getRes.body.measurements).toHaveLength(1);
+    expect(getRes.body.measurements[0].stableKey).toBe(keyKeep);
   });
 
   it('PUT measurements rejects lowerLimit > upperLimit with 422 spec-limits-inverted (INV-04)', async () => {

@@ -1,0 +1,37 @@
+-- BamForm — slice-4 review fix (Important #1). Forward-only, additive; does
+-- not edit 20260723175620_init, 20260723180000_invariants, or
+-- 20260724010000_asset_type_form_template_unique_and_audit_chain_lock.
+--
+-- Reversal:
+--   ALTER TABLE "template_item" DROP COLUMN "active";
+--   ALTER TABLE "template_measurement" DROP COLUMN "active";
+--
+-- ============================================================ Why (Important #1)
+--
+-- `PUT /revisions/{id}/items` and `PUT /revisions/{id}/measurements` are
+-- documented as "replace wholesale" (API_SPECIFICATION.md §10.4), but
+-- `bamform_app` has NO `DELETE` grant on any table (non-negotiable #7,
+-- INV-16) — so `revisions.service.ts` implements them as an
+-- upsert-by-`stable_key` instead: existing rows are updated in place, new
+-- `stable_key`s are inserted, but a SHRINKING edit (removing an item from
+-- the payload) previously had no way to remove the dropped row — it stayed
+-- attached to the revision forever. That is harmless today (nothing reads
+-- `template_item`/`template_measurement` to build a job yet), but once
+-- slice 5 materializes job checklist items from a revision's rows, a stale
+-- row would leak a phantom checklist item onto every job generated from
+-- that revision.
+--
+-- Fix: an additive `active` boolean, default `true`, matching the same
+-- soft-remove convention DATABASE_DESIGN.md already uses elsewhere for
+-- deactivation-not-deletion (`asset.active`, `form_template.active`,
+-- `schedule_rule.active`, `approval_route.active` — DP-2). On a wholesale
+-- PUT for a DRAFT revision (the only status these two handlers accept —
+-- `assertDraft`, unchanged and not weakened by this fix): rows present in
+-- the payload upsert with `active=true`; rows previously attached to the
+-- revision but absent from the payload are marked `active=false` (retained
+-- for audit/history, not deleted). Every read path that enumerates a
+-- revision's items/measurements (`revisions.service.ts`'s `REVISION_INCLUDE`,
+-- `create()`'s carry-forward from the CURRENT revision, and both replace
+-- handlers' read-back) now filters `active=true`.
+ALTER TABLE "template_item" ADD COLUMN "active" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "template_measurement" ADD COLUMN "active" BOOLEAN NOT NULL DEFAULT true;
