@@ -14,10 +14,13 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "npm run typecheck --workspace=shared && npm run typecheck --workspace=api && npm run typecheck --workspace=web",
+    "typecheck": "npm run typecheck --workspace=shared && npm run build --workspace=shared && npm run typecheck --workspace=api && npm run typecheck --workspace=web",
     "build": "npm run build --workspace=shared && npm run build --workspace=api && npm run build --workspace=web",
+    "pretest:integration": "bash scripts/dev/generate-dev-secrets.sh",
     "test:integration": "npm run test:integration --workspace=api",
     "test:integration:local": "bash scripts/dev/run-integration-tests.sh",
+    "pretest:unit": "bash scripts/dev/generate-dev-secrets.sh",
+    "test:unit": "npm run test:unit --workspace=api",
     "db:test:up": "docker compose -f docker-compose.test.yml up -d --wait",
     "db:test:down": "docker compose -f docker-compose.test.yml down -v"
   },
@@ -34,6 +37,7 @@
     "prisma@6.19.2": true,
     "@prisma/engines@6.19.2": true,
     "@prisma/client@6.19.2": true,
-    "unrs-resolver@1.12.2": true
+    "unrs-resolver@1.12.2": true,
+    "argon2@0.45.1": true
   }
 }
