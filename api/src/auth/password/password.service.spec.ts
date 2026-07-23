@@ -19,7 +19,7 @@ describe('PasswordService', () => {
     return new PasswordService(config);
   }
 
-  it('hashes with argon2id and the configured parameters encoded in the hash', async () => {
+  it('U-ENC-09: hashes with argon2id and the configured parameters encoded in the hash', async () => {
     const service = makeService();
     const hash = await service.hash('a-correct-horse-battery-staple');
 
