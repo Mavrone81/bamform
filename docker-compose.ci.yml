@@ -1,0 +1,44 @@
+# Ephemeral CI stack. Secrets are generated per run and match nothing real
+# (PR-SEC-21). Scheduler and notifications are OFF (PR-ENV-09).
+name: bamform-ci
+services:
+  bamform-web:
+    build: { context: ., dockerfile: web/Dockerfile }
+    ports: ["8080:8080"]
+  bamform-api:
+    build: { context: ., dockerfile: api/Dockerfile }
+    ports: ["3000:3000"]
+    environment:
+      APP_ENV: ci
+      SCHEDULER_ENABLED: "false"
+      NOTIFICATION_ENABLED: "false"
+      DATABASE_URL: postgresql://bamform:ci_ephemeral_not_a_real_secret@bamform-postgres:5432/bamform
+      REDIS_URL: redis://bamform-redis:6379
+      MINIO_ENDPOINT: bamform-minio:9000
+    depends_on:
+      bamform-postgres: { condition: service_healthy }
+      bamform-redis:    { condition: service_healthy }
+      bamform-minio:    { condition: service_started }
+  bamform-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bamform
+      POSTGRES_USER: bamform
+      POSTGRES_PASSWORD: ci_ephemeral_not_a_real_secret
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bamform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  bamform-redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  bamform-minio:
+    image: bitnami/minio:latest
+    environment:
+      MINIO_ROOT_USER: bamform
+      MINIO_ROOT_PASSWORD: ci_ephemeral_not_a_real_secret

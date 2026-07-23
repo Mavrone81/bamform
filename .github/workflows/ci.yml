@@ -1,0 +1,291 @@
+# BamForm CI — BAMFORM-TST-001 §16
+#
+# Each stage gates the next. The offline suite is a release gate in its own
+# right (PR-121): a green pipeline without it passing is not a releasable build.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  # A test run must never generate jobs or email real staff (PR-ENV-09)
+  SCHEDULER_ENABLED: "false"
+  NOTIFICATION_ENABLED: "false"
+  APP_ENV: ci
+
+jobs:
+
+  # ---------------------------------------------------------------- 1
+  static-analysis:
+    name: 1 · Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - name: ESLint (zero warnings tolerated)
+        run: npm run lint -- --max-warnings=0
+      - name: Prettier
+        run: npm run format:check
+      - name: TypeScript strict
+        run: npm run typecheck
+      - name: No VITE_ variable may hold a secret (PR-ENV-10)
+        run: bash scripts/ci/assert-no-vite-secrets.sh
+      - name: Every config key is documented in .env.example (PR-ENV-26)
+        run: bash scripts/ci/assert-env-example-complete.sh
+
+  # ---------------------------------------------------------------- 2
+  secret-scan:
+    name: 2 · Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # full history — first-run requirement
+      - uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+
+  # ---------------------------------------------------------------- 3
+  unit:
+    name: 3 · Unit
+    needs: [static-analysis, secret-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - name: Unit tests with coverage
+        run: npm run test:unit -- --coverage
+      - name: Coverage gate — 80% lines / 70% branches
+        run: npx nyc check-coverage --lines 80 --branches 70
+      - name: Signing determinism — golden hash (U-SIG-01)
+        # The most important single test in the suite. If a dependency upgrade
+        # changes canonical serialisation, /records/{id}/integrity would begin
+        # reporting tampering on every historical record (PR-TST-04).
+        run: npm run test:unit -- --testNamePattern="canonical serialisation"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: coverage, path: coverage/ }
+
+  # ---------------------------------------------------------------- 4
+  integration:
+    name: 4 · Integration (real dependencies)
+    needs: unit
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bamform_test
+          POSTGRES_USER: bamform
+          POSTGRES_PASSWORD: ci_ephemeral_not_a_real_secret
+        options: >-
+          --health-cmd "pg_isready -U bamform"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports: ["6379:6379"]
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: bamform
+          MINIO_ROOT_PASSWORD: ci_ephemeral_not_a_real_secret
+        ports: ["9000:9000"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - name: Apply migrations
+        run: npx prisma migrate deploy --schema=api/prisma/schema.prisma
+        env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
+      - name: Apply role grants (audit tables append-only)
+        run: psql "$DATABASE_URL" -f api/prisma/grants.sql
+        env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
+      - name: Integration tests — asserts all 16 DBD §7 invariants
+        run: npm run test:integration
+        env:
+          DATABASE_URL: postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test
+          REDIS_URL: redis://localhost:6379
+          MINIO_ENDPOINT: localhost:9000
+
+  # ---------------------------------------------------------------- 5
+  contract:
+    name: 5 · Contract (API vs OpenAPI)
+    needs: integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - name: Spectral lint the contract
+        run: npx spectral lint api/openapi.yaml --fail-severity=warn
+      - name: Breaking-change detection
+        run: bash scripts/ci/oasdiff-check.sh
+      - name: Implementation matches specification
+        run: npm run test:contract
+      - name: Every route authenticated unless allowlisted (C-07, threat E-6)
+        run: npm run test:route-coverage
+      - name: Every collection endpoint applies area scoping (C-08)
+        run: npm run test:scope-coverage
+
+  # ---------------------------------------------------------------- 6
+  security:
+    name: 6 · Security
+    needs: contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+      - uses: github/codeql-action/init@v3
+        with: { languages: javascript-typescript }
+      - uses: github/codeql-action/analyze@v3
+      - name: Build image for scanning
+        run: docker build -f api/Dockerfile -t bamform-api:scan .
+      - name: Trivy — fail on HIGH/CRITICAL
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: bamform-api:scan
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+      - name: Security test cases S-01 to S-34
+        run: npm run test:security
+      - name: CSP contains no unsafe-inline or unsafe-eval (S-28)
+        run: bash scripts/ci/assert-csp-safe.sh
+      - name: Passwords never appear in log output (S-15)
+        run: npm run test:log-redaction
+
+  # ---------------------------------------------------------------- 7
+  offline:
+    name: 7 · Offline suite · RELEASE GATE
+    needs: security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Compose the full stack
+        run: docker compose -f docker-compose.ci.yml up -d --wait
+      - name: Offline suite O-01 to O-16
+        # RK-01 — losing a technician's completed record is the highest-impact
+        # risk in the project. No known-issue waivers permitted here.
+        run: npm run test:offline
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: offline-traces, path: test-results/ }
+
+  # ---------------------------------------------------------------- 8
+  e2e:
+    name: 8 · E2E · ${{ matrix.viewport }}
+    needs: offline
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        viewport: ["375", "768", "1280"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps
+      - run: docker compose -f docker-compose.ci.yml up -d --wait
+      - name: Journeys E-01 to E-14 at ${{ matrix.viewport }}px
+        run: npm run test:e2e
+        env: { VIEWPORT_WIDTH: "${{ matrix.viewport }}" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ matrix.viewport }}px
+          path: playwright-report/
+
+  # ---------------------------------------------------------------- 9
+  accessibility:
+    name: 9 · Accessibility
+    needs: offline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: docker compose -f docker-compose.ci.yml up -d --wait
+      - name: axe-core — WCAG 2.1 AA, zero violations
+        run: npm run test:a11y
+
+  # --------------------------------------------------------------- 10
+  build:
+    name: 10 · Build images
+    needs: [e2e, accessibility]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build, tagged with commit SHA
+        run: |
+          docker build -f api/Dockerfile -t "bamform-api:${GITHUB_SHA::7}" .
+          docker build -f web/Dockerfile -t "bamform-web:${GITHUB_SHA::7}" \
+            --build-arg "VITE_APP_VERSION=${GITHUB_SHA::7}" .
+
+  # --------------------------------------------------------------- 11
+  migration-check:
+    name: 11 · Migration check
+    needs: build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bamform_mig
+          POSTGRES_USER: bamform
+          POSTGRES_PASSWORD: ci_ephemeral_not_a_real_secret
+        options: >-
+          --health-cmd "pg_isready -U bamform"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+    env:
+      DATABASE_URL: postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_mig
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - name: (a) apply to a FRESH database
+        run: npx prisma migrate deploy --schema=api/prisma/schema.prisma
+      - name: (b) apply to a copy of the PREVIOUS release's schema
+        run: bash scripts/ci/migrate-from-previous.sh
+      - name: (c) re-run — migrations must be idempotent
+        run: npx prisma migrate deploy --schema=api/prisma/schema.prisma
+      - name: Every migration documents its reversal (M-04)
+        run: bash scripts/ci/assert-migration-reversal-documented.sh
+      - name: Large-table indexes use CONCURRENTLY (M-06)
+        run: bash scripts/ci/assert-concurrent-indexes.sh

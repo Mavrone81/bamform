@@ -1,0 +1,273 @@
+# BamForm — Docker Compose topology
+# BAMFORM-PRD-001 §2 · BAMFORM-ENV-001 §3
+#
+# SHARED LIVE HOST. Every service name is prefixed `bamform-` (PR-006) so that no
+# deploy command can address another application's service.
+#
+# NEVER run: docker compose down -v   |   docker volume rm bamform_*
+# See BAMFORM-RUN-001 §1 (prohibited commands).
+#
+# Host port bindings are intentionally left as ${WEB_PORT} / ${API_PORT} and are
+# assigned only after Phase 0 recon proves no collision (OI-07).
+
+name: bamform
+
+# ---------------------------------------------------------------------------
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: api/Dockerfile
+  image: bamform-api:${IMAGE_TAG:-local}
+  restart: unless-stopped
+  logging: *default-logging
+  env_file: [.env]
+  user: "10001:10001"
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+
+# ---------------------------------------------------------------------------
+networks:
+  frontend:
+    name: bamform_frontend
+  backend:
+    name: bamform_backend
+  data:
+    name: bamform_data
+    internal: true          # PR-002 — no route off this network
+
+volumes:
+  bamform_pgdata:
+    name: bamform_pgdata
+  bamform_redisdata:
+    name: bamform_redisdata
+  bamform_miniodata:
+    name: bamform_miniodata
+
+secrets:
+  kek:                  { file: ./secrets/kek }
+  dek_wrapped:          { file: ./secrets/dek_wrapped }
+  blind_index_key:      { file: ./secrets/blind_index_key }
+  jwt_signing_key:      { file: ./secrets/jwt_signing_key.pem }
+  record_signing_key:   { file: ./secrets/record_signing_key.pem }
+  postgres_password:    { file: ./secrets/postgres_password }
+  redis_password:       { file: ./secrets/redis_password }
+  minio_root_password:  { file: ./secrets/minio_root_password }
+  minio_sse_key:        { file: ./secrets/minio_sse_key }
+  smtp_password:        { file: ./secrets/smtp_password }
+
+# ---------------------------------------------------------------------------
+services:
+
+  bamform-web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      args:
+        VITE_APP_VERSION: ${IMAGE_TAG:-local}
+    image: bamform-web:${IMAGE_TAG:-local}
+    container_name: bamform-web
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:${WEB_PORT:?set WEB_PORT in .env after recon}:8080"
+    networks: [frontend]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /var/cache/nginx:size=64m
+      - /var/run:size=16m
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:   { cpus: "0.25", memory: 128M }
+        reservations: { memory: 32M }
+
+  bamform-api:
+    <<: *app-common
+    container_name: bamform-api
+    command: ["node", "dist/main.js"]
+    ports:
+      - "127.0.0.1:${API_PORT:?set API_PORT in .env after recon}:3000"
+    networks: [frontend, backend, data]
+    secrets:
+      - kek
+      - dek_wrapped
+      - blind_index_key
+      - jwt_signing_key
+      - record_signing_key
+      - postgres_password
+      - redis_password
+      - minio_sse_key
+    depends_on:
+      bamform-postgres: { condition: service_healthy }
+      bamform-redis:    { condition: service_healthy }
+      bamform-minio:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:   { cpus: "1.0", memory: 768M }
+        reservations: { memory: 256M }
+
+  bamform-worker:
+    <<: *app-common
+    container_name: bamform-worker
+    command: ["node", "dist/worker.js"]
+    networks: [backend, data]
+    secrets:
+      - kek
+      - dek_wrapped
+      - blind_index_key
+      - record_signing_key
+      - postgres_password
+      - redis_password
+      - minio_sse_key
+      - smtp_password
+    depends_on:
+      bamform-postgres: { condition: service_healthy }
+      bamform-redis:    { condition: service_healthy }
+    # Chromium (PDF rendering, PR-ENV-13) needs writable /tmp and more headroom
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    healthcheck:
+      test: ["CMD", "node", "dist/worker-healthcheck.js"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:   { cpus: "0.5", memory: 1G }   # Chromium is memory-spiky
+        reservations: { memory: 128M }
+
+  # One-shot. Runs to completion BEFORE api restarts (PR-017, PR-RUN-07).
+  bamform-migrate:
+    <<: *app-common
+    container_name: bamform-migrate
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
+    networks: [data]
+    read_only: false          # prisma writes a query engine cache
+    secrets:
+      - postgres_password
+    environment:
+      DATABASE_URL: ${DATABASE_MIGRATE_URL:?migrate uses the DDL role, not the app role}
+    depends_on:
+      bamform-postgres: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+
+  bamform-postgres:
+    # TODO(recon): pin by digest before first production deploy — PR-ENV-24
+    image: postgres:16-alpine
+    container_name: bamform-postgres
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [data]
+    # NO ports: — never published to the host (PR-ENV-11)
+    environment:
+      POSTGRES_DB: bamform
+      POSTGRES_USER: bamform_migrate
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      TZ: UTC
+    secrets: [postgres_password]
+    volumes:
+      - bamform_pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro   # role grants — DBD §7.1
+    command:
+      - postgres
+      - -c=max_connections=50
+      - -c=shared_buffers=256MB
+      - -c=work_mem=8MB
+      - -c=log_min_duration_statement=1000
+      - -c=log_connections=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bamform_migrate -d bamform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt: [no-new-privileges:true]
+    deploy:
+      resources:
+        limits:   { cpus: "1.0", memory: 1G }
+        reservations: { memory: 512M }
+
+  bamform-redis:
+    # TODO(recon): pin by digest before first production deploy
+    image: redis:7-alpine
+    container_name: bamform-redis
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [data]
+    # NO ports:
+    command: >
+      sh -c 'exec redis-server
+      --requirepass "$$(cat /run/secrets/redis_password)"
+      --appendonly yes
+      --maxmemory 192mb
+      --maxmemory-policy noeviction'
+    secrets: [redis_password]
+    volumes:
+      - bamform_redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt: [no-new-privileges:true]
+    deploy:
+      resources:
+        limits:   { cpus: "0.25", memory: 256M }
+        reservations: { memory: 64M }
+
+  bamform-minio:
+    # TODO(recon): pin by digest before first production deploy
+    image: minio/minio
+    container_name: bamform-minio
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [data]
+    # NO ports: — attachments are streamed through the API (PR-011, ADR-007)
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-bamform}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets: [minio_root_password]
+    volumes:
+      - bamform_miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    security_opt: [no-new-privileges:true]
+    deploy:
+      resources:
+        limits:   { cpus: "0.5", memory: 512M }
+        reservations: { memory: 128M }

@@ -1,0 +1,1303 @@
+openapi: 3.1.0
+
+info:
+  title: BamForm API
+  version: 1.0.0
+  summary: Preventive maintenance record and approval system
+  description: |
+    Machine-readable contract for BamForm. This document is authoritative;
+    BAMFORM-API-001 explains it. Divergence between this specification and the
+    running implementation fails the CI build.
+
+    Conventions, error catalogue, permission matrix and the offline sync
+    protocol are described in BAMFORM-API-001.
+  contact:
+    name: BamForm project
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+
+servers:
+  - url: https://form.bevorasg.com/api/v1
+    description: Production
+  - url: http://localhost:3000/api/v1
+    description: Local development
+
+tags:
+  - name: Health
+  - name: Auth
+  - name: Assets
+  - name: Templates
+  - name: Jobs
+  - name: Approval
+  - name: Sync
+  - name: Archive
+  - name: Reports
+  - name: Audit
+  - name: Admin
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: Service is live
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status: { type: string, const: ok }
+                  version: { type: string }
+                  commit: { type: string }
+              example: { status: ok, version: 1.0.0, commit: a1b2c3d }
+
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Readiness probe - checks Postgres, Redis and MinIO
+      security: []
+      responses:
+        '200':
+          description: All dependencies reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ready }
+                  checks:
+                    type: object
+                    additionalProperties: { type: string }
+              example: { status: ready, checks: { postgres: ok, redis: ok, minio: ok } }
+        '503':
+          $ref: '#/components/responses/Problem'
+
+  /.well-known/jwks.json:
+    get:
+      tags: [Auth]
+      operationId: getJwks
+      summary: Published Ed25519 verification keys
+      security: []
+      responses:
+        '200':
+          description: JSON Web Key Set
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+              example: { keys: [ { kty: OKP, crv: Ed25519, kid: bf-2026-07, x: "11qYAY…" } ] }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Authenticate and receive an access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 12 }
+            example: { email: tech@bevorasg.com, password: "••••••••••••" }
+      responses:
+        '200':
+          description: Authenticated. Refresh token is set as an HttpOnly cookie.
+          headers:
+            Set-Cookie:
+              description: bf_refresh - HttpOnly, Secure, SameSite=Strict
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      summary: Rotate the refresh token and issue a new access token
+      description: |
+        Single-use with rotation. Presenting a spent token revokes the entire
+        token family and raises a security audit event.
+      security: []
+      responses:
+        '200':
+          description: New token pair issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the refresh family and deny-list the current access token
+      responses:
+        '204': { description: Logged out }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /auth/step-up:
+    post:
+      tags: [Auth]
+      operationId: stepUp
+      summary: Re-authenticate immediately before signing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Step-up window refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stepUpValidUntil: { type: string, format: date-time }
+              example: { stepUpValidUntil: '2026-07-24T02:30:00Z' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Current user, roles, area scope and active delegations
+      responses:
+        '200':
+          description: Current principal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /assets:
+    get:
+      tags: [Assets]
+      operationId: listAssets
+      summary: List assets
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: assetTypeId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: areaId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/AssetStatus' }
+      responses:
+        '200':
+          description: Paginated assets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Asset' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Assets]
+      operationId: createAsset
+      summary: Create an asset
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asset' }
+        '409':
+          description: Duplicate asset code
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /assets/{assetId}:
+    parameters:
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      tags: [Assets]
+      operationId: getAsset
+      summary: Get an asset
+      responses:
+        '200':
+          description: Asset
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asset' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Assets]
+      operationId: updateAsset
+      summary: Update an asset. Deactivation only, never deletion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asset' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /assets/{assetId}/history:
+    parameters:
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      tags: [Assets]
+      operationId: getAssetHistory
+      summary: Complete maintenance history for one asset
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Paginated record history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/RecordSummary' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /templates/{templateId}/revisions:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Templates]
+      operationId: listRevisions
+      summary: Full revision history for a template
+      responses:
+        '200':
+          description: Revisions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TemplateRevision' }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Templates]
+      operationId: createRevision
+      summary: Create a draft revision. Sequence is assigned server-side.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revisionCode, changeDescription]
+              properties:
+                revisionCode: { type: string, examples: [F] }
+                changeDescription: { type: string, minLength: 5 }
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TemplateRevision' }
+        '422':
+          description: Would create a gap in the revision sequence
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /revisions/{revisionId}/measurements:
+    parameters:
+      - $ref: '#/components/parameters/RevisionId'
+    put:
+      tags: [Templates]
+      operationId: replaceRevisionMeasurements
+      summary: Replace the measurement definitions on a draft revision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/TemplateMeasurement' }
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TemplateMeasurement' }
+        '422':
+          description: Specification limits inverted, or revision not in draft
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /revisions/{revisionId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/RevisionId'
+    post:
+      tags: [Templates]
+      operationId: approveRevision
+      summary: Approve and issue a revision. Requires step-up authentication.
+      responses:
+        '200':
+          description: Revision is now current; the previous revision is superseded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TemplateRevision' }
+        '403':
+          description: Step-up required, or actor is the revision author
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /jobs:
+    get:
+      tags: [Jobs]
+      operationId: listJobs
+      summary: List jobs
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/JobStatus' }
+        - name: assignedTo
+          in: query
+          schema: { type: string, format: uuid }
+        - name: assetId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: overdue
+          in: query
+          schema: { type: boolean }
+        - name: dueFrom
+          in: query
+          schema: { type: string, format: date }
+        - name: dueTo
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Paginated jobs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/JobSummary' }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      summary: Full job including the frozen template revision content
+      responses:
+        '200':
+          description: Job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/items/{templateItemId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: templateItemId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    put:
+      tags: [Jobs]
+      operationId: recordItemResult
+      summary: Record or update a checklist item result
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemResultInput' }
+      responses:
+        '200':
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemResult' }
+        '409':
+          description: Draft version conflict, or the record is archived
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/measurements/{templateMeasurementId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: templateMeasurementId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    put:
+      tags: [Jobs]
+      operationId: recordMeasurementResult
+      summary: Record or update a measurement reading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MeasurementResultInput' }
+      responses:
+        '200':
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeasurementResult' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/attachments:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Jobs]
+      operationId: uploadAttachment
+      summary: Upload a photograph. Validated by magic bytes, not extension.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                itemResultId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Attachment' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Jobs]
+      operationId: submitJob
+      summary: Submit a completed record for verification
+      description: |
+        Atomic. Rejected if any mandatory item has no result. Never sent as part
+        of an outbox batch - all preceding mutations for the job must be
+        acknowledged first.
+      responses:
+        '200':
+          description: Submitted and routed to the verification queue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '422':
+          description: Mandatory items outstanding - the list is returned
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /jobs/{jobId}/verify:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Approval]
+      operationId: verifyJob
+      summary: Verify a record. Requires step-up. Archives on success.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment: { type: string }
+      responses:
+        '200':
+          description: Verified and archived
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '403':
+          description: Step-up required, or not permitted for this stage
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: Actor is the submitter, or invalid state transition
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /jobs/{jobId}/return:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Approval]
+      operationId: returnJob
+      summary: Return a record to the maintainer for rework
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 10 }
+      responses:
+        '200':
+          description: Returned; all previously entered results are preserved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /queue:
+    get:
+      tags: [Approval]
+      operationId: getVerificationQueue
+      summary: Records awaiting the caller's verification, including delegated queues
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Queue ordered by age, overdue distinguished
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/QueueEntry' }
+
+  /sync/bootstrap:
+    get:
+      tags: [Sync]
+      operationId: syncBootstrap
+      summary: Everything the device needs to work offline
+      description: |
+        Embeds the complete frozen template revision for each assigned job so the
+        device can render the full form with no further network calls.
+      parameters:
+        - name: since
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Bootstrap payload
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncBootstrap' }
+
+  /sync/outbox:
+    post:
+      tags: [Sync]
+      operationId: syncOutbox
+      summary: Drain a batch of queued offline mutations
+      description: |
+        Applied in client sequence order, transactionally per job. Per-mutation
+        results are returned; one failure does not block the batch. Each
+        mutation id doubles as its idempotency key, so replaying a batch is safe.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mutations]
+              properties:
+                mutations:
+                  type: array
+                  maxItems: 200
+                  items: { $ref: '#/components/schemas/OutboxMutation' }
+      responses:
+        '200':
+          description: Per-mutation results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/OutboxResult' }
+                  syncToken: { type: string }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /records/{recordId}/pdf:
+    parameters:
+      - name: recordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Archive]
+      operationId: getRecordPdf
+      summary: Render the record in the controlled paper form layout
+      responses:
+        '200':
+          description: PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /records/{recordId}/integrity:
+    parameters:
+      - name: recordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Archive]
+      operationId: verifyRecordIntegrity
+      summary: Recompute the content hash and verify the signature
+      description: |
+        Recomputes the canonical serialisation from current data, re-derives the
+        digest, compares it to the stored value and verifies the Ed25519
+        signature. This is the mechanism behind acceptance criterion AC-11.
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrityResult' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /reports/measurements:
+    get:
+      tags: [Reports]
+      operationId: getMeasurementTrend
+      summary: Measurement trend series for an asset
+      description: |
+        Returns readings over time for one measurement identity on one asset,
+        joined across template revisions by stable key.
+      parameters:
+        - name: assetId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: stableKey
+          in: query
+          required: true
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Trend series with the specification band
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeasurementTrend' }
+
+  /audit-events/chain-status:
+    get:
+      tags: [Audit]
+      operationId: getAuditChainStatus
+      summary: Verify the hash chain over the audit log
+      responses:
+        '200':
+          description: Chain verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [intact, checkedAt, eventCount]
+                properties:
+                  intact: { type: boolean }
+                  checkedAt: { type: string, format: date-time }
+                  eventCount: { type: integer }
+                  firstBreakSequence: { type: [integer, 'null'] }
+              example: { intact: true, checkedAt: '2026-07-24T02:00:00Z', eventCount: 418322, firstBreakSequence: null }
+        '403': { $ref: '#/components/responses/Problem' }
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Ed25519-signed access token, 15 minute TTL
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque. Clients must not construct or parse it.
+      schema: { type: string }
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RevisionId:
+      name: revisionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Client-generated UUIDv7. Required on endpoints reachable from the offline outbox.
+      schema: { type: string, format: uuid }
+    IfMatch:
+      name: If-Match
+      in: header
+      description: The job draftVersion the client based this mutation on.
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: RFC 9457 Problem Details
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        requestId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              pointer: { type: string }
+              code: { type: string }
+              message: { type: string }
+      examples:
+        - type: https://form.bevorasg.com/errors/incomplete-record
+          title: Record is incomplete
+          status: 422
+          detail: 3 mandatory items have no recorded status.
+          requestId: 01JQ8X2N
+          errors:
+            - pointer: /items/9
+              code: REQUIRED
+              message: Item 9 has no recorded status
+
+    Page:
+      type: object
+      required: [page]
+      properties:
+        page:
+          type: object
+          required: [hasMore, limit]
+          properties:
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+            limit: { type: integer }
+            total: { type: [integer, 'null'], description: Present only when includeTotal=true }
+
+    Frequency:
+      type: string
+      enum: [M1, M3, M6, Y]
+
+    AssetStatus:
+      type: string
+      enum: [ACTIVE, UNDER_REPAIR, DECOMMISSIONED]
+
+    JobStatus:
+      type: string
+      enum: [SCHEDULED, ASSIGNED, IN_PROGRESS, SUBMITTED, VERIFIED, ARCHIVED, VOIDED]
+
+    ItemStatus:
+      type: string
+      enum: [DONE, NOT_APPLICABLE, NOT_DONE]
+
+    SpecType:
+      type: string
+      enum: [RANGE, TOLERANCE, PASS_FAIL, TEXT]
+
+    Judgement:
+      type: string
+      enum: [PASS, FAIL, NOT_EVALUATED]
+
+    AuthResult:
+      type: object
+      required: [accessToken, expiresIn, user]
+      properties:
+        accessToken: { type: string }
+        expiresIn: { type: integer, description: Seconds }
+        user: { $ref: '#/components/schemas/CurrentUser' }
+
+    CurrentUser:
+      type: object
+      required: [id, fullName, roles]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        email: { type: string, format: email }
+        roles:
+          type: array
+          items: { type: string }
+        areaScope:
+          type: array
+          items: { type: string, format: uuid }
+        activeDelegations:
+          type: array
+          items:
+            type: object
+            properties:
+              delegatorId: { type: string, format: uuid }
+              delegatorName: { type: string }
+              validTo: { type: string, format: date-time }
+        stepUpValidUntil: { type: [string, 'null'], format: date-time }
+
+    Asset:
+      type: object
+      required: [id, code, assetTypeId, status]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, examples: [AW03] }
+        assetTypeId: { type: string, format: uuid }
+        assetTypeName: { type: string }
+        description: { type: [string, 'null'] }
+        manufacturer: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        serialNumber: { type: [string, 'null'] }
+        areaId: { type: [string, 'null'], format: uuid }
+        locationDetail: { type: [string, 'null'] }
+        commissionedOn: { type: [string, 'null'], format: date }
+        scheduleAnchorDate: { type: string, format: date }
+        status: { $ref: '#/components/schemas/AssetStatus' }
+        active: { type: boolean }
+
+    AssetCreate:
+      type: object
+      required: [code, assetTypeId, scheduleAnchorDate]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 50 }
+        assetTypeId: { type: string, format: uuid }
+        description: { type: string }
+        manufacturer: { type: string }
+        model: { type: string }
+        serialNumber: { type: string }
+        areaId: { type: string, format: uuid }
+        locationDetail: { type: string }
+        commissionedOn: { type: string, format: date }
+        scheduleAnchorDate: { type: string, format: date }
+
+    AssetUpdate:
+      type: object
+      properties:
+        description: { type: string }
+        manufacturer: { type: string }
+        model: { type: string }
+        areaId: { type: string, format: uuid }
+        locationDetail: { type: string }
+        status: { $ref: '#/components/schemas/AssetStatus' }
+        active: { type: boolean }
+
+    TemplateRevision:
+      type: object
+      required: [id, formTemplateId, revisionCode, sequenceOrdinal, status]
+      properties:
+        id: { type: string, format: uuid }
+        formTemplateId: { type: string, format: uuid }
+        documentNumber: { type: string, examples: ['CE 95 020 00 01'] }
+        title: { type: string }
+        revisionCode: { type: string, examples: [C] }
+        sequenceOrdinal: { type: integer }
+        status:
+          type: string
+          enum: [DRAFT, PENDING_APPROVAL, CURRENT, SUPERSEDED, REJECTED]
+        changeDescription: { type: string }
+        standingContent: { $ref: '#/components/schemas/StandingContent' }
+        authoredBy: { type: string, format: uuid }
+        authoredByName: { type: string }
+        approvedBy: { type: [string, 'null'], format: uuid }
+        approvedByName: { type: [string, 'null'] }
+        approvedAt: { type: [string, 'null'], format: date-time }
+        effectiveFrom: { type: [string, 'null'], format: date-time }
+        supersededAt: { type: [string, 'null'], format: date-time }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TemplateItem' }
+        measurements:
+          type: array
+          items: { $ref: '#/components/schemas/TemplateMeasurement' }
+
+    StandingContent:
+      type: object
+      properties:
+        specialTools: { type: [string, 'null'] }
+        partsRequired:
+          type: array
+          items:
+            type: object
+            properties:
+              partNo: { type: string }
+              description: { type: string }
+              qty: { type: string }
+              remarks: { type: string }
+        ppe:
+          type: array
+          items: { type: string }
+        safety: { type: [string, 'null'] }
+        procedure: { type: [string, 'null'] }
+        remarks: { type: [string, 'null'] }
+        cascadeOverride: { type: [object, 'null'], additionalProperties: true }
+
+    TemplateItem:
+      type: object
+      required: [id, itemNo, frequency, instruction, mandatory, stableKey]
+      properties:
+        id: { type: string, format: uuid }
+        itemNo: { type: integer }
+        frequency: { $ref: '#/components/schemas/Frequency' }
+        instruction: { type: string }
+        mandatory: { type: boolean }
+        stableKey: { type: string }
+        displayOrder: { type: integer }
+
+    TemplateMeasurement:
+      type: object
+      required: [description, specType, specDisplay, stableKey]
+      properties:
+        id: { type: string, format: uuid }
+        section: { type: [string, 'null'] }
+        description: { type: string }
+        unit: { type: [string, 'null'], examples: ['°C'] }
+        specType: { $ref: '#/components/schemas/SpecType' }
+        lowerLimit: { type: [number, 'null'] }
+        upperLimit: { type: [number, 'null'] }
+        nominal: { type: [number, 'null'] }
+        tolerance: { type: [number, 'null'] }
+        specDisplay:
+          type: string
+          description: Verbatim printed specification text from the source document
+          examples: ['150°C ± 5°C']
+        stableKey: { type: string }
+        displayOrder: { type: integer }
+
+    JobSummary:
+      type: object
+      required: [id, jobNumber, assetCode, frequency, dueOn, status]
+      properties:
+        id: { type: string, format: uuid }
+        jobNumber: { type: string, examples: [PM-2026-000431] }
+        assetId: { type: string, format: uuid }
+        assetCode: { type: string }
+        documentNumber: { type: string }
+        revisionCode: { type: string }
+        frequency: { $ref: '#/components/schemas/Frequency' }
+        frequencyScope:
+          type: array
+          items: { $ref: '#/components/schemas/Frequency' }
+        dueOn: { type: string, format: date }
+        overdue: { type: boolean }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        assignedTo: { type: [string, 'null'], format: uuid }
+        assignedToName: { type: [string, 'null'] }
+
+    Job:
+      allOf:
+        - $ref: '#/components/schemas/JobSummary'
+        - type: object
+          properties:
+            draftVersion: { type: integer }
+            templateRevision: { $ref: '#/components/schemas/TemplateRevision' }
+            itemResults:
+              type: array
+              items: { $ref: '#/components/schemas/ItemResult' }
+            measurementResults:
+              type: array
+              items: { $ref: '#/components/schemas/MeasurementResult' }
+            partsUsed:
+              type: array
+              items: { $ref: '#/components/schemas/PartUsed' }
+            attachments:
+              type: array
+              items: { $ref: '#/components/schemas/Attachment' }
+            approvalSteps:
+              type: array
+              items: { $ref: '#/components/schemas/ApprovalStep' }
+
+    ItemResultInput:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: '#/components/schemas/ItemStatus' }
+        remark: { type: [string, 'null'] }
+        clientRecordedAt: { type: string, format: date-time }
+
+    ItemResult:
+      type: object
+      required: [id, templateItemId, status]
+      properties:
+        id: { type: string, format: uuid }
+        templateItemId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/ItemStatus' }
+        remark: { type: [string, 'null'] }
+        recordedByName: { type: string }
+        clientRecordedAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+
+    MeasurementResultInput:
+      type: object
+      properties:
+        readingNumeric: { type: [number, 'null'] }
+        readingText: { type: [string, 'null'] }
+        remark: { type: [string, 'null'] }
+        clientRecordedAt: { type: string, format: date-time }
+
+    MeasurementResult:
+      type: object
+      required: [id, templateMeasurementId, judgement]
+      properties:
+        id: { type: string, format: uuid }
+        templateMeasurementId: { type: string, format: uuid }
+        readingNumeric: { type: [number, 'null'] }
+        readingText: { type: [string, 'null'] }
+        judgement: { $ref: '#/components/schemas/Judgement' }
+        remark: { type: [string, 'null'] }
+        recordedByName: { type: string }
+        clientRecordedAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+
+    PartUsed:
+      type: object
+      required: [id, description, quantity]
+      properties:
+        id: { type: string, format: uuid }
+        partNo: { type: [string, 'null'] }
+        description: { type: string }
+        quantity: { type: number }
+        remarks: { type: [string, 'null'] }
+
+    Attachment:
+      type: object
+      required: [id, contentType, byteSize, uploadState]
+      properties:
+        id: { type: string, format: uuid }
+        itemResultId: { type: [string, 'null'], format: uuid }
+        originalFilename: { type: [string, 'null'] }
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        byteSize: { type: integer }
+        sha256: { type: string, description: Hex-encoded }
+        uploadState: { type: string, enum: [pending, received] }
+        uploadedByName: { type: string }
+        uploadedAt: { type: string, format: date-time }
+
+    ApprovalStep:
+      type: object
+      required: [id, action, actorName, actedAt, stageOrdinal]
+      properties:
+        id: { type: string, format: uuid }
+        stageOrdinal: { type: integer }
+        stageLabel: { type: string, examples: ['Verified By (Workshop Team Leader)'] }
+        action:
+          type: string
+          enum: [SUBMITTED, VERIFIED, RETURNED, RECALLED, VOIDED]
+        actorId: { type: string, format: uuid }
+        actorName: { type: string }
+        actorRoleCode: { type: string }
+        onBehalfOfName: { type: [string, 'null'], description: Set when acting under delegation }
+        reason: { type: [string, 'null'] }
+        actedAt: { type: string, format: date-time }
+        signingKeyId: { type: string }
+
+    QueueEntry:
+      allOf:
+        - $ref: '#/components/schemas/JobSummary'
+        - type: object
+          properties:
+            submittedAt: { type: string, format: date-time }
+            submittedByName: { type: string }
+            ageHours: { type: number }
+            escalated: { type: boolean }
+            onBehalfOf: { type: [string, 'null'] }
+
+    RecordSummary:
+      type: object
+      required: [id, jobNumber, assetCode, archivedAt]
+      properties:
+        id: { type: string, format: uuid }
+        jobNumber: { type: string }
+        assetCode: { type: string }
+        documentNumber: { type: string }
+        revisionCode: { type: string }
+        frequency: { $ref: '#/components/schemas/Frequency' }
+        performedByName: { type: string }
+        verifiedByName: { type: string }
+        archivedAt: { type: string, format: date-time }
+
+    SyncBootstrap:
+      type: object
+      required: [serverTime, user, jobs, syncToken]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+          description: Returned so the client can compute and flag clock skew
+        user: { $ref: '#/components/schemas/CurrentUser' }
+        jobs:
+          type: array
+          items: { $ref: '#/components/schemas/Job' }
+        deletedJobIds:
+          type: array
+          items: { type: string, format: uuid }
+        syncToken: { type: string }
+
+    OutboxMutation:
+      type: object
+      required: [id, sequence, method, path]
+      properties:
+        id: { type: string, format: uuid, description: Doubles as the idempotency key }
+        sequence: { type: integer }
+        clientRecordedAt: { type: string, format: date-time }
+        method: { type: string, enum: [PUT, POST, DELETE] }
+        path: { type: string }
+        ifMatch: { type: [integer, 'null'] }
+        body: { type: [object, 'null'], additionalProperties: true }
+
+    OutboxResult:
+      type: object
+      required: [id, status, applied]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: integer }
+        applied: { type: boolean }
+        problem: { $ref: '#/components/schemas/Problem' }
+
+    IntegrityResult:
+      type: object
+      required: [recordId, intact, checkedAt]
+      properties:
+        recordId: { type: string, format: uuid }
+        intact: { type: boolean }
+        checkedAt: { type: string, format: date-time }
+        signatures:
+          type: array
+          items:
+            type: object
+            properties:
+              approvalStepId: { type: string, format: uuid }
+              signerName: { type: string }
+              actedAt: { type: string, format: date-time }
+              signingKeyId: { type: string }
+              hashMatches: { type: boolean }
+              signatureValid: { type: boolean }
+        mismatchDetail: { type: [string, 'null'] }
+
+    MeasurementTrend:
+      type: object
+      required: [assetCode, stableKey, points]
+      properties:
+        assetCode: { type: string }
+        stableKey: { type: string }
+        description: { type: string }
+        unit: { type: [string, 'null'] }
+        lowerLimit: { type: [number, 'null'] }
+        upperLimit: { type: [number, 'null'] }
+        points:
+          type: array
+          items:
+            type: object
+            properties:
+              recordId: { type: string, format: uuid }
+              performedOn: { type: string, format: date }
+              revisionCode: { type: string }
+              reading: { type: [number, 'null'] }
+              judgement: { $ref: '#/components/schemas/Judgement' }

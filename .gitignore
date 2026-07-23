@@ -1,0 +1,32 @@
+# ---- server-managed state: NEVER commit ----
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+!**/*.pub
+
+# ---- data: lives in named volumes, never in git ----
+db/data/
+minio-data/
+backups/
+*.dump
+*.sql.gz
+
+# ---- build ----
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# ---- tooling ----
+.DS_Store
+*.log
+.idea/
+.vscode/
+!.vscode/extensions.json
