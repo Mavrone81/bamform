@@ -1,0 +1,39 @@
+{
+  "name": "@bamform/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BamForm API — NestJS 11 on Node 22 (PR-015).",
+  "scripts": {
+    "build": "nest build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "prisma:generate": "prisma generate --schema=prisma/schema.prisma",
+    "prisma:migrate:dev": "prisma migrate dev --schema=prisma/schema.prisma",
+    "prisma:migrate:deploy": "prisma migrate deploy --schema=prisma/schema.prisma",
+    "test:integration": "jest --config jest.integration.config.js --runInBand"
+  },
+  "dependencies": {
+    "@bamform/shared": "*",
+    "@nestjs/common": "11.1.28",
+    "@nestjs/config": "4.0.4",
+    "@nestjs/core": "11.1.28",
+    "@nestjs/platform-express": "11.1.28",
+    "@prisma/client": "6.19.2",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "11.0.24",
+    "@types/jest": "30.0.0",
+    "@types/node": "22.20.1",
+    "@types/pg": "8.20.0",
+    "jest": "30.4.2",
+    "pg": "8.22.0",
+    "prisma": "6.19.2",
+    "source-map-support": "0.5.21",
+    "ts-jest": "29.4.12",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.3"
+  }
+}
