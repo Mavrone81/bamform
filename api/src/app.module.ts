@@ -4,6 +4,12 @@ import { PrismaModule } from './prisma/prisma.module';
 import { HealthController } from './health/health.controller';
 import { AuthModule } from './auth/auth.module';
 import { RedisModule } from './redis/redis.module';
+import { AuditModule } from './audit/audit.module';
+import { CommonModule } from './common/common.module';
+import { AreasModule } from './areas/areas.module';
+import { AssetTypesModule } from './asset-types/asset-types.module';
+import { AssetsModule } from './assets/assets.module';
+import { TemplatesModule } from './templates/templates.module';
 
 @Module({
   imports: [
@@ -13,7 +19,13 @@ import { RedisModule } from './redis/redis.module';
     }),
     PrismaModule,
     RedisModule,
+    CommonModule,
+    AuditModule,
     AuthModule,
+    AreasModule,
+    AssetTypesModule,
+    AssetsModule,
+    TemplatesModule,
   ],
   controllers: [HealthController],
 })
