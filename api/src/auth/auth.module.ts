@@ -8,7 +8,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwksController } from './jwks.controller';
 import { JwtKeysModule } from './jwt/jwt-keys.module';
 import { PasswordService } from './password/password.service';
-import { LoginRateLimiterService } from './redis/login-rate-limiter.service';
+import { RateLimiterService } from './redis/rate-limiter.service';
 import { TokenDenylistService } from './redis/token-denylist.service';
 import { RefreshTokenService } from './refresh/refresh-token.service';
 
@@ -25,7 +25,7 @@ import { RefreshTokenService } from './refresh/refresh-token.service';
     PasswordService,
     RefreshTokenService,
     SecurityAuditService,
-    LoginRateLimiterService,
+    RateLimiterService,
     TokenDenylistService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],

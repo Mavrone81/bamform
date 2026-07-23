@@ -11,7 +11,7 @@ import { buildCurrentUser } from './current-user.builder';
 import type { AccessTokenService } from './jwt/access-token.service';
 import { PasswordService } from './password/password.service';
 import { invalidCredentialsProblem, RateLimitedException } from './problems';
-import { LoginRateLimiterService } from './redis/login-rate-limiter.service';
+import { RateLimiterService } from './redis/rate-limiter.service';
 import { TokenDenylistService } from './redis/token-denylist.service';
 import type { IssuedRefreshToken, RequestMeta } from './refresh/refresh-token.service';
 import { RefreshTokenService } from './refresh/refresh-token.service';
@@ -37,7 +37,7 @@ export class AuthService {
     private readonly passwordService: PasswordService,
     private readonly refreshTokens: RefreshTokenService,
     private readonly securityAudit: SecurityAuditService,
-    private readonly rateLimiter: LoginRateLimiterService,
+    private readonly rateLimiter: RateLimiterService,
     private readonly denylist: TokenDenylistService,
     @Inject(BLIND_INDEX_KEY) private readonly blindIndexKey: Buffer,
     @Inject(ACCESS_TOKEN_SERVICE) private readonly accessTokens: AccessTokenService,
@@ -49,6 +49,21 @@ export class AuthService {
 
   private get lockoutBaseSeconds(): number {
     return Number(this.config.get('LOGIN_LOCKOUT_SECONDS') ?? 900);
+  }
+
+  private get loginRateLimitPerMinute(): number {
+    return Number(this.config.get('RATE_LIMIT_LOGIN_PER_MIN') ?? 10);
+  }
+
+  /**
+   * API_SPECIFICATION.md §9: `POST /auth/step-up → 10/min per user → 429`.
+   * Keyed by `user.sub` (not IP) because step-up already presumes a valid
+   * access token — the threat is a stolen/valid token being used to
+   * brute-force the account password, which an IP-keyed limiter would not
+   * stop (PR-091/PR-092).
+   */
+  private get stepUpRateLimitPerMinute(): number {
+    return Number(this.config.get('RATE_LIMIT_STEP_UP_PER_MIN') ?? 10);
   }
 
   private get stepUpWindowSeconds(): number {
@@ -68,7 +83,11 @@ export class AuthService {
   }
 
   async login(dto: LoginRequest, meta: RequestMeta): Promise<AuthOutcome> {
-    const rate = await this.rateLimiter.checkAndIncrement(meta.sourceIp ?? 'unknown');
+    const rate = await this.rateLimiter.checkAndIncrement(
+      'login',
+      meta.sourceIp ?? 'unknown',
+      this.loginRateLimitPerMinute,
+    );
     if (rate.limited) {
       throw new RateLimitedException(
         rate.retryAfterSeconds,
@@ -126,8 +145,15 @@ export class AuthService {
       });
 
       if (locked) {
+        // `lockedUntil` is non-null exactly when `locked` is true (both
+        // derive from the same `locked` condition above) — compute
+        // Retry-After from the actual, exponentially-backed-off timestamp
+        // just stored, not the un-multiplied base window, so the header
+        // agrees with `lockedUntil` on this same response instead of only
+        // self-correcting on the next request.
+        const retryAfterSeconds = Math.ceil((lockedUntil!.getTime() - Date.now()) / 1000);
         throw new RateLimitedException(
-          this.lockoutBaseSeconds,
+          retryAfterSeconds,
           'Account locked after repeated failed attempts.',
         );
       }
@@ -213,6 +239,22 @@ export class AuthService {
     password: string,
     meta: RequestMeta,
   ): Promise<{ stepUpValidUntil: string }> {
+    // PR-091/PR-092, API_SPECIFICATION.md §9: 10/min per user, checked before
+    // password verification. Without this, a stolen/valid access token lets
+    // an attacker brute-force the account password via step-up with no
+    // lockout in the way (login's account lockout never runs on this path).
+    const rate = await this.rateLimiter.checkAndIncrement(
+      'step-up',
+      userId,
+      this.stepUpRateLimitPerMinute,
+    );
+    if (rate.limited) {
+      throw new RateLimitedException(
+        rate.retryAfterSeconds,
+        'Too many step-up attempts. Try again later.',
+      );
+    }
+
     const user = await this.prisma.appUser.findUniqueOrThrow({ where: { id: userId } });
     const valid = user.passwordHash
       ? await this.passwordService.verify(user.passwordHash, password)
