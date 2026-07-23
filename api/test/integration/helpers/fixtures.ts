@@ -36,6 +36,32 @@ export async function getSeededApprovalRouteId(): Promise<string> {
   return result.rows[0].id as string;
 }
 
+export async function grantRole(userId: string, roleCode: string): Promise<void> {
+  await adminPool.query(
+    `INSERT INTO "user_role" ("user_id", "role_id", "granted_by")
+     SELECT $1, "id", $1 FROM "role" WHERE "code" = $2`,
+    [userId, roleCode],
+  );
+}
+
+export async function scopeUserToArea(userId: string, areaId: string): Promise<void> {
+  await adminPool.query(`INSERT INTO "user_area_scope" ("user_id", "area_id") VALUES ($1, $2)`, [
+    userId,
+    areaId,
+  ]);
+}
+
+export async function createArea(
+  code: string,
+  opts: { parentId?: string | null } = {},
+): Promise<string> {
+  const result = await adminPool.query(
+    `INSERT INTO "area" ("code", "name", "parent_id") VALUES ($1, $2, $3) RETURNING id`,
+    [code, `Area ${code}`, opts.parentId ?? null],
+  );
+  return result.rows[0].id as string;
+}
+
 export async function createFormTemplate(documentNumber: string): Promise<string> {
   const result = await adminPool.query(
     `INSERT INTO "form_template" ("document_number", "title") VALUES ($1, $2) RETURNING id`,
