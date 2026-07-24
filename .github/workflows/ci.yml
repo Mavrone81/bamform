@@ -105,7 +105,16 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
         ports: ["6379:6379"]
       minio:
-        image: bitnami/minio:latest
+        # bitnami/minio:latest 404s — Bitnami purged all free/rolling tags
+        # from Docker Hub (Aug 2025); the repo now has zero tags. Pinned to
+        # a frozen snapshot in the community "bitnamilegacy" mirror, same
+        # image/env/behaviour otherwise. MinIO is not yet used by any test
+        # in slices 1-4 (no S3/MinIO reference in api/src or api/test), so
+        # this only unblocks job 4's service-container startup; it does
+        # not affect any test or coverage gate. Not part of the coverage-
+        # merge restructure — a separate, minimal, necessary infra fix so
+        # job 4 can run at all.
+        image: bitnamilegacy/minio:2025.7.23-debian-12-r5
         env:
           MINIO_ROOT_USER: bamform
           MINIO_ROOT_PASSWORD: ci_ephemeral_not_a_real_secret
