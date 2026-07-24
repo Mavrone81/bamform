@@ -24,7 +24,13 @@ module.exports = {
   // over the identical module set — required for a meaningful merged
   // combined-coverage number (CI job 4 runs both suites with --coverage
   // and gates on the merge; see .github/workflows/ci.yml "4 · Integration").
-  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.spec.ts', '!src/main.ts'],
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/**/*.spec.ts',
+    '!src/main.ts',
+    '!src/worker.ts',
+    '!src/worker-healthcheck.ts',
+  ],
   coverageDirectory: '<rootDir>/../.nyc_output',
   coverageReporters: [['json', { file: 'integration-coverage.json' }], 'text-summary'],
 };

@@ -10,6 +10,7 @@ import { AreasModule } from './areas/areas.module';
 import { AssetTypesModule } from './asset-types/asset-types.module';
 import { AssetsModule } from './assets/assets.module';
 import { TemplatesModule } from './templates/templates.module';
+import { SchedulingModule } from './scheduling/scheduling.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { TemplatesModule } from './templates/templates.module';
     AssetTypesModule,
     AssetsModule,
     TemplatesModule,
+    SchedulingModule,
   ],
   controllers: [HealthController],
 })

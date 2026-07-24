@@ -20,7 +20,16 @@ module.exports = {
     '^@bamform/shared$': '<rootDir>/../shared/src/index.ts',
   },
   testTimeout: 15000,
-  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.spec.ts', '!src/main.ts'],
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/**/*.spec.ts',
+    '!src/main.ts',
+    // Entrypoint scripts (worker.ts mirrors main.ts; worker-healthcheck.ts
+    // is a standalone Docker HEALTHCHECK script) — process-lifecycle glue
+    // exercised by running the container, not meaningfully unit-testable.
+    '!src/worker.ts',
+    '!src/worker-healthcheck.ts',
+  ],
   // Emit an istanbul JSON into the repo-root .nyc_output so the CI coverage
   // gate (`nyc check-coverage --lines 80 --branches 70`, run from the
   // integration job over BOTH suites' output) can read jest's coverage.
