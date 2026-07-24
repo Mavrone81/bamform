@@ -33,7 +33,12 @@
     "test:security": "npm run test:security --workspace=api --",
     "test:log-redaction": "npm run test:log-redaction --workspace=api --",
     "db:test:up": "docker compose -f docker-compose.test.yml up -d --wait",
-    "db:test:down": "docker compose -f docker-compose.test.yml down -v"
+    "db:test:down": "docker compose -f docker-compose.test.yml down -v",
+    "test:unit:web": "npm run test:unit --workspace=web -- --coverage",
+    "test:offline": "npm run test:offline --workspace=web",
+    "test:e2e": "npm run test:e2e --workspace=web",
+    "test:a11y": "npm run test:a11y --workspace=web",
+    "gen:api-types": "npm run gen:api-types --workspace=web"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
