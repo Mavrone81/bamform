@@ -212,7 +212,23 @@ jobs:
         run: npm audit --audit-level=high
       - uses: github/codeql-action/init@v3
         with: { languages: javascript-typescript }
+      # Private repos need GitHub Advanced Security for the code-scanning
+      # dashboard upload; without it the upload fails ("Resource not
+      # accessible by integration"). We run the analysis and GATE LOCALLY on
+      # the SARIF instead — same security value, no GHAS dependency. Enable
+      # GHAS later if the dashboard is wanted, then set upload back to true.
       - uses: github/codeql-action/analyze@v3
+        with:
+          upload: false
+          output: codeql-results
+      - name: CodeQL — fail on any HIGH/CRITICAL finding (security-severity >= 7.0)
+        run: |
+          count=$(jq '[.runs[] as $r | ($r.tool.driver.rules // []) as $rules
+            | $r.results[]? | .ruleId as $rid
+            | ($rules[] | select(.id==$rid) | (.properties["security-severity"]? // "0") | tonumber)
+            | select(. >= 7.0)] | length' codeql-results/javascript.sarif)
+          echo "CodeQL HIGH/CRITICAL findings: $count"
+          [ "$count" -eq 0 ]
       - name: Build image for scanning
         run: docker build -f api/Dockerfile -t bamform-api:scan .
       - name: Trivy — fail on HIGH/CRITICAL
