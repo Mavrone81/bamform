@@ -12,7 +12,10 @@
     "prisma:migrate:dev": "prisma migrate dev --schema=prisma/schema.prisma",
     "prisma:migrate:deploy": "prisma migrate deploy --schema=prisma/schema.prisma",
     "test:integration": "jest --config jest.integration.config.js --runInBand",
-    "test:unit": "jest --config jest.unit.config.js"
+    "test:unit": "jest --config jest.unit.config.js",
+    "test:contract": "jest --config jest.contract.config.js contract.spec.ts",
+    "test:route-coverage": "jest --config jest.contract.config.js route-coverage.spec.ts",
+    "test:scope-coverage": "jest --config jest.contract.config.js scope-coverage.spec.ts"
   },
   "dependencies": {
     "@bamform/shared": "*",
@@ -38,6 +41,7 @@
     "@types/pg": "8.20.0",
     "@types/supertest": "6.0.3",
     "jest": "30.4.2",
+    "js-yaml": "5.2.2",
     "pg": "8.22.0",
     "prisma": "6.19.2",
     "source-map-support": "0.5.21",

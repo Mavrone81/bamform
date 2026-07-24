@@ -23,11 +23,18 @@
     "test:integration:local": "bash scripts/dev/run-integration-tests.sh",
     "pretest:unit": "npm run prisma:generate --workspace=api && bash scripts/dev/generate-dev-secrets.sh",
     "test:unit": "npm run test:unit --workspace=api --",
+    "pretest:contract": "npm run prisma:generate --workspace=api",
+    "test:contract": "npm run test:contract --workspace=api --",
+    "pretest:route-coverage": "npm run prisma:generate --workspace=api",
+    "test:route-coverage": "npm run test:route-coverage --workspace=api --",
+    "pretest:scope-coverage": "npm run prisma:generate --workspace=api",
+    "test:scope-coverage": "npm run test:scope-coverage --workspace=api --",
     "db:test:up": "docker compose -f docker-compose.test.yml up -d --wait",
     "db:test:down": "docker compose -f docker-compose.test.yml down -v"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@stoplight/spectral-cli": "^6.16.2",
     "eslint": "10.7.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.7.0",

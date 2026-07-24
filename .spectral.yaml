@@ -1,0 +1,4 @@
+# Spectral ruleset for api/openapi.yaml (job 5 · Contract, .github/workflows/ci.yml).
+# PR-API-02: "linted with Spectral in CI." Extends the built-in recommended
+# OAS ruleset — see below for any rule-level exceptions and why.
+extends: [[spectral:oas, recommended]]
