@@ -4,6 +4,9 @@ import { SignIn } from './screens/SignIn';
 import { JobList } from './screens/JobList';
 import { RecordCapture } from './screens/RecordCapture';
 import { getAccessToken, onTokenChange, ensureFreshToken } from './auth';
+import { watchOnlineAndDrain } from './offline/sync-engine';
+import { notifySynced } from './offline/sync-events';
+import { getServices } from './state/services';
 import './styles/global.css';
 
 function Screens() {
@@ -40,6 +43,16 @@ function Screens() {
 }
 
 export function App() {
+  useEffect(() => {
+    // Registered exactly once for the whole app (PR-069/UR-088): a
+    // technician can be on any screen when connectivity returns, and the
+    // resulting drain must be reflected wherever they are, not only on the
+    // job list. Screens subscribe via offline/sync-events instead of each
+    // wiring their own `online` listener.
+    const { db, transport } = getServices();
+    return watchOnlineAndDrain(db, transport, () => notifySynced());
+  }, []);
+
   return (
     <RouterProvider>
       <a href="#main-content" className="skip-link">

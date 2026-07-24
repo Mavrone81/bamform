@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { getServices } from '../state/services';
 import { getCachedJob, jobSyncState, submitJob, type JobSyncState } from '../offline/sync-engine';
 import { append, pendingCountForJob } from '../offline/outbox';
+import { onSynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { ItemStatusControl } from '../components/ItemStatusControl';
 import { SyncStatusChip } from '../components/SyncStatusChip';
@@ -44,6 +45,9 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       }
     });
     void refreshState();
+    // Reflects a drain that completes while this screen is open, even
+    // though the drain itself is triggered app-wide in App.tsx, not here.
+    return onSynced(() => void refreshState());
   }, [jobId, refreshState]);
 
   async function recordItemStatus(templateItemId: string, status: ItemStatus) {

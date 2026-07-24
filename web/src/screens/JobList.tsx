@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getServices } from '../state/services';
-import { bootstrap, listCachedJobs, jobSyncState, watchOnlineAndDrain, type JobSyncState } from '../offline/sync-engine';
+import { bootstrap, listCachedJobs, jobSyncState, type JobSyncState } from '../offline/sync-engine';
+import { onSynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { SyncStatusChip } from '../components/SyncStatusChip';
 import { useRouter } from '../router';
@@ -43,7 +44,10 @@ export function JobList() {
         if (!cancelled) void refresh();
       });
 
-    const unsubscribeDrain = watchOnlineAndDrain(db, transport, () => void refresh());
+    // The actual drain trigger is registered once, app-wide, in App.tsx —
+    // this only re-renders the list whenever that (or any) drain completes,
+    // wherever it was triggered from.
+    const unsubscribeSynced = onSynced(() => void refresh());
     const onOnline = () => setIsOnline(true);
     const onOffline = () => setIsOnline(false);
     window.addEventListener('online', onOnline);
@@ -51,7 +55,7 @@ export function JobList() {
 
     return () => {
       cancelled = true;
-      unsubscribeDrain();
+      unsubscribeSynced();
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
