@@ -4,3 +4,4 @@ export * from './auth';
 export * from './area';
 export * from './asset-type';
 export * from './template';
+export * from './schedule';
