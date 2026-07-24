@@ -2,9 +2,14 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
+import { RedactingLogger } from './common/logging/redacting-logger';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
+  // S-15 / threat I-3: secrets (passwords, tokens, etc.) must never reach
+  // log output. Applies to every Logger.log/error/warn/debug/verbose call
+  // in the app, not just call sites that remember to redact manually.
+  app.useLogger(new RedactingLogger());
   // api/openapi.yaml composes every path under servers[].url (…/api/v1),
   // including the literal `/.well-known/jwks.json` entry — the contract is
   // authoritative (BUILD_HANDOFF §1), so the prefix applies with no
