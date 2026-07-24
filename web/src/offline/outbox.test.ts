@@ -161,6 +161,30 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     expect(transport.timesApplied(entry.id)).toBe(1); // still exactly once, never twice
   });
 
+  it('two concurrent drain() calls never both claim the same row (regression: found via O-16 E2E)', async () => {
+    // Models `watchOnlineAndDrain`'s `online` listener racing a second,
+    // independent trigger for the same reconnect (e.g. the browser's own
+    // `online` event alongside a manual dispatch) — both call drain() at
+    // effectively the same instant. Selecting the batch and marking it
+    // 'sending' must happen atomically, or both calls can read the row
+    // while it is still 'pending' and both send it — a real duplicate
+    // transmission, not a safe idempotent retry of the SAME send.
+    const entries = [];
+    for (let i = 0; i < 5; i++) {
+      entries.push((await append(db, input({ path: `/jobs/job-1/items/item-${i}` }))) as { ok: true; entry: { id: string } });
+    }
+    const transport = new MockSyncTransport();
+
+    const [summaryA, summaryB] = await Promise.all([drain(db, transport), drain(db, transport)]);
+
+    const totalSent = summaryA.attempted + summaryB.attempted;
+    expect(totalSent).toBe(5); // each row claimed by exactly one of the two calls
+    for (const e of entries) {
+      expect(transport.timesApplied(e.entry.id)).toBe(1); // never sent twice
+    }
+    expect(await db.outbox.count()).toBe(0);
+  });
+
   it('O-05: replaying an entire outbox batch (simulated double-send) never double-applies', async () => {
     const a = (await append(db, input())) as { ok: true; entry: { id: string } };
     const b = (await append(db, input())) as { ok: true; entry: { id: string } };

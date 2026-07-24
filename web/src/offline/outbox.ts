@@ -141,17 +141,31 @@ export interface DrainSummary {
  * There is no code path that clears optimistically.
  */
 export async function drain(db: BamFormDB, transport: SyncTransport): Promise<DrainSummary> {
-  const batch = await listDrainable(db);
+  // Select the batch AND mark it 'sending' inside ONE transaction. This is
+  // not merely tidiness: `watchOnlineAndDrain`'s `online` listener and a
+  // real browser's own `online` event can both fire independently for the
+  // same reconnect (confirmed while building O-16's test — a manual
+  // `dispatchEvent('online')` alongside Chromium's own automatic one
+  // produced two concurrent `drain()` calls). If "read the pending rows"
+  // and "mark them sending" were two separate operations, both calls could
+  // read the same still-pending rows before either had marked anything,
+  // and both would send them — a real duplicate transmission, not merely a
+  // safe idempotent retry. A single IndexedDB read-write transaction is
+  // serialised by the browser itself against any other transaction on the
+  // same store, so the second concurrent call's transaction cannot start
+  // reading until the first one's `bulkPut` has committed, at which point
+  // `listDrainable` correctly excludes the now-'sending' rows.
+  const batch = await db.transaction('rw', db.outbox, async () => {
+    const candidates = await listDrainable(db);
+    if (candidates.length > 0) {
+      await db.outbox.bulkPut(candidates.map((row) => ({ ...row, status: 'sending' as const })));
+    }
+    return candidates;
+  });
+
   if (batch.length === 0) {
     return { attempted: 0, acked: 0, conflicted: 0, failed: 0, networkError: false };
   }
-
-  // Mark 'sending' first. This both prevents a second concurrent drain()
-  // call (e.g. a manual "sync now" tap racing the `online` event handler)
-  // from re-sending the same rows, and is itself reverted below if the
-  // request never gets a response — it is a lock, not a step toward
-  // clearing the row.
-  await db.outbox.bulkPut(batch.map((row) => ({ ...row, status: 'sending' as const })));
 
   const mutations: OutboxMutation[] = batch.map((row) => ({
     id: row.id,

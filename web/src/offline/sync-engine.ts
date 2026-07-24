@@ -154,8 +154,15 @@ export async function appendJobMutation(
   const job = await db.jobs.get(input.jobId);
   const ifMatch = job?.predictedDraftVersion ?? job?.job.draftVersion ?? null;
   const result = await append(db, { ...input, ifMatch });
-  if (result.ok && job && ifMatch != null) {
-    await db.jobs.put({ ...job, predictedDraftVersion: ifMatch + 1 });
+  if (result.ok && ifMatch != null) {
+    // Re-fetch rather than reuse `job`: `append()` above already wrote its
+    // own update to this same row (setting `hasPendingOutbox: true`) in a
+    // separate transaction. Merging into the pre-append copy captured
+    // above would silently undo that — a real bug caught by O-10's E2E
+    // test, not by the unit suite (which only asserted ifMatch/version
+    // values, not this specific read-modify-write race).
+    const fresh = await db.jobs.get(input.jobId);
+    if (fresh) await db.jobs.put({ ...fresh, predictedDraftVersion: ifMatch + 1 });
   }
   return result;
 }

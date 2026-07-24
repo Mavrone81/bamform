@@ -520,6 +520,20 @@ describe('appendJobMutation — predicted draftVersion avoids a self-inflicted c
     expect(summary.conflicted).toBe(0);
   });
 
+  it('does not clobber hasPendingOutbox=true (append()\'s own update) when writing the predicted version back (regression, found by O-10 E2E)', async () => {
+    const result = await appendJobMutation(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-1',
+      body: { status: 'DONE' },
+      clientRecordedAt: new Date().toISOString(),
+    });
+    expect(result.ok).toBe(true);
+    const job = await getCachedJob(db, 'job-1');
+    expect(job?.hasPendingOutbox).toBe(true);
+    expect(job?.predictedDraftVersion).toBe(2);
+  });
+
   it('does not advance the predicted version when the write is refused (quota exceeded)', async () => {
     const original = db.outbox.add.bind(db.outbox);
     db.outbox.add = (() => {
