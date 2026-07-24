@@ -590,6 +590,10 @@ model Job {
   approvalSteps      ApprovalStep[]
 
   @@index([assetId, dueOn(sort: Desc)])
+  // PR-052 idempotency key (I-INV-14). Added via a hand-written CONCURRENTLY
+  // migration (job is a large table, M-06) — see
+  // 20260724030000_job_asset_frequency_scope_due_on_key_concurrent.
+  @@unique([assetId, frequencyScope, dueOn], map: "job_asset_frequency_scope_due_on_key")
   @@map("job")
 }
 
