@@ -177,6 +177,32 @@ jobs:
     name: 6 · Security
     needs: contract
     runs-on: ubuntu-latest
+    # S-06..S-09 (refresh-token reuse, step-up, lockout) and the S-18/S-22/
+    # S-23/S-26/S-29 cases test:security wires in are genuine end-to-end
+    # attack simulations against the running app (real Argon2id login, real
+    # DB triggers, real role grants) — there is no unit-level equivalent for
+    # them. This job had no service containers before this change, which is
+    # the reason test:security was previously unrunnable here; provisioning
+    # Postgres + Redis (mirrored from job 4's "integration" service block)
+    # is the minimal fix so this job can actually execute those cases
+    # instead of only re-asserting that job 4 already passed them.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bamform_test
+          POSTGRES_USER: bamform
+          POSTGRES_PASSWORD: ci_ephemeral_not_a_real_secret
+        options: >-
+          --health-cmd "pg_isready -U bamform"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports: ["6379:6379"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -196,8 +222,17 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+      - name: Apply migrations (test:security runs S-06..S-09/S-18/S-22/S-23/S-26/S-29 against real Postgres)
+        run: npx prisma migrate deploy --schema=api/prisma/schema.prisma
+        env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
+      - name: Apply role grants (S-26 needs the real bamform_app permission-denied behaviour)
+        run: psql "$DATABASE_URL" -f api/prisma/grants.sql
+        env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
       - name: Security test cases S-01 to S-34
         run: npm run test:security
+        env:
+          DATABASE_URL: postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test
+          REDIS_URL: redis://localhost:6379
       - name: CSP contains no unsafe-inline or unsafe-eval (S-28)
         run: bash scripts/ci/assert-csp-safe.sh
       - name: Passwords never appear in log output (S-15)
