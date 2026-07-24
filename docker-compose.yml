@@ -60,6 +60,9 @@ secrets:
   jwt_signing_key:      { file: ./secrets/jwt_signing_key.pem }
   record_signing_key:   { file: ./secrets/record_signing_key.pem }
   postgres_password:    { file: ./secrets/postgres_password }
+  app_password:         { file: ./secrets/app_password }
+  readonly_password:    { file: ./secrets/readonly_password }
+  backup_password:      { file: ./secrets/backup_password }
   redis_password:       { file: ./secrets/redis_password }
   minio_root_password:  { file: ./secrets/minio_root_password }
   minio_sse_key:        { file: ./secrets/minio_sse_key }
@@ -193,7 +196,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_INITDB_ARGS: "--data-checksums"
       TZ: UTC
-    secrets: [postgres_password]
+    secrets: [postgres_password, app_password, readonly_password, backup_password]
     volumes:
       - bamform_pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro   # role grants — DBD §7.1
