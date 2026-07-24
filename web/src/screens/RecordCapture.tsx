@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { getServices } from '../state/services';
-import { getCachedJob, jobSyncState, submitJob, type JobSyncState } from '../offline/sync-engine';
+import { getCachedJob, jobSyncState, submitJob, triggerDrainIfOnline, type JobSyncState } from '../offline/sync-engine';
 import { append, pendingCountForJob } from '../offline/outbox';
-import { onSynced } from '../offline/sync-events';
+import { onSynced, notifySynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { ItemStatusControl } from '../components/ItemStatusControl';
 import { SyncStatusChip } from '../components/SyncStatusChip';
@@ -51,7 +51,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   }, [jobId, refreshState]);
 
   async function recordItemStatus(templateItemId: string, status: ItemStatus) {
-    const { db } = getServices();
+    const { db, transport } = getServices();
     const job = cached;
     const result = await append(db, {
       jobId,
@@ -70,13 +70,17 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     setQuotaBanner(false);
     setItemResults((prev) => ({ ...prev, [templateItemId]: status }));
     void refreshState();
+    // The entry is already durable in IndexedDB regardless of what happens
+    // next (append() already returned ok:true) — this is purely "send it
+    // now if we can", not part of the durability guarantee.
+    triggerDrainIfOnline(db, transport, () => notifySynced());
   }
 
   function recordMeasurement(templateMeasurementId: string, rawValue: string) {
     setReadings((prev) => ({ ...prev, [templateMeasurementId]: rawValue }));
     clearTimeout(debounceRef.current[templateMeasurementId]);
     debounceRef.current[templateMeasurementId] = setTimeout(async () => {
-      const { db } = getServices();
+      const { db, transport } = getServices();
       const numeric = rawValue.trim() === '' ? null : Number(rawValue);
       const result = await append(db, {
         jobId,
@@ -92,6 +96,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       }
       setQuotaBanner(false);
       void refreshState();
+      triggerDrainIfOnline(db, transport, () => notifySynced());
     }, 400);
   }
 

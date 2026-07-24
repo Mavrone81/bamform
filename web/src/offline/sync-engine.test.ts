@@ -8,6 +8,7 @@ import {
   submitJob,
   jobSyncState,
   watchOnlineAndDrain,
+  triggerDrainIfOnline,
   getCachedJob,
   listCachedJobs,
 } from './sync-engine';
@@ -36,6 +37,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await db.delete();
+  vi.restoreAllMocks();
 });
 
 describe('bootstrap', () => {
@@ -403,5 +405,59 @@ describe('watchOnlineAndDrain', () => {
     // give any (incorrect, post-unsubscribe) handler a tick to run
     await new Promise((r) => setTimeout(r, 10));
     expect(seen).toEqual([1]); // unchanged — unsubscribe worked
+  });
+});
+
+describe('triggerDrainIfOnline', () => {
+  it('drains immediately when the device currently reports online (the common case: entries made while connected)', async () => {
+    await append(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/x',
+      body: {},
+      ifMatch: 1,
+      clientRecordedAt: new Date().toISOString(),
+    });
+    const transport = new MockSyncTransport();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    const seen: number[] = [];
+    triggerDrainIfOnline(db, transport, (summaries) => seen.push(summaries.reduce((n, s) => n + s.acked, 0)));
+    await vi.waitFor(() => expect(seen).toEqual([1]));
+    expect(await pendingCountForJob(db, 'job-1')).toBe(0);
+  });
+
+  it('does nothing when the device reports offline — the entry stays durable, untouched, for the next real trigger', async () => {
+    await append(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/x',
+      body: {},
+      ifMatch: 1,
+      clientRecordedAt: new Date().toISOString(),
+    });
+    const transport = new MockSyncTransport();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const onDrain = vi.fn();
+    triggerDrainIfOnline(db, transport, onDrain);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(onDrain).not.toHaveBeenCalled();
+    expect(await pendingCountForJob(db, 'job-1')).toBe(1);
+  });
+
+  it('swallows a drain failure rather than throwing out of a fire-and-forget call', async () => {
+    await append(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/x',
+      body: {},
+      ifMatch: 1,
+      clientRecordedAt: new Date().toISOString(),
+    });
+    const transport = new MockSyncTransport();
+    transport.networkDown = true;
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    expect(() => triggerDrainIfOnline(db, transport)).not.toThrow();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await pendingCountForJob(db, 'job-1')).toBe(1); // still there, safely
   });
 });

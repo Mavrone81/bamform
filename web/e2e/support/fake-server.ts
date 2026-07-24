@@ -88,6 +88,18 @@ export class FakeServer {
     this.dropResponseOnce.add(mutationId);
   }
 
+  /** Coarser than `dropResponseOnceFor`: drops the response for the very
+   * next `/sync/outbox` request regardless of which mutation ids it
+   * carries, after committing them normally — used where a test cannot
+   * predict a client-generated UUIDv7 ahead of time (which is always, since
+   * it is generated in the browser at the moment of the tap). This models
+   * O-02/O-15 precisely: the server applied the batch, the client never saw
+   * the response. */
+  private dropNextResponse = false;
+  dropNextOutboxResponseOnce(): void {
+    this.dropNextResponse = true;
+  }
+
   private jobIdFromPath(path: string): string | null {
     const match = path.match(/\/jobs\/([^/]+)\//);
     return match ? match[1] : null;
@@ -230,6 +242,11 @@ export class FakeServer {
         this.dropResponseOnce.delete(m.id);
         mustDrop = true;
       }
+    }
+
+    if (this.dropNextResponse) {
+      this.dropNextResponse = false;
+      mustDrop = true;
     }
 
     if (mustDrop) {

@@ -198,6 +198,29 @@ export async function jobSyncState(db: BamFormDB, jobId: string): Promise<JobSyn
   return 'held-on-device';
 }
 
+/** Best-effort, fire-and-forget attempt to drain right now if the device
+ * currently reports as online — called after every `append()` from a
+ * screen. Without this, a mutation entered while the device was already
+ * online (the common case: most entries are NOT made offline) would sit in
+ * the outbox until the next `online` *transition* event, which never fires
+ * again once already online. `watchOnlineAndDrain` below covers the
+ * reconnect case; this covers "online the whole time". Failures are
+ * swallowed here deliberately — the entry is safely durable in the outbox
+ * either way (non-negotiable #1 does not depend on this function ever
+ * succeeding), and the next `online` event or manual sync will retry it. */
+export function triggerDrainIfOnline(
+  db: BamFormDB,
+  transport: SyncTransport,
+  onDrain?: (summaries: DrainSummary[]) => void,
+): void {
+  if (!navigator.onLine) return;
+  void drainAll(db, transport)
+    .then((summaries) => onDrain?.(summaries))
+    .catch(() => {
+      /* swallowed — see comment above */
+    });
+}
+
 /** Wires the outbox to drain automatically when the device regains
  * connectivity (PR-069/UR-088). Returns an unsubscribe function. Safe to
  * call in a non-browser test environment: it no-ops if `window` has no
