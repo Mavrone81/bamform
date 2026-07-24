@@ -69,6 +69,29 @@ COPY --from=prod-deps --chown=10001:10001 /app/node_modules ./node_modules
 # so this merges the nested workspace deps straight into it rather than
 # preserving an api/ subdirectory that would never be on the resolution path.
 COPY --from=prod-deps --chown=10001:10001 /app/api/node_modules ./node_modules
+# `npm ci --workspaces` links @bamform/shared as node_modules/@bamform/shared
+# -> ../../shared (a workspace symlink, `ls -la node_modules/@bamform/` in
+# any stage shows it), so it resolves to /app/shared at runtime — which
+# nothing copied before this fix (dist/prisma/openapi.yaml only). Every
+# require('@bamform/shared') (auth.controller.ts, assets.service.ts,
+# scheduling/job-generation.service.ts, ...) therefore crashed at import
+# time with "Cannot find module '@bamform/shared'" the moment the process
+# actually ran as a container (docker build only compiles; `docker compose
+# up` is what exercises this, and CI jobs 1-6 never boot the built image —
+# only jobs 7+, which stay red for unrelated PWA reasons, per
+# .superpowers/sdd/progress.md — so this was never caught). Found and fixed
+# while verifying this slice's worker entrypoint actually runs.
+COPY --from=build     --chown=10001:10001 /app/shared/package.json ./shared/package.json
+COPY --from=build     --chown=10001:10001 /app/shared/dist         ./shared/dist
+# `prisma generate` (RUN step, `build` stage) writes the actual generated
+# client — query engine binary included — into node_modules/.prisma/client;
+# node_modules/@prisma/client is just a thin re-export of it (see its
+# default.js). `prod-deps` never runs `prisma generate`, so without this the
+# raw @prisma/client package loads but every generated enum/type
+# (RevisionStatusT, JobStatusT, ...) is undefined at runtime. Both stages
+# share the same node:22-alpine base, so the engine binary `prisma generate`
+# fetched for `build` is the right platform for `runtime` too.
+COPY --from=build     --chown=10001:10001 /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build     --chown=10001:10001 /app/api/dist      ./dist
 COPY --from=build     --chown=10001:10001 /app/api/prisma    ./prisma
 COPY --from=build     --chown=10001:10001 /app/api/openapi.yaml ./openapi.yaml
