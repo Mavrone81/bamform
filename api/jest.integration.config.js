@@ -5,7 +5,9 @@ module.exports = {
   testEnvironment: 'node',
   testMatch: ['<rootDir>/test/integration/**/*.spec.ts'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }],
+    // See jest.unit.config.js — tsconfig.jest.json adds a path mapping so
+    // @bamform/shared resolves to source for ts-jest's type-checker too.
+    '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.jest.json' }],
   },
   moduleFileExtensions: ['ts', 'js', 'json'],
   // Resolve @bamform/shared straight to its TS source — tests must not

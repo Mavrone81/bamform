@@ -5,7 +5,12 @@ module.exports = {
   testEnvironment: 'node',
   testMatch: ['<rootDir>/src/**/*.spec.ts'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }],
+    // tsconfig.jest.json extends tsconfig.json and adds a path mapping so
+    // @bamform/shared resolves to source for ts-jest's type-checker too
+    // (see that file's comment) — without it, ts-jest falls back to
+    // shared's built dist/, which doesn't exist on a fresh checkout until
+    // `npm run build --workspace=shared` runs.
+    '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.jest.json' }],
   },
   moduleFileExtensions: ['ts', 'js', 'json'],
   // Resolve @bamform/shared straight to its TS source, mirroring

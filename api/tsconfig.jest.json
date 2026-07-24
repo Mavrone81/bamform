@@ -1,0 +1,27 @@
+{
+  // Used ONLY by ts-jest (jest.unit.config.js / jest.integration.config.js),
+  // never by `tsc` directly (job 1's "TypeScript strict" step still uses
+  // plain tsconfig.json, unmodified).
+  //
+  // ts-jest's type-checker resolves `@bamform/shared` via plain
+  // node_modules lookup unless told otherwise, which reads
+  // shared/package.json's "types": "dist/index.d.ts" — requiring
+  // `npm run build --workspace=shared` to have already happened. CI's
+  // unit (job 3) and integration (job 4) jobs are separate runners from
+  // the static-analysis job (job 1) that builds shared, so that
+  // dependency must not exist for tests. The `paths` mapping below
+  // resolves straight to shared's TS source instead, mirroring jest's own
+  // `moduleNameMapper`.
+  //
+  // Widening `rootDir` to the repo root (instead of tsconfig.json's `.`,
+  // i.e. api/) is required so TS doesn't reject shared/src files as
+  // "not under rootDir" (TS6059) once they're pulled into the program via
+  // the path mapping above.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "paths": {
+      "@bamform/shared": ["../shared/src/index.ts"]
+    }
+  }
+}
