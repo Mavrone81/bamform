@@ -185,11 +185,17 @@ export async function jobSyncState(db: BamFormDB, jobId: string): Promise<JobSyn
   if (job?.submitState === 'submitted') return 'received-by-server';
   if (job?.submitState === 'submitting') return 'sending';
 
+  // "received by server" is reserved for the JOB having been submitted —
+  // UR-038 asks whether the technician's WORK (the record) has been
+  // transmitted, not whether an individual field sync happened to land.
+  // The diagram's SYNCED state (every mutation acked, submit not yet
+  // called) is deliberately still shown as "held on device": telling a
+  // technician their record is "received" before they have tapped Submit
+  // would invite them to walk away from an unsubmitted job.
   const rows = await db.outbox.where('jobId').equals(jobId).toArray();
   if (rows.some((r) => r.status === 'conflict')) return 'conflict';
   if (rows.some((r) => r.status === 'sending')) return 'sending';
-  if (rows.length > 0) return 'held-on-device';
-  return 'received-by-server';
+  return 'held-on-device';
 }
 
 /** Wires the outbox to drain automatically when the device regains

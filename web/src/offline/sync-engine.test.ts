@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDB, type BamFormDB } from './db';
 import { MockSyncTransport } from '../api/mock-transport';
-import { append, drain } from './outbox';
+import { append, drain, pendingCountForJob } from './outbox';
 import {
   bootstrap,
   getClockSkew,
@@ -287,8 +287,26 @@ describe('jobSyncState — the three technician-facing labels (PR-066) plus conf
     });
   });
 
-  it('reports received-by-server for a fully synced job with no outbox rows', async () => {
-    expect(await jobSyncState(db, 'job-1')).toBe('received-by-server');
+  it('reports held-on-device for a cached job with no edits yet and no outbox rows (not submitted)', async () => {
+    // "received by server" is reserved for a job that has actually been
+    // submitted — a job with everything synced but Submit never tapped is
+    // still, correctly, "held on device".
+    expect(await jobSyncState(db, 'job-1')).toBe('held-on-device');
+  });
+
+  it('still reports held-on-device once a mutation is queued AND then acknowledged, as long as submit was never called (the diagram\'s SYNCED state)', async () => {
+    await append(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/x',
+      body: {},
+      ifMatch: 1,
+      clientRecordedAt: new Date().toISOString(),
+    });
+    const transport = new MockSyncTransport();
+    await drain(db, transport); // outbox is now empty — but nothing was ever submitted
+    expect(await pendingCountForJob(db, 'job-1')).toBe(0);
+    expect(await jobSyncState(db, 'job-1')).toBe('held-on-device');
   });
 
   it('reports held-on-device once a mutation is queued', async () => {
