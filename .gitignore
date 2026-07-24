@@ -30,3 +30,4 @@ test-results/
 .idea/
 .vscode/
 !.vscode/extensions.json
+.nyc_output/
