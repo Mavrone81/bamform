@@ -14,3 +14,4 @@ api/openapi.yaml
 docker-compose.yml
 docker-compose.ci.yml
 README.md
+.claude/

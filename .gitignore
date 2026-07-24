@@ -31,3 +31,6 @@ test-results/
 .vscode/
 !.vscode/extensions.json
 .nyc_output/
+
+# Claude Code worktrees/scratch — never track
+.claude/
