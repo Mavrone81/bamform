@@ -168,7 +168,23 @@ services:
   bamform-migrate:
     <<: *app-common
     container_name: bamform-migrate
-    command: ["npx", "prisma", "migrate", "deploy"]
+    # The runtime image drops npm/npx + devDeps (incl. the prisma CLI), so
+    # migrations run from the `build` stage, which carries the full deps,
+    # the generated client and the schema. Applies migrations then grants.sql
+    # (via `prisma db execute`, no psql needed) — closing DBD §7.1 grants in
+    # prod. Runs as root (one-shot) so prisma can write its engine cache.
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: build
+    image: bamform-migrate:${IMAGE_TAG:-local}
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - >-
+        node_modules/.bin/prisma migrate deploy --schema=api/prisma/schema.prisma &&
+        node_modules/.bin/prisma db execute --file api/prisma/grants.sql --schema=api/prisma/schema.prisma
     restart: "no"
     networks: [data]
     read_only: false          # prisma writes a query engine cache
