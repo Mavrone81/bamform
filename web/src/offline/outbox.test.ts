@@ -304,7 +304,6 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     const { entry } = (await append(db, input())) as { ok: true; entry: { id: string } };
     const transport = new MockSyncTransport();
     transport.drainOutbox = async () => {
-      // eslint-disable-next-line @typescript-eslint/only-throw-error
       throw 'raw string failure';
     };
     const summary = await drain(db, transport);

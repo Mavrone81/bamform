@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="BamForm">
+  <rect width="512" height="512" rx="96" fill="#201c16"/>
+  <rect x="40" y="40" width="432" height="432" rx="64" fill="none" stroke="#b8791a" stroke-width="16"/>
+  <path d="M156 268 L226 338 L360 176" fill="none" stroke="#f4efe4" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
