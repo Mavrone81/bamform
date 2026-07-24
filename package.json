@@ -29,6 +29,9 @@
     "test:route-coverage": "npm run test:route-coverage --workspace=api --",
     "pretest:scope-coverage": "npm run prisma:generate --workspace=api",
     "test:scope-coverage": "npm run test:scope-coverage --workspace=api --",
+    "pretest:security": "npm run prisma:generate --workspace=api && bash scripts/dev/generate-dev-secrets.sh",
+    "test:security": "npm run test:security --workspace=api --",
+    "test:log-redaction": "npm run test:log-redaction --workspace=api --",
     "db:test:up": "docker compose -f docker-compose.test.yml up -d --wait",
     "db:test:down": "docker compose -f docker-compose.test.yml down -v"
   },
@@ -43,9 +46,9 @@
     "typescript-eslint": "8.65.0"
   },
   "allowScripts": {
-    "prisma@6.19.2": true,
-    "@prisma/engines@6.19.2": true,
-    "@prisma/client@6.19.2": true,
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "@prisma/client@6.19.3": true,
     "unrs-resolver@1.12.2": true,
     "argon2@0.45.1": true
   }
