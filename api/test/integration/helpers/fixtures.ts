@@ -74,22 +74,42 @@ export async function createAssetType(
   formTemplateId: string,
   approvalRouteId: string,
   code: string,
+  opts: { leadTimeDays?: number } = {},
 ): Promise<string> {
   const result = await adminPool.query(
-    `INSERT INTO "asset_type" ("code", "name", "form_template_id", "approval_route_id")
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO "asset_type" ("code", "name", "form_template_id", "approval_route_id", "lead_time_days")
+     VALUES ($1, $2, $3, $4, COALESCE($5, 30))
      RETURNING id`,
-    [code, `Asset type ${code}`, formTemplateId, approvalRouteId],
+    [code, `Asset type ${code}`, formTemplateId, approvalRouteId, opts.leadTimeDays ?? null],
   );
   return result.rows[0].id as string;
 }
 
-export async function createAsset(assetTypeId: string, code: string): Promise<string> {
+export interface AssetOpts {
+  scheduleAnchorDate?: string; // 'YYYY-MM-DD'; defaults to CURRENT_DATE
+  status?: 'active' | 'under_repair' | 'decommissioned';
+  active?: boolean;
+  areaId?: string | null;
+}
+
+export async function createAsset(
+  assetTypeId: string,
+  code: string,
+  opts: AssetOpts = {},
+): Promise<string> {
   const result = await adminPool.query(
-    `INSERT INTO "asset" ("code", "asset_type_id", "schedule_anchor_date")
-     VALUES ($1, $2, CURRENT_DATE)
+    `INSERT INTO "asset"
+       ("code", "asset_type_id", "schedule_anchor_date", "status", "active", "area_id")
+     VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), COALESCE($4::"asset_status_t", 'active'), COALESCE($5, true), $6)
      RETURNING id`,
-    [code, assetTypeId],
+    [
+      code,
+      assetTypeId,
+      opts.scheduleAnchorDate ?? null,
+      opts.status ?? null,
+      opts.active ?? null,
+      opts.areaId ?? null,
+    ],
   );
   return result.rows[0].id as string;
 }
@@ -98,6 +118,7 @@ export interface TemplateRevisionOpts {
   sequenceOrdinal: number;
   status: 'draft' | 'pending_approval' | 'current' | 'superseded' | 'rejected';
   approvedBy?: string | null;
+  standingContent?: Record<string, unknown>;
 }
 
 export async function createTemplateRevision(
@@ -118,7 +139,7 @@ export async function createTemplateRevision(
       opts.sequenceOrdinal,
       opts.status,
       'initial revision',
-      JSON.stringify({}),
+      JSON.stringify(opts.standingContent ?? {}),
       authoredBy,
       opts.approvedBy ?? null,
     ],
@@ -143,6 +164,55 @@ export async function createTemplateMeasurement(
       opts.upperLimit ?? null,
       'n/a',
       randomUUID(),
+    ],
+  );
+  return result.rows[0].id as string;
+}
+
+export type FrequencyLetter = 'M1' | 'M3' | 'M6' | 'Y';
+
+export async function createTemplateItem(
+  templateRevisionId: string,
+  frequency: FrequencyLetter,
+  opts: { active?: boolean; itemNo?: number } = {},
+): Promise<string> {
+  const itemNo = opts.itemNo ?? Math.floor(Math.random() * 1_000_000);
+  const result = await adminPool.query(
+    `INSERT INTO "template_item"
+       ("template_revision_id", "item_no", "frequency", "instruction", "stable_key",
+        "display_order", "active")
+     VALUES ($1, $2, $3::"frequency_t", $4, $5, $2, COALESCE($6, true))
+     RETURNING id`,
+    [templateRevisionId, itemNo, frequency, `Item ${itemNo}`, randomUUID(), opts.active ?? null],
+  );
+  return result.rows[0].id as string;
+}
+
+export interface ScheduleRuleOpts {
+  frequency: FrequencyLetter;
+  intervalMonths: number;
+  anchorDate?: string; // 'YYYY-MM-DD'
+  nextDueOn?: string; // 'YYYY-MM-DD'; defaults to anchorDate
+  lastCompletedOn?: string | null;
+  active?: boolean;
+}
+
+export async function createScheduleRule(assetId: string, opts: ScheduleRuleOpts): Promise<string> {
+  const anchor = opts.anchorDate ?? '2026-01-01';
+  const result = await adminPool.query(
+    `INSERT INTO "schedule_rule"
+       ("asset_id", "frequency", "interval_months", "anchor_date", "next_due_on",
+        "last_completed_on", "active")
+     VALUES ($1, $2::"frequency_t", $3, $4::date, COALESCE($5::date, $4::date), $6::date, COALESCE($7, true))
+     RETURNING id`,
+    [
+      assetId,
+      opts.frequency,
+      opts.intervalMonths,
+      anchor,
+      opts.nextDueOn ?? null,
+      opts.lastCompletedOn ?? null,
+      opts.active ?? null,
     ],
   );
   return result.rows[0].id as string;

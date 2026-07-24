@@ -145,6 +145,20 @@ describe('test:contract — response-schema conformance', () => {
       ],
     },
     {
+      schemaName: 'ScheduleRule',
+      knownKeys: [
+        'id',
+        'assetId',
+        'frequency',
+        'intervalMonths',
+        'anchorDate',
+        'lastCompletedOn',
+        'nextDueOn',
+        'adjustedReason',
+        'active',
+      ],
+    },
+    {
       schemaName: 'TemplateItem',
       knownKeys: [
         'id',

@@ -525,6 +525,51 @@ paths:
                         items: { $ref: '#/components/schemas/RecordSummary' }
         '404': { $ref: '#/components/responses/Problem' }
 
+  /assets/{assetId}/schedule:
+    parameters:
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      tags: [Assets]
+      operationId: getAssetSchedule
+      summary: Current schedule_rule state for one asset (one entry per frequency)
+      description: |
+        UR-023. 403 (`/errors/out-of-scope`), not a silent 404, when the asset
+        exists but is outside the caller's area scope. A row exists for every
+        frequency with at least one active template item in the asset's
+        template's current revision (PR-053) — created lazily on first read
+        if the asset was onboarded after its template revision went current.
+      responses:
+        '200':
+          description: Schedule rules, one per scheduled frequency
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ScheduleRule' }
+        '404': { $ref: '#/components/responses/Problem' }
+    put:
+      tags: [Assets]
+      operationId: adjustAssetSchedule
+      summary: Manually adjust one frequency's next due date
+      description: |
+        TEAM_LEADER, ENGINEER or ADMIN (permission matrix §4.1 "Adjust
+        schedules"). PR-058/UR-025: `adjustedReason` is mandatory (minimum 10
+        characters) and is recorded to the audit trail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleAdjust' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScheduleRule' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /templates:
     get:
       tags: [Templates]
@@ -1413,6 +1458,28 @@ components:
         locationDetail: { type: string }
         status: { $ref: '#/components/schemas/AssetStatus' }
         active: { type: boolean }
+
+    ScheduleRule:
+      type: object
+      required: [id, assetId, frequency, intervalMonths, anchorDate, nextDueOn, active]
+      properties:
+        id: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        frequency: { $ref: '#/components/schemas/Frequency' }
+        intervalMonths: { type: integer, examples: [1, 3, 6, 12] }
+        anchorDate: { type: string, format: date }
+        lastCompletedOn: { type: [string, 'null'], format: date }
+        nextDueOn: { type: string, format: date }
+        adjustedReason: { type: [string, 'null'] }
+        active: { type: boolean }
+
+    ScheduleAdjust:
+      type: object
+      required: [frequency, nextDueOn, adjustedReason]
+      properties:
+        frequency: { $ref: '#/components/schemas/Frequency' }
+        nextDueOn: { type: string, format: date }
+        adjustedReason: { type: string, minLength: 10 }
 
     Area:
       type: object
