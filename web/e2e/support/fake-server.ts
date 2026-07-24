@@ -147,7 +147,15 @@ export class FakeServer {
     };
   }
 
+  /** Real login is required before refresh will succeed — see
+   * `handleRefresh` below. Without this, the fake server would let every
+   * fresh page load "silently log in" via refresh before a test's own
+   * sign-in ever ran (found while building this suite: `page.goto('/sign-in')`
+   * was being redirected straight to the job list). */
+  private hasLoggedIn = false;
+
   private async handleLogin(route: Route) {
+    this.hasLoggedIn = true;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -160,6 +168,14 @@ export class FakeServer {
   }
 
   private async handleRefresh(route: Route) {
+    if (!this.hasLoggedIn) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({ type: 'about:blank', title: 'no session', status: 401 }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

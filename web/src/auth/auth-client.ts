@@ -1,9 +1,8 @@
 import { setAccessToken, clearAccessToken, getAccessToken, isTokenStale } from './token-store';
+import { API_BASE } from '../api/config';
 import type { components } from '../api/generated/openapi-types';
 
 type AuthResult = components['schemas']['AuthResult'];
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 
 /**
  * Login/refresh/logout live outside `SyncTransport` — they are not part of

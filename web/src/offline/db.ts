@@ -71,6 +71,15 @@ export interface CachedJob {
    * silently deleted, since that would drop a technician's local edits —
    * but flagged so the UI can tell them and block submit. */
   serverRemoved: boolean;
+  /** The draftVersion the NEXT mutation for this job should use as
+   * `If-Match`. Starts equal to `job.draftVersion` from the last bootstrap,
+   * and is optimistically advanced by one every time a mutation for this
+   * job is appended (see offline/sync-engine.ts `appendJobMutation`) —
+   * without this, two offline edits to the SAME job would both carry the
+   * same stale `ifMatch`, and the server applying the first would make the
+   * second look like a conflict with a DIFFERENT device's edit when it is
+   * really just the client's own next change in sequence. */
+  predictedDraftVersion: number;
 }
 
 export interface MetaRow {

@@ -1,7 +1,14 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { getServices } from '../state/services';
-import { getCachedJob, jobSyncState, submitJob, triggerDrainIfOnline, type JobSyncState } from '../offline/sync-engine';
-import { append, pendingCountForJob } from '../offline/outbox';
+import {
+  getCachedJob,
+  jobSyncState,
+  submitJob,
+  triggerDrainIfOnline,
+  appendJobMutation,
+  type JobSyncState,
+} from '../offline/sync-engine';
+import { pendingCountForJob } from '../offline/outbox';
 import { onSynced, notifySynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { ItemStatusControl } from '../components/ItemStatusControl';
@@ -52,13 +59,11 @@ export function RecordCapture({ jobId }: { jobId: string }) {
 
   async function recordItemStatus(templateItemId: string, status: ItemStatus) {
     const { db, transport } = getServices();
-    const job = cached;
-    const result = await append(db, {
+    const result = await appendJobMutation(db, {
       jobId,
       method: 'PUT',
       path: `/jobs/${jobId}/items/${templateItemId}`,
       body: { status, clientRecordedAt: new Date().toISOString() },
-      ifMatch: job?.job.draftVersion ?? null,
       clientRecordedAt: new Date().toISOString(),
     });
     if (!result.ok) {
@@ -82,12 +87,11 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     debounceRef.current[templateMeasurementId] = setTimeout(async () => {
       const { db, transport } = getServices();
       const numeric = rawValue.trim() === '' ? null : Number(rawValue);
-      const result = await append(db, {
+      const result = await appendJobMutation(db, {
         jobId,
         method: 'PUT',
         path: `/jobs/${jobId}/measurements/${templateMeasurementId}`,
         body: { readingNumeric: numeric, clientRecordedAt: new Date().toISOString() },
-        ifMatch: cached?.job.draftVersion ?? null,
         clientRecordedAt: new Date().toISOString(),
       });
       if (!result.ok) {

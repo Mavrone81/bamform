@@ -19,7 +19,7 @@ let dbCounter = 0;
 
 beforeEach(async () => {
   db = createTestDB(`test-outbox-${dbCounter++}-${Math.random()}`);
-  await db.jobs.put({ id: 'job-1', job: {} as never, cachedAt: new Date().toISOString(), hasPendingOutbox: false, submitState: 'none', serverRemoved: false });
+  await db.jobs.put({ id: 'job-1', job: {} as never, cachedAt: new Date().toISOString(), hasPendingOutbox: false, submitState: 'none', serverRemoved: false, predictedDraftVersion: 1 });
 });
 
 afterEach(async () => {

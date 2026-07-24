@@ -1,7 +1,7 @@
-import type { BamFormDB, CachedJob } from './db';
+import type { BamFormDB, CachedJob, OutboxMethod } from './db';
 import { META_KEYS } from './db';
 import type { SyncTransport, SyncBootstrap } from '../api/transport';
-import { drainAll, pendingCountForJob, type DrainSummary } from './outbox';
+import { append, drainAll, pendingCountForJob, type AppendResult, type DrainSummary } from './outbox';
 import { uuidv7 } from '../lib/uuidv7';
 import type { components } from '../api/generated/openapi-types';
 
@@ -74,6 +74,7 @@ export async function bootstrap(
         hasPendingOutbox: false,
         submitState: existing?.submitState ?? 'none',
         serverRemoved: false,
+        predictedDraftVersion: job.draftVersion ?? 1,
       };
       await db.jobs.put(row);
       jobsUpserted++;
@@ -129,6 +130,34 @@ export interface ClockSkewRecord {
 export async function getClockSkew(db: BamFormDB): Promise<ClockSkewRecord | null> {
   const row = await db.meta.get(META_KEYS.clockSkewMs);
   return (row?.value as ClockSkewRecord | undefined) ?? null;
+}
+
+/**
+ * The only place a screen should call `outbox.append()` for a job-scoped
+ * mutation (item result, measurement reading). Wraps it with the
+ * `predictedDraftVersion` bookkeeping described on `CachedJob`: a
+ * technician entering several checklist items offline queues several
+ * mutations for the SAME job before any of them has been acknowledged. If
+ * every one of those carried the same `ifMatch` (the version last seen from
+ * the server), the server applying the first would bump the job's real
+ * version, and every subsequent one in the same batch would look like a
+ * conflict with a change from ANOTHER device — indistinguishable from a
+ * genuine O-13 conflict, even though it is really just this same client's
+ * own next edit. Optimistically predicting and advancing the version
+ * locally (only reset by the next bootstrap) keeps a real conflict
+ * detectable while eliminating this self-inflicted one.
+ */
+export async function appendJobMutation(
+  db: BamFormDB,
+  input: { jobId: string; method: OutboxMethod; path: string; body: unknown; clientRecordedAt: string },
+): Promise<AppendResult> {
+  const job = await db.jobs.get(input.jobId);
+  const ifMatch = job?.predictedDraftVersion ?? job?.job.draftVersion ?? null;
+  const result = await append(db, { ...input, ifMatch });
+  if (result.ok && job && ifMatch != null) {
+    await db.jobs.put({ ...job, predictedDraftVersion: ifMatch + 1 });
+  }
+  return result;
 }
 
 /**

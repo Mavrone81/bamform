@@ -13,6 +13,13 @@ import { test, expect } from '../support/fixtures';
  * `context.setOffline()`, because Chromium's offline emulation blocks a
  * request before it ever reaches a `page.route` handler (verified while
  * building this suite), which cannot model "the server saw it" at all.
+ *
+ * These tests synchronise on real network events (`page.waitForRequest`),
+ * never on UI state that can trivially match its own initial value (e.g.
+ * "Submit" is enabled by default whenever nothing is pending, which is also
+ * true before any work has happened at all) — an earlier version of this
+ * file raced ahead of the actual append/drain sequence for exactly that
+ * reason and produced a false failure.
  */
 
 test('O-15: a response lost after the server commits leaves the entry retained, and it is applied exactly once', async ({
@@ -29,31 +36,41 @@ test('O-15: a response lost after the server commits leaves the entry retained, 
   const mutationId = (request.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id;
 
   // The fault fired: the server already applied it once, even though the
-  // client received no response and must still be showing it as pending.
+  // client received no response.
   await expect.poll(() => server.appliedCount.get(mutationId)).toBe(1);
-  await expect(page.getByText('Held on device')).toBeVisible();
 
-  // The client must retry automatically (drain retries on the next
-  // trigger); nudge it the same way reconnection would, and wait for the
-  // record to reach fully-synced (Submit enabled) rather than a fixed delay.
+  // The client must retry automatically once triggered again — wait for a
+  // SECOND request carrying the same (idempotency) id, rather than
+  // inferring it from UI state.
+  const secondAttempt = page.waitForRequest(
+    (req) => req.url().includes('/sync/outbox') && req !== request,
+  );
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  const retry = await secondAttempt;
+  const retryId = (retry.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id;
+  expect(retryId).toBe(mutationId); // same client-generated id — this IS the point of ADR-008
 
+  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
   expect(server.appliedCount.get(mutationId)).toBe(1); // never twice
   const allIds = new Set(server.receivedBatches.flat().map((m) => m.id));
-  expect(allIds.size).toBe(2); // both items, no phantom extra mutation
+  expect(allIds.size).toBe(1); // only the one item we touched
 });
 
 test('O-02: network killed mid-drain, then restored — no duplicate, no loss', async ({ signedInPage: page, server }) => {
   await page.getByText('PM-2026-000431').click();
 
   server.dropNextOutboxResponseOnce();
+  const firstAttempt = page.waitForRequest('**/api/v1/sync/outbox');
   await page.getByRole('button', { name: 'Done', exact: true }).first().click();
-  await expect(page.getByText('Held on device')).toBeVisible();
+  const request = await firstAttempt;
+  const mutationId = (request.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id;
+  await expect.poll(() => server.appliedCount.get(mutationId)).toBe(1);
 
+  const retryAttempt = page.waitForRequest((req) => req.url().includes('/sync/outbox') && req !== request);
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  await retryAttempt;
 
+  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
   const ids = new Set(server.receivedBatches.flat().map((m) => m.id));
   expect(ids.size).toBe(1);
   for (const id of ids) expect(server.appliedCount.get(id)).toBe(1);

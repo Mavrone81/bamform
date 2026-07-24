@@ -9,6 +9,7 @@ import {
   jobSyncState,
   watchOnlineAndDrain,
   triggerDrainIfOnline,
+  appendJobMutation,
   getCachedJob,
   listCachedJobs,
 } from './sync-engine';
@@ -183,6 +184,7 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
       hasPendingOutbox: false,
       submitState: 'none',
       serverRemoved: false,
+      predictedDraftVersion: 1,
     });
   });
 
@@ -286,6 +288,7 @@ describe('jobSyncState — the three technician-facing labels (PR-066) plus conf
       hasPendingOutbox: false,
       submitState: 'none',
       serverRemoved: false,
+      predictedDraftVersion: 1,
     });
   });
 
@@ -374,6 +377,7 @@ describe('watchOnlineAndDrain', () => {
       hasPendingOutbox: false,
       submitState: 'none',
       serverRemoved: false,
+      predictedDraftVersion: 1,
     });
     await append(db, {
       jobId: 'job-1',
@@ -459,5 +463,93 @@ describe('triggerDrainIfOnline', () => {
     expect(() => triggerDrainIfOnline(db, transport)).not.toThrow();
     await new Promise((r) => setTimeout(r, 10));
     expect(await pendingCountForJob(db, 'job-1')).toBe(1); // still there, safely
+  });
+});
+
+describe('appendJobMutation — predicted draftVersion avoids a self-inflicted conflict', () => {
+  beforeEach(async () => {
+    await db.jobs.put({
+      id: 'job-1',
+      job: makeJob({ draftVersion: 1 }),
+      cachedAt: new Date().toISOString(),
+      hasPendingOutbox: false,
+      submitState: 'none',
+      serverRemoved: false,
+      predictedDraftVersion: 1,
+    });
+  });
+
+  it('uses the cached job draftVersion as ifMatch for the first mutation', async () => {
+    const result = await appendJobMutation(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-1',
+      body: { status: 'DONE' },
+      clientRecordedAt: new Date().toISOString(),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.entry.ifMatch).toBe(1);
+  });
+
+  it('advances the predicted version so a SECOND queued mutation for the same job does not carry a stale ifMatch', async () => {
+    const first = await appendJobMutation(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-1',
+      body: { status: 'DONE' },
+      clientRecordedAt: new Date().toISOString(),
+    });
+    const second = await appendJobMutation(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-2',
+      body: { status: 'DONE' },
+      clientRecordedAt: new Date().toISOString(),
+    });
+    if (!first.ok || !second.ok) throw new Error('unreachable');
+    expect(first.entry.ifMatch).toBe(1);
+    expect(second.entry.ifMatch).toBe(2); // NOT 1 again — see module doc
+
+    // Proves the point end to end: a server that increments its real
+    // draftVersion by one per applied mutation accepts BOTH, because each
+    // carried the version it will actually be at, not a shared stale one.
+    const transport = new MockSyncTransport();
+    const summary = await drain(db, transport);
+    expect(summary.acked).toBe(2);
+    expect(summary.conflicted).toBe(0);
+  });
+
+  it('does not advance the predicted version when the write is refused (quota exceeded)', async () => {
+    const original = db.outbox.add.bind(db.outbox);
+    db.outbox.add = (() => {
+      throw new DOMException('quota exceeded', 'QuotaExceededError');
+    }) as typeof db.outbox.add;
+
+    const result = await appendJobMutation(db, {
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-1',
+      body: { status: 'DONE' },
+      clientRecordedAt: new Date().toISOString(),
+    });
+    expect(result.ok).toBe(false);
+    const job = await getCachedJob(db, 'job-1');
+    expect(job?.predictedDraftVersion).toBe(1); // unchanged
+
+    db.outbox.add = original;
+  });
+
+  it('is a safe no-op guard for a job not present in the local cache (ifMatch simply null)', async () => {
+    const result = await appendJobMutation(db, {
+      jobId: 'ghost-job',
+      method: 'PUT',
+      path: '/jobs/ghost-job/items/item-1',
+      body: { status: 'DONE' },
+      clientRecordedAt: new Date().toISOString(),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.entry.ifMatch).toBeNull();
   });
 });

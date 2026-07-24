@@ -1,5 +1,6 @@
 import { getAccessToken, ensureFreshToken, refresh } from '../auth/index';
 import { TransportError } from './transport';
+import { API_BASE } from './config';
 import type {
   SyncTransport,
   OutboxMutation,
@@ -7,8 +8,6 @@ import type {
   SubmitJobResponse,
   SyncBootstrap,
 } from './transport';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
 async function authorizedFetch(path: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
   const token = getAccessToken() ?? (await ensureFreshToken());

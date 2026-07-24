@@ -9,7 +9,14 @@ COPY shared/package.json ./shared/
 RUN npm ci --workspaces --include-workspace-root
 COPY . .
 ARG VITE_APP_VERSION=local
+# Same-origin relative path (.env.example) — a build ARG, not a runtime
+# secret; src/api/config.ts also falls back to this exact default if it is
+# ever omitted, so a build is never left silently calling `/undefined/...`.
+ARG VITE_API_BASE_URL=/api/v1
+ARG VITE_OFFLINE_HISTORY_DAYS=90
 ENV VITE_APP_VERSION=${VITE_APP_VERSION}
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV VITE_OFFLINE_HISTORY_DAYS=${VITE_OFFLINE_HISTORY_DAYS}
 RUN npm run build --workspace=shared && npm run build --workspace=web
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
