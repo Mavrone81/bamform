@@ -1,0 +1,30 @@
+# Docker build context for api/Dockerfile and web/Dockerfile (both run
+# `npm ci` fresh inside their own build stage, then `COPY . .`).
+#
+# Without this file every `docker build .` sent the ENTIRE working tree as
+# build context — including whatever `node_modules` happens to exist on the
+# host/runner at build time. CI job 6 ("Security") runs `npm ci` (to run
+# `npm audit`) BEFORE its "Build image for scanning" step, so on a real
+# runner that host `node_modules` exists precisely when the build stage's
+# `COPY . .` would copy it — overwriting the container's own
+# freshly-`npm ci`'d, correct-arch/libc `node_modules` with whatever the
+# runner produced. That is silently wrong (glibc/musl and OS-arch mismatches
+# for native modules like argon2 and the Prisma engines) even when it
+# happens not to fail the build outright. It also made every image build
+# transfer 500+ MB of irrelevant context (measured locally), which is the
+# actual reason the "Build image for scanning" step was slow enough to risk
+# the CI job's watchdog.
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+secrets
+.nyc_output
+coverage
+playwright-report
+test-results
+.superpowers
+*.log
+.DS_Store
+Sample of Forms
