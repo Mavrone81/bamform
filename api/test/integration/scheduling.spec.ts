@@ -210,6 +210,74 @@ describe('Scheduling engine — PR-050..058 (I-INV-14/15, worker sweep, /assets/
     });
   });
 
+  describe('cascade_override wiring (PR-054, U-CAS-06) — real standing_content -> real frequency_scope', () => {
+    it('with cascade_override set on the current revision, the generated job frequency_scope equals the override, not the computed cascade', async () => {
+      const authorId = await createUser('author');
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+      const assetTypeId = await createAssetType(
+        formTemplateId,
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+      );
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`);
+      const revisionId = await createTemplateRevision(formTemplateId, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+        // M6 divides evenly into M1/M3/M6, so the COMPUTED cascade for an M6 job
+        // would be {M1,M3,M6}. The override below deliberately excludes M3 to
+        // prove it's the override — not the divisibility rule — driving the result.
+        standingContent: { cascadeOverride: { M6: ['M1', 'M6'] } },
+      });
+      await createTemplateItem(revisionId, 'M1');
+      await createTemplateItem(revisionId, 'M3');
+      await createTemplateItem(revisionId, 'M6');
+      await createScheduleRule(assetId, { frequency: 'M6', intervalMonths: 6 });
+
+      const scheduler = app.get(SchedulerService);
+      await scheduler.run();
+
+      const jobs = await adminPool.query(
+        'SELECT frequency_scope::text[] AS frequency_scope FROM "job" WHERE asset_id = $1 AND frequency = $2',
+        [assetId, 'M6'],
+      );
+      expect(jobs.rowCount).toBe(1);
+      expect(jobs.rows[0].frequency_scope).toEqual(['M1', 'M6']);
+    });
+
+    it('with no cascade_override, the normal computed cascade is used (control case)', async () => {
+      const authorId = await createUser('author');
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+      const assetTypeId = await createAssetType(
+        formTemplateId,
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+      );
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`);
+      const revisionId = await createTemplateRevision(formTemplateId, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+        standingContent: {}, // no cascade_override key at all
+      });
+      await createTemplateItem(revisionId, 'M1');
+      await createTemplateItem(revisionId, 'M3');
+      await createTemplateItem(revisionId, 'M6');
+      await createScheduleRule(assetId, { frequency: 'M6', intervalMonths: 6 });
+
+      const scheduler = app.get(SchedulerService);
+      await scheduler.run();
+
+      const jobs = await adminPool.query(
+        'SELECT frequency_scope::text[] AS frequency_scope FROM "job" WHERE asset_id = $1 AND frequency = $2',
+        [assetId, 'M6'],
+      );
+      expect(jobs.rowCount).toBe(1);
+      // Without an override, M3 divides 6 so the computed cascade includes it.
+      expect(jobs.rows[0].frequency_scope).toEqual(['M1', 'M3', 'M6']);
+    });
+  });
+
   describe('GET/PUT /assets/{assetId}/schedule (PR-058, UR-023/UR-025)', () => {
     async function engineerToken(): Promise<string> {
       const userId = await createUser('engineer');
@@ -260,6 +328,71 @@ describe('Scheduling engine — PR-050..058 (I-INV-14/15, worker sweep, /assets/
         [res.body.id],
       );
       expect(audit.rows.some((r) => r.action === 'update')).toBe(true);
+    });
+
+    it('GET reflects a non-null last_completed_on once one exists (not just the freshly-bootstrapped null default)', async () => {
+      const { assetId } = await makeSchedulableAsset(['M1']);
+      const token = await engineerToken();
+      await request(app.getHttpServer())
+        .get(`/api/v1/assets/${assetId}/schedule`)
+        .set(...authHeader(token))
+        .expect(200); // bootstraps the M1 row (last_completed_on null by default)
+
+      await adminPool.query(
+        `UPDATE "schedule_rule" SET last_completed_on = '2026-01-15' WHERE asset_id = $1 AND frequency = 'M1'`,
+        [assetId],
+      );
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/assets/${assetId}/schedule`)
+        .set(...authHeader(token))
+        .expect(200);
+
+      expect(res.body.find((r: { frequency: string }) => r.frequency === 'M1')).toMatchObject({
+        lastCompletedOn: '2026-01-15',
+      });
+    });
+
+    it('PUT for a frequency with no existing schedule_rule row is a 404 (not a silent create)', async () => {
+      const { assetId } = await makeSchedulableAsset(['M1']); // only M1 gets bootstrapped
+      const token = await engineerToken();
+      await request(app.getHttpServer())
+        .get(`/api/v1/assets/${assetId}/schedule`)
+        .set(...authHeader(token))
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .put(`/api/v1/assets/${assetId}/schedule`)
+        .set(...authHeader(token))
+        .send({ frequency: 'Y', nextDueOn: '2027-01-01', adjustedReason: 'No Y rule exists yet' })
+        .expect(404);
+    });
+
+    it('a user scoped to the SAME area as the asset is allowed through (assertInScope in-scope branch)', async () => {
+      const area = await createArea(`C-${randomUUID()}`);
+      const authorId = await createUser('author3');
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+      const assetTypeId = await createAssetType(
+        formTemplateId,
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+      );
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`, { areaId: area });
+      await createTemplateRevision(formTemplateId, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+      });
+
+      const userId = await createUser('scoped-in-area');
+      await grantRole(userId, 'ENGINEER');
+      await scopeUserToArea(userId, area);
+      const token = await mintAccessToken(app, userId, ['ENGINEER']);
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/assets/${assetId}/schedule`)
+        .set(...authHeader(token))
+        .expect(200);
     });
 
     it('U-SCH-06: PUT without a reason (or too short) is rejected 422', async () => {
