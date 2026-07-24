@@ -68,18 +68,19 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
-      - name: Unit tests with coverage
-        run: npm run test:unit -- --coverage
-      - name: Coverage gate — 80% lines / 70% branches
-        run: npx nyc check-coverage --lines 80 --branches 70
+      - name: Unit tests
+        # Coverage is NOT gated here: business logic is deliberately covered
+        # by the INTEGRATION suite (real Postgres) rather than mocked unit
+        # tests, so unit-only coverage is ~26%/28% by design. The combined
+        # unit+integration coverage gate runs in job 4, where both suites
+        # can execute against the same runner (coverage cannot be merged
+        # across separate GitHub Actions jobs/runners).
+        run: npm run test:unit
       - name: Signing determinism — golden hash (U-SIG-01)
         # The most important single test in the suite. If a dependency upgrade
         # changes canonical serialisation, /records/{id}/integrity would begin
         # reporting tampering on every historical record (PR-TST-04).
         run: npm run test:unit -- --testNamePattern="canonical serialisation"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: { name: coverage, path: coverage/ }
 
   # ---------------------------------------------------------------- 4
   integration:
@@ -120,12 +121,25 @@ jobs:
       - name: Apply role grants (audit tables append-only)
         run: psql "$DATABASE_URL" -f api/prisma/grants.sql
         env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
-      - name: Integration tests — asserts all 16 DBD §7 invariants
-        run: npm run test:integration
+      - name: Unit tests with coverage (feeds the combined gate below)
+        run: npm run test:unit -- --coverage
+      - name: Integration tests with coverage — asserts all 16 DBD §7 invariants
+        run: npm run test:integration -- --coverage
         env:
           DATABASE_URL: postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test
           REDIS_URL: redis://localhost:6379
           MINIO_ENDPOINT: localhost:9000
+      - name: Coverage gate — 80% lines / 70% branches (combined unit + integration)
+        # Each suite's jest config writes a uniquely-named istanbul JSON into
+        # the repo-root .nyc_output/ (unit-coverage.json / integration-
+        # coverage.json); nyc reads and merges every file in that directory
+        # automatically, so the check below is over the COMBINED coverage —
+        # the only meaningful number, since business logic here is covered
+        # by the integration suite, not by mocked unit tests.
+        run: npx nyc check-coverage --lines 80 --branches 70
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: coverage, path: .nyc_output/ }
 
   # ---------------------------------------------------------------- 5
   contract:
