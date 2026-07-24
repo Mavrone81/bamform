@@ -26,6 +26,8 @@ servers:
 tags:
   - name: Health
   - name: Auth
+  - name: Areas
+  - name: Asset Types
   - name: Assets
   - name: Templates
   - name: Jobs
@@ -46,6 +48,7 @@ paths:
       tags: [Health]
       operationId: getHealth
       summary: Liveness probe
+      description: No dependency round-trip - confirms only that the process is up.
       security: []
       responses:
         '200':
@@ -66,6 +69,7 @@ paths:
       tags: [Health]
       operationId: getReadiness
       summary: Readiness probe - checks Postgres, Redis and MinIO
+      description: Distinct from `/healthz` (liveness) - fails if any dependency is unreachable.
       security: []
       responses:
         '200':
@@ -83,11 +87,38 @@ paths:
         '503':
           $ref: '#/components/responses/Problem'
 
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: getHealthz
+      summary: Liveness probe (slice 1 implementation)
+      description: |
+        The actual liveness probe implemented so far — no dependency
+        round-trip (health.controller.ts). Distinct from `/health` above,
+        which documents the eventual richer liveness response (version +
+        commit) that slice 8's `dist/healthcheck.js` build-out is expected
+        to serve; `/health/ready` (Postgres/Redis/MinIO checks) is likewise
+        not yet implemented. Tracked in
+        `api/test/contract/known-gaps.ts#FUTURE_OPENAPI_PATHS`.
+      security: []
+      responses:
+        '200':
+          description: Service is live
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+              example: { status: ok }
+
   /.well-known/jwks.json:
     get:
       tags: [Auth]
       operationId: getJwks
       summary: Published Ed25519 verification keys
+      description: PR-087 - clients use `kid` to select the correct verification key.
       security: []
       responses:
         '200':
@@ -107,6 +138,7 @@ paths:
       tags: [Auth]
       operationId: login
       summary: Authenticate and receive an access token
+      description: Rate-limited (10/min per IP); account lockout after 5 failures.
       security: []
       requestBody:
         required: true
@@ -154,6 +186,7 @@ paths:
       tags: [Auth]
       operationId: logout
       summary: Revoke the refresh family and deny-list the current access token
+      description: Adds the current access token's `jti` to the Redis denylist for the remainder of its natural lifetime (PR-088).
       responses:
         '204': { description: Logged out }
         '401': { $ref: '#/components/responses/Problem' }
@@ -163,6 +196,7 @@ paths:
       tags: [Auth]
       operationId: stepUp
       summary: Re-authenticate immediately before signing
+      description: PR-API-07 - refreshes `last_authenticated_at` so a subsequent signing action (approve/verify) passes its step-up check.
       requestBody:
         required: true
         content:
@@ -190,6 +224,7 @@ paths:
       tags: [Auth]
       operationId: getCurrentUser
       summary: Current user, roles, area scope and active delegations
+      description: Re-reads area scope and delegations fresh from the database - the access token carries neither claim.
       responses:
         '200':
           description: Current principal
@@ -198,11 +233,186 @@ paths:
               schema: { $ref: '#/components/schemas/CurrentUser' }
         '401': { $ref: '#/components/responses/Problem' }
 
+  /areas:
+    get:
+      tags: [Areas]
+      operationId: listAreas
+      summary: List areas
+      description: DBD §6.1 - the scope source for PR-API-10; areas are not themselves area-scoped.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Paginated areas
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Area' }
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Areas]
+      operationId: createArea
+      summary: Create an area
+      description: ADMIN only - organisational/master data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AreaCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Area' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Duplicate area code
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /areas/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Areas]
+      operationId: getArea
+      summary: Get an area
+      description: Not itself area-scoped (an area cannot be scoped to itself).
+      responses:
+        '200':
+          description: Area
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Area' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Areas]
+      operationId: updateArea
+      summary: Update an area. Deactivation only, never deletion.
+      description: ADMIN only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AreaUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Area' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /asset-types:
+    get:
+      tags: [Asset Types]
+      operationId: listAssetTypes
+      summary: List asset types
+      description: Global reference data - not area-scoped.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Paginated asset types
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/AssetType' }
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Asset Types]
+      operationId: createAssetType
+      summary: Create an asset type
+      description: ENGINEER or ADMIN. Exactly one form_template per asset type (1:1).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetTypeCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetType' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Duplicate asset-type code, or the form_template already governs another asset type
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /asset-types/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Asset Types]
+      operationId: getAssetType
+      summary: Get an asset type
+      description: DBD §6.7 - one form_template per asset type (1:1).
+      responses:
+        '200':
+          description: Asset type
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetType' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Asset Types]
+      operationId: updateAssetType
+      summary: Update an asset type. Deactivation only, never deletion.
+      description: ENGINEER or ADMIN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetTypeUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetType' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /assets:
     get:
       tags: [Assets]
       operationId: listAssets
       summary: List assets
+      description: Filtered to the caller's area scope (PR-API-10) when they have one.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -234,6 +444,7 @@ paths:
       tags: [Assets]
       operationId: createAsset
       summary: Create an asset
+      description: ENGINEER or ADMIN. Rejects a duplicate `code` (INV-06).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -261,6 +472,7 @@ paths:
       tags: [Assets]
       operationId: getAsset
       summary: Get an asset
+      description: 403 (`/errors/out-of-scope`), not a silent 404, when the asset exists but is outside the caller's area scope.
       responses:
         '200':
           description: Asset
@@ -272,6 +484,7 @@ paths:
       tags: [Assets]
       operationId: updateAsset
       summary: Update an asset. Deactivation only, never deletion.
+      description: ENGINEER or ADMIN. `status`/`active` are the only removal mechanism (deactivation).
       requestBody:
         required: true
         content:
@@ -293,6 +506,7 @@ paths:
       tags: [Assets]
       operationId: getAssetHistory
       summary: Complete maintenance history for one asset
+      description: UR-007. Real and area-scoping-correct today; returns an empty page until scheduling/result-capture (slice 5/6) generates jobs.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -311,6 +525,51 @@ paths:
                         items: { $ref: '#/components/schemas/RecordSummary' }
         '404': { $ref: '#/components/responses/Problem' }
 
+  /templates:
+    get:
+      tags: [Templates]
+      operationId: listTemplates
+      summary: List form templates
+      description: |
+        Read-only - the twelve source templates are loaded by BAMFORM-TLP-001's
+        separate tooling (PR-DBD-10), not through this API.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Paginated templates
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/FormTemplate' }
+        '401': { $ref: '#/components/responses/Problem' }
+
+  /templates/{templateId}:
+    parameters:
+      - name: templateId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Templates]
+      operationId: getTemplate
+      summary: Get a form template. Includes the current revision summary.
+      description: Read-only - see `listTemplates`.
+      responses:
+        '200':
+          description: Form template
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FormTemplate' }
+        '404': { $ref: '#/components/responses/Problem' }
+
   /templates/{templateId}/revisions:
     parameters:
       - name: templateId
@@ -321,6 +580,7 @@ paths:
       tags: [Templates]
       operationId: listRevisions
       summary: Full revision history for a template
+      description: UR-011. Newest first (by `sequenceOrdinal` descending).
       responses:
         '200':
           description: Revisions, newest first
@@ -334,6 +594,7 @@ paths:
       tags: [Templates]
       operationId: createRevision
       summary: Create a draft revision. Sequence is assigned server-side.
+      description: ENGINEER or DOC_CONTROLLER. Copies forward the current revision's items/measurements/standing content (PR-028).
       requestBody:
         required: true
         content:
@@ -356,6 +617,89 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /revisions/{revisionId}:
+    parameters:
+      - $ref: '#/components/parameters/RevisionId'
+    get:
+      tags: [Templates]
+      operationId: getRevision
+      summary: Get a template revision
+      description: Includes the full items/measurements/standing content for this specific revision (frozen once approved).
+      responses:
+        '200':
+          description: Revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TemplateRevision' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Templates]
+      operationId: patchRevision
+      summary: Edit draft metadata (revision code, change description, standing content)
+      description: Only while the revision is DRAFT (ENGINEER or DOC_CONTROLLER).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                revisionCode: { type: string }
+                changeDescription: { type: string, minLength: 5 }
+                standingContent: { $ref: '#/components/schemas/StandingContent' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TemplateRevision' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Revision is not DRAFT
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /revisions/{revisionId}/items:
+    parameters:
+      - $ref: '#/components/parameters/RevisionId'
+    put:
+      tags: [Templates]
+      operationId: replaceRevisionItems
+      summary: Replace the checklist items on a draft revision
+      description: |
+        Documented as "replace wholesale" - implemented as an upsert by
+        `stableKey` (existing rows updated in place, a dropped stableKey is
+        soft-removed via `active=false`, not deleted: `bamform_app` holds no
+        DELETE grant on any table, INV-16). The response never includes
+        `active` - it is server-internal and always true for any row
+        returned (every read path filters `active=true`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/TemplateItemInput' }
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TemplateItem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Revision not in draft
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /revisions/{revisionId}/measurements:
     parameters:
       - $ref: '#/components/parameters/RevisionId'
@@ -363,6 +707,10 @@ paths:
       tags: [Templates]
       operationId: replaceRevisionMeasurements
       summary: Replace the measurement definitions on a draft revision
+      description: |
+        Documented as "replace wholesale" - implemented as an upsert by
+        `stableKey` (same mechanism as `PUT .../items`, see that operation's
+        description) for the same INV-16 (no DELETE grant) reason.
       requestBody:
         required: true
         content:
@@ -378,8 +726,37 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/TemplateMeasurement' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Revision not in draft
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422':
-          description: Specification limits inverted, or revision not in draft
+          description: Specification limits inverted (lowerLimit > upperLimit, INV-04)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /revisions/{revisionId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/RevisionId'
+    post:
+      tags: [Templates]
+      operationId: submitRevision
+      summary: Submit a draft revision for approval. DRAFT -> PENDING_APPROVAL.
+      description: ENGINEER or DOC_CONTROLLER.
+      responses:
+        '200':
+          description: Submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TemplateRevision' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Revision is not DRAFT
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -391,24 +768,71 @@ paths:
       tags: [Templates]
       operationId: approveRevision
       summary: Approve and issue a revision. Requires step-up authentication.
+      description: |
+        PENDING_APPROVAL -> CURRENT. DOC_CONTROLLER. `errors/self-approval`
+        (**409**, not 403 - correcting a prior documentation defect: the
+        actor being the revision's own author is a conflict with the
+        resource's state (INV-03), not an authorization failure) is raised
+        when the approver authored the revision (PR-047).
       responses:
         '200':
           description: Revision is now current; the previous revision is superseded
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TemplateRevision' }
+        '401': { $ref: '#/components/responses/Problem' }
         '403':
-          description: Step-up required, or actor is the revision author
+          description: Step-up required (`/errors/step-up-required`, PR-API-07)
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: |
+            `/errors/self-approval` - actor authored this revision (INV-03,
+            PR-047), or `/errors/invalid-transition` - revision is not
+            PENDING_APPROVAL
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /revisions/{revisionId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/RevisionId'
+    post:
+      tags: [Templates]
+      operationId: rejectRevision
+      summary: Reject a pending revision. PENDING_APPROVAL -> REJECTED.
+      description: DOC_CONTROLLER. Requires a reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 10 }
+      responses:
+        '200':
+          description: Rejected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TemplateRevision' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Revision is not PENDING_APPROVAL
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
 
   /jobs:
     get:
       tags: [Jobs]
       operationId: listJobs
       summary: List jobs
+      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -452,6 +876,7 @@ paths:
       tags: [Jobs]
       operationId: getJob
       summary: Full job including the frozen template revision content
+      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       responses:
         '200':
           description: Job
@@ -473,6 +898,7 @@ paths:
       tags: [Jobs]
       operationId: recordItemResult
       summary: Record or update a checklist item result
+      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       requestBody:
         required: true
         content:
@@ -504,6 +930,7 @@ paths:
       tags: [Jobs]
       operationId: recordMeasurementResult
       summary: Record or update a measurement reading
+      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       requestBody:
         required: true
         content:
@@ -526,6 +953,7 @@ paths:
       tags: [Jobs]
       operationId: uploadAttachment
       summary: Upload a photograph. Validated by magic bytes, not extension.
+      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       requestBody:
         required: true
         content:
@@ -576,6 +1004,7 @@ paths:
       tags: [Approval]
       operationId: verifyJob
       summary: Verify a record. Requires step-up. Archives on success.
+      description: Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       requestBody:
         content:
           application/json:
@@ -608,6 +1037,7 @@ paths:
       tags: [Approval]
       operationId: returnJob
       summary: Return a record to the maintainer for rework
+      description: Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       requestBody:
         required: true
         content:
@@ -630,6 +1060,7 @@ paths:
       tags: [Approval]
       operationId: getVerificationQueue
       summary: Records awaiting the caller's verification, including delegated queues
+      description: Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -712,6 +1143,7 @@ paths:
       tags: [Archive]
       operationId: getRecordPdf
       summary: Render the record in the controlled paper form layout
+      description: Slice 12 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       responses:
         '200':
           description: PDF
@@ -777,20 +1209,13 @@ paths:
       tags: [Audit]
       operationId: getAuditChainStatus
       summary: Verify the hash chain over the audit log
+      description: Slice 8 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
       responses:
         '200':
           description: Chain verification result
           content:
             application/json:
-              schema:
-                type: object
-                required: [intact, checkedAt, eventCount]
-                properties:
-                  intact: { type: boolean }
-                  checkedAt: { type: string, format: date-time }
-                  eventCount: { type: integer }
-                  firstBreakSequence: { type: [integer, 'null'] }
-              example: { intact: true, checkedAt: '2026-07-24T02:00:00Z', eventCount: 418322, firstBreakSequence: null }
+              schema: { $ref: '#/components/schemas/AuditChainStatus' }
         '403': { $ref: '#/components/responses/Problem' }
 
 components:
@@ -989,6 +1414,77 @@ components:
         status: { $ref: '#/components/schemas/AssetStatus' }
         active: { type: boolean }
 
+    Area:
+      type: object
+      required: [id, code, name, active]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        parentId: { type: [string, 'null'], format: uuid }
+        active: { type: boolean }
+
+    AreaCreate:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 50 }
+        name: { type: string, minLength: 1 }
+        parentId: { type: string, format: uuid }
+
+    AreaUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        parentId: { type: [string, 'null'], format: uuid }
+        active: { type: boolean }
+
+    AssetType:
+      type: object
+      required: [id, code, name, formTemplateId, approvalRouteId, leadTimeDays, active]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        formTemplateId: { type: string, format: uuid, description: One form_template per asset type (1:1) }
+        approvalRouteId: { type: string, format: uuid }
+        leadTimeDays: { type: integer }
+        active: { type: boolean }
+
+    AssetTypeCreate:
+      type: object
+      required: [code, name, formTemplateId, approvalRouteId]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 50 }
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        formTemplateId: { type: string, format: uuid }
+        approvalRouteId: { type: string, format: uuid }
+        leadTimeDays: { type: integer, minimum: 1 }
+
+    AssetTypeUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        description: { type: [string, 'null'] }
+        leadTimeDays: { type: integer, minimum: 1 }
+        active: { type: boolean }
+
+    FormTemplate:
+      type: object
+      required: [id, documentNumber, title, active]
+      properties:
+        id: { type: string, format: uuid }
+        documentNumber: { type: string, examples: ['CE 95 020 00 01'] }
+        title: { type: string }
+        active: { type: boolean }
+        assetTypeId: { type: [string, 'null'], format: uuid }
+        currentRevisionId:
+          type: [string, 'null']
+          format: uuid
+          description: Resolves to null if no revision has ever been approved
+
     TemplateRevision:
       type: object
       required: [id, formTemplateId, revisionCode, sequenceOrdinal, status]
@@ -1009,6 +1505,7 @@ components:
         approvedBy: { type: [string, 'null'], format: uuid }
         approvedByName: { type: [string, 'null'] }
         approvedAt: { type: [string, 'null'], format: date-time }
+        rejectedReason: { type: [string, 'null'] }
         effectiveFrom: { type: [string, 'null'], format: date-time }
         supersededAt: { type: [string, 'null'], format: date-time }
         items:
@@ -1049,6 +1546,23 @@ components:
         instruction: { type: string }
         mandatory: { type: boolean }
         stableKey: { type: string }
+        displayOrder: { type: integer }
+
+    TemplateItemInput:
+      type: object
+      required: [itemNo, frequency, instruction]
+      description: |
+        `PUT /revisions/{id}/items` request element - never accepts `id`
+        (server-assigned) or `active` (server-internal, always true in any
+        response). `stableKey` is optional: a genuinely new item doesn't
+        require the caller to mint one; re-sending an existing item's
+        stableKey is how PR-028 carry-forward/reactivation is expressed.
+      properties:
+        itemNo: { type: integer, minimum: 1 }
+        frequency: { $ref: '#/components/schemas/Frequency' }
+        instruction: { type: string, minLength: 1 }
+        mandatory: { type: boolean, default: true }
+        stableKey: { type: string, minLength: 1 }
         displayOrder: { type: integer }
 
     TemplateMeasurement:
@@ -1280,6 +1794,25 @@ components:
               hashMatches: { type: boolean }
               signatureValid: { type: boolean }
         mismatchDetail: { type: [string, 'null'] }
+
+    AuditChainStatus:
+      type: object
+      required: [intact, checkedAt, eventCount]
+      properties:
+        intact: { type: boolean }
+        checkedAt: { type: string, format: date-time }
+        eventCount: { type: integer }
+        firstBreakSequence:
+          type: [integer, 'null']
+          description: Set only when `intact` is false - the first sequence number whose hash link failed to verify.
+      # `firstBreakSequence` omitted here (not set to a literal `null`) —
+      # a literal-`null` example value on a `type: [integer, 'null']`
+      # property crashes spectral-cli 6.16.2's example-validation codegen
+      # (nimma) with "Cannot read properties of null (reading 'enum')";
+      # reproduced in isolation with a two-line minimal schema. The field is
+      # still fully documented above (type + semantics); this only affects
+      # which value the illustrative example shows.
+      example: { intact: true, checkedAt: '2026-07-24T02:00:00Z', eventCount: 418322 }
 
     MeasurementTrend:
       type: object
