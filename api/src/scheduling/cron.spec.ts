@@ -42,6 +42,15 @@ describe('cron expression matcher', () => {
     expect(cronMatches('0 9-17 * * *', new Date(2026, 6, 24, 18, 0))).toBe(false);
   });
 
+  it('rejects a non-positive-integer step (e.g. "*/0" or "*/abc")', () => {
+    expect(() => cronMatches('*/0 * * * *', new Date(2026, 6, 24, 9, 0))).toThrow(
+      /Invalid cron step/,
+    );
+    expect(() => cronMatches('*/abc * * * *', new Date(2026, 6, 24, 9, 0))).toThrow(
+      /Invalid cron step/,
+    );
+  });
+
   it('matches day-of-week (0 = Sunday)', () => {
     const sunday = new Date(2026, 6, 26); // 26 Jul 2026 is a Sunday
     expect(sunday.getDay()).toBe(0);
