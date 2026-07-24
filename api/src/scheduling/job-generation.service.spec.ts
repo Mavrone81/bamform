@@ -9,12 +9,14 @@ import { JobGenerationService } from './job-generation.service';
  * "unexpected DB error" branches that are awkward to provoke through real
  * fixtures but are one-line-easy to force through a fake.
  */
-function makeRule(overrides: {
-  frequency?: string;
-  intervalMonths?: number;
-  nextDueOn?: Date;
-  leadTimeDays?: number;
-} = {}) {
+function makeRule(
+  overrides: {
+    frequency?: string;
+    intervalMonths?: number;
+    nextDueOn?: Date;
+    leadTimeDays?: number;
+  } = {},
+) {
   return {
     id: 'rule-1',
     frequency: overrides.frequency ?? 'M6',
@@ -46,7 +48,8 @@ function fakePrisma(overrides: {
 }) {
   const jobCreate =
     overrides.jobCreate ?? jest.fn(async () => ({ id: 'job-1', dueOn: new Date() }));
-  const revision = 'revision' in overrides ? overrides.revision : { id: 'rev-1', standingContent: {} };
+  const revision =
+    'revision' in overrides ? overrides.revision : { id: 'rev-1', standingContent: {} };
   return {
     scheduleRule: {
       findMany: jest.fn(async () => overrides.rules ?? [makeRule()]),
