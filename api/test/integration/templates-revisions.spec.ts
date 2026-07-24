@@ -73,7 +73,7 @@ describe('Template revisions — lifecycle (PRD §5.2, PR-022..028, PR-047..049)
       .expect(404);
   });
 
-  it('slice-4-review Important #2: GET /templates resolves each template\'s currentRevisionId correctly (single set-based query, not N+1)', async () => {
+  it("slice-4-review Important #2: GET /templates resolves each template's currentRevisionId correctly (single set-based query, not N+1)", async () => {
     const { token: authorToken } = await tokenFor('author2', 'DOC_CONTROLLER');
     const { userId: approverId, token: approverToken } = await tokenFor(
       'approver2',
