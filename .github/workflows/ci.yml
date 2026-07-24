@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
   security-events: write
+  # CodeQL action calls the Actions API (get-a-workflow-run) for its status
+  # report; without actions:read it fails "Resource not accessible by
+  # integration" even when SARIF upload is disabled.
+  actions: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -220,6 +224,7 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           upload: false
+          upload-database: false
           output: codeql-results
       - name: CodeQL — fail on any HIGH/CRITICAL finding (security-severity >= 7.0)
         run: |
