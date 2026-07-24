@@ -84,6 +84,15 @@ export class FakeServer {
     this.conflictOnce.add(mutationId);
   }
 
+  /** Coarser sibling of `forceConflictOnce`, for the same reason
+   * `dropNextOutboxResponseOnce` exists: a client-generated UUIDv7 can't be
+   * known ahead of the tap that creates it. Conflicts every mutation in the
+   * very next `/sync/outbox` batch, regardless of id. */
+  private forceNextConflict = false;
+  forceNextConflictOnce(): void {
+    this.forceNextConflict = true;
+  }
+
   dropResponseOnceFor(mutationId: string): void {
     this.dropResponseOnce.add(mutationId);
   }
@@ -147,18 +156,22 @@ export class FakeServer {
     };
   }
 
-  /** Real login is required before refresh will succeed — see
-   * `handleRefresh` below. Without this, the fake server would let every
-   * fresh page load "silently log in" via refresh before a test's own
-   * sign-in ever ran (found while building this suite: `page.goto('/sign-in')`
-   * was being redirected straight to the job list). */
-  private hasLoggedIn = false;
-
+  /** Real login is required before refresh will succeed for THAT SAME
+   * browser context — modelled with an actual `Set-Cookie` on login and a
+   * `Cookie` check on refresh, exactly like the real HttpOnly refresh
+   * cookie, rather than a single shared boolean. A single global flag was
+   * tried first and broke as soon as a second "device" (BrowserContext)
+   * appeared in the same test (O-13): logging in on device A made device
+   * B's fresh page silently auto-authenticate via refresh too, since
+   * cookies are NOT actually shared between real browser contexts — the
+   * flag was pretending they were. Without this fix, every fresh page load
+   * for a context that never logged in would ALSO be redirected straight
+   * past the sign-in screen. */
   private async handleLogin(route: Route) {
-    this.hasLoggedIn = true;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
+      headers: { 'Set-Cookie': 'bf_refresh=e2e-refresh-token; Path=/; HttpOnly' },
       body: JSON.stringify({
         accessToken: 'e2e-access-token',
         expiresIn: 900,
@@ -168,7 +181,8 @@ export class FakeServer {
   }
 
   private async handleRefresh(route: Route) {
-    if (!this.hasLoggedIn) {
+    const cookieHeader = (await route.request().headerValue('cookie')) ?? '';
+    if (!cookieHeader.includes('bf_refresh=e2e-refresh-token')) {
       await route.fulfill({
         status: 401,
         contentType: 'application/problem+json',
@@ -232,9 +246,24 @@ export class FakeServer {
       const jobId = this.jobIdFromPath(m.path);
       const currentVersion = jobId ? this.draftVersionOf(jobId) : 1;
       const isStale = m.ifMatch != null && m.ifMatch !== currentVersion;
+      const forcedConflict = this.conflictOnce.has(m.id) || this.forceNextConflict;
+      const jobWasRemoved = jobId != null && this.deletedJobIds.has(jobId);
 
       let result: OutboxResultLike;
-      if (this.conflictOnce.has(m.id) || isStale) {
+      if (jobWasRemoved) {
+        // O-14: a mutation against a job that no longer exists/was
+        // reassigned server-side is rejected, not silently applied — if it
+        // were silently applied, the device's `hasPendingOutbox` flag would
+        // clear on its own and the NEXT bootstrap would have nothing left
+        // to protect, defeating the "device is informed, cannot submit"
+        // guarantee this scenario is specifically about.
+        result = {
+          id: m.id,
+          status: 404,
+          applied: false,
+          problem: { type: 'about:blank', title: 'job not found (reassigned)', status: 404 },
+        };
+      } else if (forcedConflict || isStale) {
         this.conflictOnce.delete(m.id);
         result = {
           id: m.id,
@@ -259,6 +288,7 @@ export class FakeServer {
         mustDrop = true;
       }
     }
+    this.forceNextConflict = false;
 
     if (this.dropNextResponse) {
       this.dropNextResponse = false;
