@@ -34,3 +34,16 @@ export const JOB_FULL_INCLUDE = {
 
 export type JobSummaryRow = Prisma.JobGetPayload<{ include: typeof JOB_SUMMARY_INCLUDE }>;
 export type JobFullRow = Prisma.JobGetPayload<{ include: typeof JOB_FULL_INCLUDE }>;
+
+/**
+ * The MOST RECENT `approval_step`, if any — `integrity.service.ts#checkIntegrity`
+ * recomputes/verifies exactly this row's `content_hash` (see its doc comment
+ * for why only the newest step's hash is checked against current data).
+ * `pdf-render.service.ts`'s footer digest (PR-118) reuses this SAME row's
+ * `content_hash` rather than recomputing or inventing a separate value —
+ * `approvalSteps` is ordered `actedAt ASC` by `JOB_FULL_INCLUDE`, so the last
+ * array element is the newest.
+ */
+export function latestApprovalStep(job: JobFullRow): JobFullRow['approvalSteps'][number] | null {
+  return job.approvalSteps.length > 0 ? job.approvalSteps[job.approvalSteps.length - 1] : null;
+}

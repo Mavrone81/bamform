@@ -11,7 +11,6 @@ import { JobsController } from './jobs.controller';
 import { JobsRepository } from './jobs.repository';
 import { JobsService } from './jobs.service';
 import { PartsService } from './parts.service';
-import { RecordsController } from './records.controller';
 import { ResultsService } from './results.service';
 import { SubmissionService } from './submission.service';
 import { VerificationService } from './verification.service';
@@ -28,10 +27,17 @@ import { VerificationService } from './verification.service';
  * explicitly (not global) for `VerifierEligibilityService` — PR-077/UR-063's
  * "notify whoever is eligible to verify this stage right now", reused by
  * `SubmissionService` rather than re-deriving the eligibility rule.
+ *
+ * Slice 12 moves `RecordsController` OUT of this module (into
+ * `records/records.module.ts`) — it now also needs `PdfCoordinatorService`
+ * (`pdf/pdf.module.ts`), which itself needs `JobsRepository`/`JobAccessService`
+ * FROM here, so keeping the controller here would create a module import
+ * cycle. `IntegrityService` is now exported so `RecordsController` (declared
+ * in the new module) can still inject it — same provider, no behaviour change.
  */
 @Module({
   imports: [QueueModule],
-  controllers: [JobsController, AttachmentsController, ApprovalController, RecordsController],
+  controllers: [JobsController, AttachmentsController, ApprovalController],
   providers: [
     JobAccessService,
     JobsRepository,
@@ -51,6 +57,8 @@ import { VerificationService } from './verification.service';
   // (area+assignee scope), `ResultsService`/`PartsService` (the outbox
   // drain dispatches straight into their existing idempotency-backed,
   // per-mutation-transactional methods — see `sync-outbox.service.ts`).
-  exports: [JobsRepository, JobAccessService, ResultsService, PartsService],
+  // Slice 12's `records/records.module.ts` additionally reuses
+  // `JobsRepository`/`JobAccessService`/`IntegrityService`.
+  exports: [JobsRepository, JobAccessService, ResultsService, PartsService, IntegrityService],
 })
 export class JobsModule {}
