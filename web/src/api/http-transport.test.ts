@@ -154,4 +154,200 @@ describe('HttpSyncTransport', () => {
     await expect(transport.bootstrap()).rejects.toThrow('bootstrap failed: 401');
     expect(fetch).toHaveBeenCalledTimes(2); // one bootstrap attempt + one refresh, no retry loop
   });
+
+  // ---- Slice 11b: verifier queue / record review / delegations ----
+
+  it('getJob fetches GET /jobs/{jobId} and returns the parsed Job', async () => {
+    setAccessToken('tok', 900);
+    const job = {
+      id: 'job-1',
+      jobNumber: 'PM-2026-000431',
+      assetCode: 'AW03',
+      status: 'SUBMITTED',
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(job));
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.getJob('job-1');
+    expect(result).toEqual(job);
+    const [url] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/jobs/job-1');
+  });
+
+  it('getJob throws a TransportError on a non-OK response', async () => {
+    setAccessToken('tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, false, 404));
+    const transport = new HttpSyncTransport();
+    await expect(transport.getJob('job-1')).rejects.toThrow('getJob failed: 404');
+  });
+
+  it('getQueue calls GET /queue and returns the page', async () => {
+    setAccessToken('tok', 900);
+    const page = { data: [{ id: 'job-1' }], page: { hasMore: false, limit: 50 } };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(page));
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.getQueue();
+    expect(result).toEqual(page);
+    const [url] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/queue');
+    expect(String(url)).not.toContain('?');
+  });
+
+  it('getQueue appends limit/cursor as query parameters when given', async () => {
+    setAccessToken('tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ data: [], page: { hasMore: false, limit: 10 } }),
+    );
+    const transport = new HttpSyncTransport();
+    await transport.getQueue({ limit: 10, cursor: 'abc' });
+    const [url] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('limit=10');
+    expect(String(url)).toContain('cursor=abc');
+  });
+
+  it('getQueue throws a TransportError on a non-OK response', async () => {
+    setAccessToken('tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, false, 500));
+    const transport = new HttpSyncTransport();
+    await expect(transport.getQueue()).rejects.toThrow('getQueue failed: 500');
+  });
+
+  it('verifyJob posts the drawnSignature body with an Idempotency-Key and returns ok:true on success', async () => {
+    setAccessToken('tok', 900);
+    const job = { id: 'job-1', status: 'ARCHIVED' };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(job));
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.verifyJob(
+      'job-1',
+      { drawnSignature: 'data:image/png;base64,AAA' },
+      'idem-verify-1',
+    );
+    expect(result).toEqual({ status: 200, ok: true, body: job });
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/jobs/job-1/verify');
+    expect(init?.method).toBe('POST');
+    expect((init?.headers as Headers).get('Idempotency-Key')).toBe('idem-verify-1');
+    expect(JSON.parse(init?.body as string)).toEqual({
+      drawnSignature: 'data:image/png;base64,AAA',
+    });
+  });
+
+  it('verifyJob generates an Idempotency-Key when one is not supplied', async () => {
+    setAccessToken('tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ id: 'job-1' }));
+    const transport = new HttpSyncTransport();
+    await transport.verifyJob('job-1', { drawnSignature: 'data:image/png;base64,AAA' });
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    expect((init?.headers as Headers).get('Idempotency-Key')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('verifyJob returns ok:false with the Problem on a 403 step-up-required response', async () => {
+    setAccessToken('tok', 900);
+    const problem = {
+      type: 'https://form.bevorasg.com/errors/step-up-required',
+      title: 'Step-up required',
+      status: 403,
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(problem, false, 403));
+    const transport = new HttpSyncTransport();
+    const result = await transport.verifyJob('job-1', {
+      drawnSignature: 'data:image/png;base64,AAA',
+    });
+    expect(result).toEqual({ status: 403, ok: false, problem });
+  });
+
+  it('returnJob posts the reason and returns ok:true on success', async () => {
+    setAccessToken('tok', 900);
+    const job = { id: 'job-1', status: 'IN_PROGRESS' };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(job));
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.returnJob(
+      'job-1',
+      'Torque reading out of tolerance, rework needed.',
+      'idem-return-1',
+    );
+    expect(result).toEqual({ status: 200, ok: true, body: job });
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/jobs/job-1/return');
+    expect(JSON.parse(init?.body as string)).toEqual({
+      reason: 'Torque reading out of tolerance, rework needed.',
+    });
+  });
+
+  it('returnJob returns ok:false with the Problem on a 422 (reason too short)', async () => {
+    setAccessToken('tok', 900);
+    const problem = { type: 'about:blank', title: 'reason too short', status: 422 };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(problem, false, 422));
+    const transport = new HttpSyncTransport();
+    const result = await transport.returnJob('job-1', 'too short');
+    expect(result).toEqual({ status: 422, ok: false, problem });
+  });
+
+  it('getDelegations calls GET /delegations and returns the page', async () => {
+    setAccessToken('tok', 900);
+    const page = { data: [{ id: 'deleg-1' }], page: { hasMore: false, limit: 50 } };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(page));
+    const transport = new HttpSyncTransport();
+    const result = await transport.getDelegations();
+    expect(result).toEqual(page);
+    const [url] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/delegations');
+  });
+
+  it('createDelegation posts the request body and returns ok:true with the created Delegation', async () => {
+    setAccessToken('tok', 900);
+    const delegation = {
+      id: 'deleg-1',
+      delegatorId: 'user-2',
+      delegateId: 'user-4',
+      validFrom: '2026-07-25T00:00:00Z',
+      validTo: '2026-08-01T00:00:00Z',
+      createdBy: 'user-2',
+      revokedAt: null,
+      createdAt: '2026-07-25T00:00:00Z',
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(delegation, true, 201));
+    const transport = new HttpSyncTransport();
+    const result = await transport.createDelegation({
+      delegatorId: 'user-2',
+      delegateId: 'user-4',
+      validFrom: '2026-07-25T00:00:00Z',
+      validTo: '2026-08-01T00:00:00Z',
+    });
+    expect(result).toEqual({ status: 201, ok: true, body: delegation });
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/delegations');
+    expect(init?.method).toBe('POST');
+  });
+
+  it('createDelegation returns ok:false with the Problem on a 403', async () => {
+    setAccessToken('tok', 900);
+    const problem = { type: 'about:blank', title: 'forbidden', status: 403 };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(problem, false, 403));
+    const transport = new HttpSyncTransport();
+    const result = await transport.createDelegation({
+      delegatorId: 'user-9',
+      delegateId: 'user-4',
+      validFrom: '2026-07-25T00:00:00Z',
+      validTo: '2026-08-01T00:00:00Z',
+    });
+    expect(result).toEqual({ status: 403, ok: false, problem });
+  });
+
+  it('revokeDelegation sends DELETE /delegations/{id} and returns ok:true with the revoked Delegation', async () => {
+    setAccessToken('tok', 900);
+    const delegation = { id: 'deleg-1', revokedAt: '2026-07-25T01:00:00Z' };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(delegation));
+    const transport = new HttpSyncTransport();
+    const result = await transport.revokeDelegation('deleg-1');
+    expect(result).toEqual({ status: 200, ok: true, body: delegation });
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/delegations/deleg-1');
+    expect(init?.method).toBe('DELETE');
+  });
 });

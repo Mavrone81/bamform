@@ -4,6 +4,11 @@ export type OutboxMutation = components['schemas']['OutboxMutation'];
 export type OutboxResult = components['schemas']['OutboxResult'];
 export type SyncBootstrap = components['schemas']['SyncBootstrap'];
 export type Problem = components['schemas']['Problem'];
+export type Job = components['schemas']['Job'];
+export type QueueEntry = components['schemas']['QueueEntry'];
+export type Delegation = components['schemas']['Delegation'];
+export type CreateDelegationRequest = components['schemas']['CreateDelegationRequest'];
+export type VerifyJobRequest = components['schemas']['VerifyJobRequest'];
 
 export interface DrainOutboxResponse {
   results: OutboxResult[];
@@ -14,6 +19,43 @@ export interface SubmitJobResponse {
   status: number;
   ok: boolean;
   body?: unknown;
+  problem?: Problem;
+}
+
+export interface PageMeta {
+  nextCursor?: string | null;
+  hasMore: boolean;
+  limit: number;
+  total?: number | null;
+}
+
+export interface QueuePage {
+  data: QueueEntry[];
+  page: PageMeta;
+}
+
+export interface DelegationsPage {
+  data: Delegation[];
+  page: PageMeta;
+}
+
+/** Shared shape for the slice-7/11a approval endpoints (verify/return) and
+ * the delegation write endpoints (create/revoke) — mirrors `SubmitJobResponse`
+ * (ok:true carries the body, ok:false carries the Problem) rather than
+ * throwing, because these calls have specific, screen-visible non-2xx
+ * outcomes (403 step-up-required, 409 self-approval/invalid-transition, 422
+ * validation) that a caller must branch on, not treat as transport failure. */
+export interface JobActionResponse {
+  status: number;
+  ok: boolean;
+  body?: Job;
+  problem?: Problem;
+}
+
+export interface DelegationActionResponse {
+  status: number;
+  ok: boolean;
+  body?: Delegation;
   problem?: Problem;
 }
 
@@ -43,6 +85,43 @@ export interface SyncTransport {
    * an outbox batch. This method exists precisely so no caller can
    * accidentally smuggle a submit into `drainOutbox`. */
   submitJob(jobId: string, idempotencyKey: string): Promise<SubmitJobResponse>;
+
+  /** GET /jobs/{jobId} — the full record (frozen-revision checklist,
+   * measurements, results, parts, attachments, approval history). Used by
+   * the Record Review screen, which cannot rely on the offline job cache: a
+   * verifier's device never bootstrapped the submitter's job. Online-only,
+   * by design — reviewing/signing a record is not an offline workflow. */
+  getJob(jobId: string): Promise<Job>;
+
+  /** GET /queue — slice 11a. Records awaiting the caller's verification,
+   * including any active delegator's queue (PR-076). */
+  getQueue(params?: { limit?: number; cursor?: string }): Promise<QueuePage>;
+
+  /** POST /jobs/{jobId}/verify — slice 7/11a. `request.drawnSignature` is
+   * REQUIRED (`shared/src/job.ts` verifyJobRequestSchema). A 403 with
+   * `problem.type` ending in `step-up-required` means the caller must
+   * re-authenticate (see `auth/auth-client.ts#stepUp`) and retry with the
+   * SAME signature. */
+  verifyJob(
+    jobId: string,
+    request: VerifyJobRequest,
+    idempotencyKey?: string,
+  ): Promise<JobActionResponse>;
+
+  /** POST /jobs/{jobId}/return — slice 7. `reason` must be >= 10 characters
+   * (INV-13); the server re-validates and rejects 422 regardless. */
+  returnJob(jobId: string, reason: string, idempotencyKey?: string): Promise<JobActionResponse>;
+
+  /** GET /delegations — slice 11a. The caller's own delegation grants, plus
+   * grants made TO them, either direction. */
+  getDelegations(): Promise<DelegationsPage>;
+
+  /** POST /delegations — slice 11a. */
+  createDelegation(request: CreateDelegationRequest): Promise<DelegationActionResponse>;
+
+  /** DELETE /delegations/{delegationId} — slice 11a. Idempotent: revoking an
+   * already-revoked delegation returns it unchanged, not an error. */
+  revokeDelegation(delegationId: string): Promise<DelegationActionResponse>;
 }
 
 export class TransportError extends Error {
