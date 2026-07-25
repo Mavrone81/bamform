@@ -352,6 +352,11 @@ model Asset {
   status               AssetStatusT   @default(active)
   decommissionedOn     DateTime?      @map("decommissioned_on") @db.Date
   active               Boolean        @default(true)
+  // Slice 13a / Samuel's decision (B-09): a `code` the system generated on
+  // creation (rather than one the admin typed explicitly) is PROVISIONAL —
+  // shown "RED" in the UI — until an admin confirms it by changing it, which
+  // clears this flag. See `assets.service.ts#create`/`#update`.
+  codeProvisional      Boolean        @default(false) @map("code_provisional")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)

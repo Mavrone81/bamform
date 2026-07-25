@@ -249,6 +249,97 @@ describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', ()
     });
   });
 
+  describe('machine-code provisional/"RED" generation (slice 13a, B-09)', () => {
+    it('POST /assets without a code auto-generates one and flags it provisional/"RED"', async () => {
+      const token = await engineerToken();
+      const assetTypeId = await makeAssetType();
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/assets')
+        .set(...authHeader(token))
+        .send({ assetTypeId, scheduleAnchorDate: '2026-01-01' })
+        .expect(201);
+
+      expect(typeof res.body.code).toBe('string');
+      expect(res.body.code.length).toBeGreaterThan(0);
+      expect(res.body.codeProvisional).toBe(true);
+    });
+
+    it('POST /assets WITH an explicit code is treated as already confirmed (codeProvisional: false)', async () => {
+      const token = await engineerToken();
+      const assetTypeId = await makeAssetType();
+      const code = `AW-${randomUUID()}`;
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/assets')
+        .set(...authHeader(token))
+        .send({ code, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+        .expect(201);
+
+      expect(res.body).toMatchObject({ code, codeProvisional: false });
+    });
+
+    it('PATCH changing `code` confirms it — clears codeProvisional', async () => {
+      const token = await engineerToken();
+      const assetTypeId = await makeAssetType();
+
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/assets')
+        .set(...authHeader(token))
+        .send({ assetTypeId, scheduleAnchorDate: '2026-01-01' })
+        .expect(201);
+      expect(created.body.codeProvisional).toBe(true);
+
+      const confirmedCode = `IMOS-${randomUUID()}`;
+      const patched = await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${created.body.id}`)
+        .set(...authHeader(token))
+        .send({ code: confirmedCode })
+        .expect(200);
+
+      expect(patched.body).toMatchObject({ code: confirmedCode, codeProvisional: false });
+    });
+
+    it('PATCH sending the SAME code back does not spuriously clear codeProvisional', async () => {
+      const token = await engineerToken();
+      const assetTypeId = await makeAssetType();
+
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/assets')
+        .set(...authHeader(token))
+        .send({ assetTypeId, scheduleAnchorDate: '2026-01-01' })
+        .expect(201);
+      expect(created.body.codeProvisional).toBe(true);
+
+      const patched = await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${created.body.id}`)
+        .set(...authHeader(token))
+        .send({ code: created.body.code, description: 'no-op code resend' })
+        .expect(200);
+
+      expect(patched.body).toMatchObject({ code: created.body.code, codeProvisional: true });
+    });
+
+    it('a PATCH that never touches `code` leaves codeProvisional untouched', async () => {
+      const token = await engineerToken();
+      const assetTypeId = await makeAssetType();
+
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/assets')
+        .set(...authHeader(token))
+        .send({ assetTypeId, scheduleAnchorDate: '2026-01-01' })
+        .expect(201);
+
+      const patched = await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${created.body.id}`)
+        .set(...authHeader(token))
+        .send({ description: 'unrelated field' })
+        .expect(200);
+
+      expect(patched.body.codeProvisional).toBe(true);
+    });
+  });
+
   /** Creates an asset directly in the given area via POST, returns its id. */
   async function createAssetCode(
     server: unknown,

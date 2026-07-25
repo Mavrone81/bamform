@@ -142,7 +142,29 @@ describe('test:contract — response-schema conformance', () => {
         'scheduleAnchorDate',
         'status',
         'active',
+        // Slice 13a / B-09 — see `assets/machine-code.ts`.
+        'codeProvisional',
       ],
+    },
+    {
+      // Slice 13a — `users.mapper.ts#toUser` always populates every one of
+      // these keys; NEVER a password/passwordHash field (UR-074).
+      schemaName: 'User',
+      knownKeys: [
+        'id',
+        'employeeId',
+        'fullName',
+        'email',
+        'status',
+        'active',
+        'roles',
+        'createdAt',
+        'updatedAt',
+      ],
+    },
+    {
+      schemaName: 'Role',
+      knownKeys: ['id', 'code', 'name', 'description'],
     },
     {
       schemaName: 'ScheduleRule',

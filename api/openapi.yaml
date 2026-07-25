@@ -1926,12 +1926,22 @@ components:
         scheduleAnchorDate: { type: string, format: date }
         status: { $ref: '#/components/schemas/AssetStatus' }
         active: { type: boolean }
+        codeProvisional:
+          type: boolean
+          description: |
+            Slice 13a / B-09: `true` when `code` was auto-generated (the
+            admin did not supply one) and not yet confirmed — the UI renders
+            this "RED". Cleared the moment an admin changes `code`.
 
     AssetCreate:
       type: object
-      required: [code, assetTypeId, scheduleAnchorDate]
+      required: [assetTypeId, scheduleAnchorDate]
       properties:
-        code: { type: string, minLength: 1, maxLength: 50 }
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Optional — omit to have the server auto-generate a provisional/"RED" code (B-09).
         assetTypeId: { type: string, format: uuid }
         description: { type: string }
         manufacturer: { type: string }
@@ -1945,6 +1955,11 @@ components:
     AssetUpdate:
       type: object
       properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Changing this confirms an auto-generated code — clears `codeProvisional`.
         description: { type: string }
         manufacturer: { type: string }
         model: { type: string }
@@ -1952,6 +1967,67 @@ components:
         locationDetail: { type: string }
         status: { $ref: '#/components/schemas/AssetStatus' }
         active: { type: boolean }
+
+    RoleCode:
+      type: string
+      description: The closed set `role.code` holds — seeded by migration, not created through the API (UR-073).
+      enum: [MAINTAINER, TEAM_LEADER, ENGINEER, DOC_CONTROLLER, ADMIN, AUDITOR]
+
+    Role:
+      type: object
+      required: [id, code, name]
+      properties:
+        id: { type: string, format: uuid }
+        code: { $ref: '#/components/schemas/RoleCode' }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+
+    UserStatus:
+      type: string
+      enum: [ACTIVE, SUSPENDED, DEACTIVATED]
+
+    User:
+      type: object
+      required: [id, fullName, email, status, active, roles, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        employeeId: { type: [string, 'null'] }
+        fullName: { type: string }
+        email: { type: string, format: email }
+        status: { $ref: '#/components/schemas/UserStatus' }
+        active: { type: boolean }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/RoleCode' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    UserCreate:
+      type: object
+      required: [fullName, email, password, roleCodes]
+      properties:
+        fullName: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email }
+        employeeId: { type: string, minLength: 1, maxLength: 50 }
+        password:
+          type: string
+          minLength: 12
+          description: Admin-set initial password (this slice's documented minimal mechanism). Never returned by any endpoint.
+        roleCodes:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RoleCode' }
+
+    UserUpdate:
+      type: object
+      properties:
+        fullName: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email }
+        active: { type: boolean }
+        roleCodes:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RoleCode' }
 
     ScheduleRule:
       type: object

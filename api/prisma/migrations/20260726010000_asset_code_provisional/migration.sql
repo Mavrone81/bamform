@@ -1,0 +1,20 @@
+-- BamForm — slice 13a (admin backend: machine-code provisional-RED
+-- generation, Samuel's decision / defect B-09). Forward-only, additive;
+-- does not edit any prior migration.
+--
+-- Reversal:
+--   ALTER TABLE "asset" DROP COLUMN "code_provisional";
+--
+-- ============================================================ Why
+--
+-- Adding an asset without an explicit `code` now auto-generates one
+-- (`assets/machine-code.ts`) and must flag it as system-generated/
+-- unconfirmed so the UI can render it "RED" until an admin confirms it by
+-- changing the code (which clears the flag) — `assets.service.ts#create`/
+-- `#update`. Default `false` (not `true`): every asset row created before
+-- this migration was given an explicit `code` by the caller (slice 4's
+-- `AssetCreate.code` was — and remains — accepted), so it is already
+-- confirmed, not provisional. This is a single boolean column, no index,
+-- no backfill beyond the constant default — no `CONCURRENTLY` needed
+-- (M-06 applies to indexes on large tables, not a column-with-default add).
+ALTER TABLE "asset" ADD COLUMN IF NOT EXISTS "code_provisional" BOOLEAN NOT NULL DEFAULT false;
