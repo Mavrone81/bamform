@@ -34,22 +34,20 @@
  *     S-19        api/test/integration/attachments-security.spec.ts (slice 6 — attachment IDOR, 403, object not served)
  *     S-30        api/test/integration/attachments-security.spec.ts (slice 6 — magic-byte rejects a renamed executable)
  *     S-32        api/test/integration/jobs-attachments.spec.ts (slice 6 — attachment over ATTACHMENT_MAX_BYTES rejected)
+ *     S-10        api/test/integration/records-integrity.spec.ts (slice 7 — tampered content_hash detected via GET /records/{id}/integrity)
+ *     S-22        ALSO api/test/integration/approval-verify.spec.ts (slice 7 — live HTTP self-approval 409 on POST /jobs/{id}/verify, in
+ *                 addition to the pre-existing DB-trigger-level triggers.spec.ts coverage)
+ *     S-24        api/test/integration/approval-auditor-readonly.spec.ts (slice 7 — AUDITOR rejected 403 on verify/return/recall/void)
+ *     S-25        api/test/integration/approval-delegation.spec.ts (slice 7 — expired/revoked/absent delegation's onBehalfOf claim rejected)
  *   HANDLED BY A DIFFERENT JOB-6 STEP (not test:security):
  *     S-15        npm run test:log-redaction (this same job, next step)
  *     S-28        bash scripts/ci/assert-csp-safe.sh (this same job)
  *     S-33        npm audit / CodeQL / Trivy (this same job, earlier steps)
  *     S-34        gitleaks-action (job 2 · Secret scan)
- *   PENDING — feature not yet built in slices 1-4/6 (test.todo below):
- *     S-10, S-11, S-12, S-14, S-16, S-17, S-20, S-24, S-25, S-27, S-31
+ *   PENDING — feature not yet built in slices 1-4/6-7 (test.todo below):
+ *     S-11, S-12, S-14, S-16, S-17, S-20, S-27, S-31
  */
 describe('S-01..S-34 pending cases (later slices) — tracked, never faked', () => {
-  test.todo(
-    'S-10 (T-1): alter an archived record directly in the DB, run /records/{id}/integrity — ' +
-      'reported as mismatch. PENDING: no records module / integrity-check endpoint exists yet ' +
-      '(api/src has no "records" or "integrity" route — canonical-serialiser and record-signer ' +
-      'are wired primitives with no live endpoint on top of them yet).',
-  );
-
   test.todo(
     'S-11 (T-2): alter an audit_event hash, run chain verification — break detected at the ' +
       'right sequence. PENDING: audit_event hash-chain construction is proven correct at write ' +
@@ -89,19 +87,6 @@ describe('S-01..S-34 pending cases (later slices) — tracked, never faked', () 
     'S-20 (I-9): trigger a 500 — no stack trace, SQL or hostname in the response. PENDING: no ' +
       'global exception filter exists yet under api/src to assert a sanitised 500 body against — ' +
       'later slice.',
-  );
-
-  test.todo(
-    'S-24 (E-4): AUDITOR attempts any write — rejected; connection is read-only. PENDING: the ' +
-      'AUDITOR role is seeded (api/test/integration/schema-constraints.spec.ts confirms the row ' +
-      'exists) but no dedicated read-only-connection/write-rejection test exists yet — later ' +
-      'slice.',
-  );
-
-  test.todo(
-    'S-25 (E-5): act under an expired delegation — not permitted. PENDING: no delegation-acting ' +
-      'feature exists yet (I-INV-20 in TEST_PLAN covers queue exclusion, a different, ' +
-      'not-yet-built integration test) — later slice.',
   );
 
   test.todo(

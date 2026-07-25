@@ -1,0 +1,292 @@
+import type { INestApplication } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import request from 'supertest';
+import { adminPool, closeAll, resetDatabase } from './helpers/db';
+import { createJobFixture, createUser, grantRole } from './helpers/fixtures';
+import { authHeader, mintAccessToken } from './helpers/test-auth';
+import { createTestApp } from './helpers/app';
+import { closeRedis, resetRedis } from './helpers/redis';
+import { realPngBytes, realPngDataUrl } from './helpers/image-fixtures';
+import { loadFieldEncryptionService } from './helpers/auth-fixtures';
+
+/**
+ * PR-041..046/070..077/093/094 — two-stage verification (SAMUEL'S CONFIRMED
+ * DECISIONS): stage 1 TEAM_LEADER, stage 2 ENGINEER. S-22 (live HTTP
+ * self-approval, complementing the DB-trigger-level `triggers.spec.ts`),
+ * step-up (S-07/08 reused), drawn signature encrypted storage, content-bound
+ * Ed25519 signature, I-INV-13 (VERIFIED+ARCHIVED in one transaction).
+ */
+describe('Jobs — POST /jobs/{id}/verify (two-stage approval, PR-041..046/093/094)', () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    app = await createTestApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await closeAll();
+    await closeRedis();
+  });
+
+  beforeEach(async () => {
+    await resetDatabase();
+    await resetRedis();
+  });
+
+  async function makeSubmittedJob() {
+    const maintainerId = await createUser('maintainer');
+    await grantRole(maintainerId, 'MAINTAINER');
+    const { jobId } = await createJobFixture(`PM-VERIFY-${randomUUID()}`, 'submitted', {
+      submittedBy: maintainerId,
+      submittedAt: new Date(),
+      currentStageOrdinal: 1,
+    });
+    return { jobId, maintainerId };
+  }
+
+  async function stepUpVerifier(roleCode: 'TEAM_LEADER' | 'ENGINEER', label: string) {
+    const userId = await createUser(label);
+    await grantRole(userId, roleCode);
+    await adminPool.query(`UPDATE "app_user" SET "last_authenticated_at" = now() WHERE id = $1`, [
+      userId,
+    ]);
+    const token = await mintAccessToken(app, userId, [roleCode]);
+    return { userId, token };
+  }
+
+  it('I-INV-13/PR-042: stage 1 (TEAM_LEADER) advances without archiving; stage 2 (ENGINEER) archives in the SAME transaction — never rests VERIFIED', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl');
+    const eng = await stepUpVerifier('ENGINEER', 'eng');
+
+    const stage1 = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+    expect(stage1.body.status).toBe('SUBMITTED');
+
+    const afterStage1 = await adminPool.query(
+      'SELECT status, current_stage_ordinal, verified_at, archived_at FROM "job" WHERE id = $1',
+      [jobId],
+    );
+    expect(afterStage1.rows[0].status).toBe('submitted');
+    expect(afterStage1.rows[0].current_stage_ordinal).toBe(2);
+    expect(afterStage1.rows[0].verified_at).toBeNull();
+    expect(afterStage1.rows[0].archived_at).toBeNull();
+
+    const stage2 = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(eng.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+    expect(stage2.body.status).toBe('ARCHIVED');
+
+    const afterStage2 = await adminPool.query(
+      'SELECT status, current_stage_ordinal, verified_at, archived_at FROM "job" WHERE id = $1',
+      [jobId],
+    );
+    expect(afterStage2.rows[0].status).toBe('archived');
+    expect(afterStage2.rows[0].current_stage_ordinal).toBeNull();
+    // I-INV-13: VERIFIED and ARCHIVED in the same transaction — both
+    // timestamps are set together; the job never rested at status='verified'
+    // (proved structurally: this is the FIRST read after stage 2, and status
+    // is already 'archived', never observed as 'verified').
+    expect(afterStage2.rows[0].verified_at).not.toBeNull();
+    expect(afterStage2.rows[0].archived_at).not.toBeNull();
+
+    const steps = await adminPool.query(
+      'SELECT stage_ordinal, action, actor_id FROM "approval_step" WHERE job_id = $1 ORDER BY acted_at',
+      [jobId],
+    );
+    expect(steps.rows).toEqual([
+      { stage_ordinal: 1, action: 'verified', actor_id: tl.userId },
+      { stage_ordinal: 2, action: 'verified', actor_id: eng.userId },
+    ]);
+  });
+
+  it('S-22 (live): the submitter cannot verify their own record — 409 self-approval (INV-05, PR-044, service-layer)', async () => {
+    const { jobId, maintainerId } = await makeSubmittedJob();
+    // Grant the submitter TEAM_LEADER too, so the role gate passes and the
+    // self-approval check is what actually rejects the request.
+    await grantRole(maintainerId, 'TEAM_LEADER');
+    await adminPool.query(`UPDATE "app_user" SET "last_authenticated_at" = now() WHERE id = $1`, [
+      maintainerId,
+    ]);
+    const token = await mintAccessToken(app, maintainerId, ['TEAM_LEADER']);
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(409);
+    expect(res.body).toMatchObject({ type: '/errors/self-approval' });
+
+    const jobRow = await adminPool.query('SELECT status FROM "job" WHERE id = $1', [jobId]);
+    expect(jobRow.rows[0].status).toBe('submitted'); // unchanged
+  });
+
+  it('S-07-equivalent: step-up required — a verifier who has not recently authenticated gets 403 step-up-required', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tlId = await createUser('tl-stale');
+    await grantRole(tlId, 'TEAM_LEADER');
+    await adminPool.query(
+      `UPDATE "app_user" SET "last_authenticated_at" = now() - interval '20 minutes' WHERE id = $1`,
+      [tlId],
+    );
+    const token = await mintAccessToken(app, tlId, ['TEAM_LEADER']);
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(403);
+    expect(res.body).toMatchObject({ type: '/errors/step-up-required' });
+  });
+
+  it('a verifier not eligible for THIS stage (wrong role) is rejected 403 forbidden', async () => {
+    const { jobId } = await makeSubmittedJob(); // currentStageOrdinal = 1 (TEAM_LEADER only)
+    const eng = await stepUpVerifier('ENGINEER', 'eng-wrong-stage');
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(eng.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(403);
+    expect(res.body).toMatchObject({ type: '/errors/forbidden' });
+  });
+
+  it('rejects a drawnSignature that is not a genuine PNG (magic-byte check, S-30-style) — 422', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-badpng');
+    const fakePng = `data:image/png;base64,${Buffer.from('not a real png').toString('base64')}`;
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: fakePng })
+      .expect(422);
+    expect(res.body).toMatchObject({ type: '/errors/attachment-rejected' });
+
+    const stepCount = await adminPool.query(
+      'SELECT count(*) FROM "approval_step" WHERE job_id = $1',
+      [jobId],
+    );
+    expect(Number(stepCount.rows[0].count)).toBe(0);
+  });
+
+  it('the drawn signature is stored ENCRYPTED — raw column bytes differ from plaintext, and decrypt round-trips to the original PNG', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-encrypt');
+    const png = realPngBytes(80);
+    const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: dataUrl })
+      .expect(200);
+
+    const row = await adminPool.query(
+      'SELECT id, drawn_signature_ct, drawn_signature_dek_version FROM "approval_step" WHERE job_id = $1',
+      [jobId],
+    );
+    const stepId = row.rows[0].id as string;
+    const ciphertext: Buffer = row.rows[0].drawn_signature_ct;
+    const dekVersion: number = row.rows[0].drawn_signature_dek_version;
+
+    expect(ciphertext).not.toBeNull();
+    // Not the plaintext base64 string bytes, and not the raw PNG bytes either.
+    expect(ciphertext.equals(Buffer.from(png.toString('base64'), 'utf8'))).toBe(false);
+    expect(ciphertext.includes(png)).toBe(false);
+
+    const fieldEncryption = loadFieldEncryptionService();
+    const decryptedBase64 = fieldEncryption.decrypt(ciphertext, dekVersion, {
+      table: 'approval_step',
+      column: 'drawn_signature_ct',
+      rowId: stepId,
+    });
+    expect(Buffer.from(decryptedBase64, 'base64').equals(png)).toBe(true);
+  });
+
+  it('the approval_step carries a content_hash + Ed25519 signature, verifiable via GET /records/{id}/integrity', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-integrity');
+    const eng = await stepUpVerifier('ENGINEER', 'eng-integrity');
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(eng.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+
+    const integrity = await request(app.getHttpServer())
+      .get(`/api/v1/records/${jobId}/integrity`)
+      .set(...authHeader(eng.token))
+      .expect(200);
+
+    expect(integrity.body.recordId).toBe(jobId);
+    expect(integrity.body.intact).toBe(true);
+    expect(integrity.body.signatures).toHaveLength(2);
+    for (const sig of integrity.body.signatures) {
+      expect(sig.signatureValid).toBe(true);
+    }
+    expect(integrity.body.signatures[1].hashMatches).toBe(true);
+  });
+
+  it('the GET /jobs/{id} response includes approvalSteps, without leaking the encrypted drawn signature', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-read');
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/jobs/${jobId}`)
+      .set(...authHeader(tl.token))
+      .expect(200);
+
+    expect(res.body.approvalSteps).toHaveLength(1);
+    expect(res.body.approvalSteps[0]).toMatchObject({ stageOrdinal: 1, action: 'VERIFIED' });
+    const bodyText = JSON.stringify(res.body);
+    expect(bodyText).not.toMatch(/drawnSignature/i);
+  });
+
+  it('verify is idempotent when the client replays the same Idempotency-Key', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-idem');
+    const key = randomUUID();
+    const drawnSignature = realPngDataUrl();
+
+    const first = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .set('Idempotency-Key', key)
+      .send({ drawnSignature })
+      .expect(200);
+
+    const second = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .set('Idempotency-Key', key)
+      .send({ drawnSignature })
+      .expect(200);
+
+    expect(second.body).toEqual(first.body);
+
+    const stepCount = await adminPool.query(
+      'SELECT count(*) FROM "approval_step" WHERE job_id = $1',
+      [jobId],
+    );
+    expect(Number(stepCount.rows[0].count)).toBe(1);
+  });
+});
