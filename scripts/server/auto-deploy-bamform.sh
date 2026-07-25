@@ -18,7 +18,7 @@ SERVICES="bamform-api bamform-worker bamform-web"
 BACKUP_DIR=/var/backups/bamform
 # shellcheck disable=SC1091
 [ -f "$REPO/.env" ] && set -a && . "$REPO/.env" && set +a
-HEALTH_URL="http://127.0.0.1:${API_PORT:?API_PORT not set in .env}/api/v1/health"
+HEALTH_URL="http://127.0.0.1:${API_PORT:?API_PORT not set in .env}/api/v1/healthz"
 
 log()  { printf '%s  %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 fail() { log "ERROR: $*"; exit 1; }
@@ -48,7 +48,12 @@ docker compose -f "$COMPOSE_FILE" build $SERVICES \
   || fail "build failed — nothing restarted"
 
 log "Migrating"
-docker compose -f "$COMPOSE_FILE" run --rm bamform-migrate \
+# --build is REQUIRED: the migrate image carries api/prisma/migrations, but the
+# build step above only builds $SERVICES (api/worker/web). Without --build,
+# `run` reuses a stale migrate image that lacks the new slice's migration, so
+# `prisma migrate deploy` reports "up to date" and silently skips it. (This bit
+# slice 7 in prod: 21 migrations on disk, 20 applied, migrate image 12h stale.)
+docker compose -f "$COMPOSE_FILE" run --rm --build bamform-migrate \
   || fail "MIGRATION FAILED — app NOT restarted; previous version still serving"
 
 log "Restarting BamForm services only"
