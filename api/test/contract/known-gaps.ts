@@ -46,10 +46,12 @@ export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
   // (implemented, contract-enforced below; recall/void are new paths added
   // to openapi.yaml alongside their implementation, same as slice 6's note
   // above, so they never needed an allowlist entry either). GET /queue (the
-  // verifier-queue UI's read endpoint) is explicitly OUT of slice 7's scope
-  // (slice-7-brief.md Constraints: "Do NOT build the verifier-queue UI
-  // (slice 11)") — stays allowlisted for slice 11.
-  { method: 'GET', path: '/queue' },
+  // verifier-queue UI's read endpoint) was allowlisted here for slice 11 —
+  // slice 11a (backend) implements it now, so it moved OUT of this list.
+  // GET/POST /delegations, DELETE /delegations/{delegationId} — slice 11a,
+  // implemented alongside GET /queue; never allowlisted (added to
+  // openapi.yaml together with their implementation, same convention as
+  // slice 6/7's new paths noted above).
   // Slice 9 — sync API: bootstrap, outbox, idempotency store
   { method: 'GET', path: '/sync/bootstrap' },
   { method: 'POST', path: '/sync/outbox' },
@@ -135,5 +137,12 @@ export const COLLECTION_ENDPOINTS: readonly CollectionEndpointClassification[] =
     reason:
       'job (DBD §6.15) has no areaId column of its own, but job.asset.areaId does — PR-API-10 requires filtering by user_area_scope through that relation. (A role-driven "own jobs only" restriction also applies for MAINTAINER — see src/jobs/job-access.ts — but that is a role rule, not the area-scope mechanism this check verifies.)',
     sourceFile: 'src/jobs/jobs.repository.ts',
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/delegations',
+    areaScoped: false,
+    reason:
+      "delegation (DBD §6.5) has no areaId column and is not filtered by area — it is filtered by IDENTITY (the caller's own grants, either direction, src/delegations/delegations.repository.ts#findForUser), an orthogonal mechanism to PR-API-10 area scoping.",
   },
 ];

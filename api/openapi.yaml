@@ -32,6 +32,7 @@ tags:
   - name: Templates
   - name: Jobs
   - name: Approval
+  - name: Delegations
   - name: Sync
   - name: Archive
   - name: Reports
@@ -1267,7 +1268,16 @@ paths:
       tags: [Approval]
       operationId: getVerificationQueue
       summary: Records awaiting the caller's verification, including delegated queues
-      description: Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        PR-073/076/081, UR-049. A record qualifies when it is `SUBMITTED`,
+        the caller is not the submitter, the caller holds a role satisfying
+        the CURRENT stage, and the record's area is within the caller's
+        scope (or they are unrestricted). PR-076: the effective queue also
+        includes any active delegator's queue (window contains now,
+        resolved fresh on every request — never cached), each such entry's
+        `onBehalfOf` set to that delegator's user id. Ordered by job id
+        (UUIDv7, time-ordered) ascending. A non-verifier (holds none of any
+        stage's roles) simply gets an empty page — not an error.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -1284,6 +1294,76 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/QueueEntry' }
+
+  /delegations:
+    get:
+      tags: [Delegations]
+      operationId: listDelegations
+      summary: The caller's own delegation grants, plus grants made TO them
+      description: PR-038/PR-076/UR-052. No role restriction — every authenticated user may see their own delegations.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Delegations involving the caller, either direction
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Delegation' }
+    post:
+      tags: [Delegations]
+      operationId: createDelegation
+      summary: Grant delegated verification authority
+      description: |
+        PR-038/UR-052. Permission matrix §4.1 "Create delegation":
+        TEAM_LEADER, ENGINEER, ADMIN. `createdBy` is always the authenticated
+        caller (never accepted from the request body, PR-090). A
+        `TEAM_LEADER`/`ENGINEER` may only delegate AWAY THEIR OWN authority
+        (`delegatorId` must equal the caller); only `ADMIN` may set up a
+        delegation between two other users.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateDelegationRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Delegation' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /delegations/{delegationId}:
+    parameters:
+      - $ref: '#/components/parameters/DelegationId'
+    delete:
+      tags: [Delegations]
+      operationId: revokeDelegation
+      summary: Revoke a delegation early
+      description: |
+        Sets `revokedAt` — does NOT delete the row (BUILD_HANDOFF
+        non-negotiable #7, no hard DELETE). Permitted for ADMIN, the
+        delegation's own `delegatorId`, or whoever `createdBy` it.
+        Idempotent — revoking an already-revoked delegation returns it
+        unchanged rather than erroring.
+      responses:
+        '200':
+          description: Revoked (or already was)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Delegation' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
 
   /sync/bootstrap:
     get:
@@ -1474,6 +1554,11 @@ components:
       schema: { type: string, format: uuid }
     RevisionId:
       name: revisionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DelegationId:
+      name: delegationId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -2028,12 +2113,42 @@ components:
       allOf:
         - $ref: '#/components/schemas/JobSummary'
         - type: object
+          required: [submittedAt, ageHours, escalated]
           properties:
             submittedAt: { type: string, format: date-time }
             submittedByName: { type: string }
             ageHours: { type: number }
             escalated: { type: boolean }
-            onBehalfOf: { type: [string, 'null'] }
+            onBehalfOf:
+              type: [string, 'null']
+              format: uuid
+              description: The delegator's user id (PR-076) when this entry is present because of an active delegation, not the caller's own eligibility.
+
+    Delegation:
+      type: object
+      required: [id, delegatorId, delegateId, validFrom, validTo, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        delegatorId: { type: string, format: uuid }
+        delegatorName: { type: string }
+        delegateId: { type: string, format: uuid }
+        delegateName: { type: string }
+        validFrom: { type: string, format: date-time }
+        validTo: { type: string, format: date-time }
+        reason: { type: [string, 'null'] }
+        createdBy: { type: string, format: uuid }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    CreateDelegationRequest:
+      type: object
+      required: [delegatorId, delegateId, validFrom, validTo]
+      properties:
+        delegatorId: { type: string, format: uuid }
+        delegateId: { type: string, format: uuid }
+        validFrom: { type: string, format: date-time }
+        validTo: { type: string, format: date-time }
+        reason: { type: [string, 'null'] }
 
     RecordSummary:
       type: object
