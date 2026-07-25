@@ -17,9 +17,39 @@
 #     ^5.0.8 (the patched line) wherever npm can hoist it; a few deeply
 #     nested copies inside the above tools resist the override. No runtime
 #     exposure.
+#
+#   GHSA-vj76-c3g6-qr5v / GHSA-8cj5-5rvv-wf4v / GHSA-pq67-2wwv-3xjx —
+#     tar-fs symlink-validation / path-traversal issues on a CRAFTED tarball.
+#     Transitive via `puppeteer` -> `@puppeteer/browsers` -> `tar-fs@3.0.4`
+#     (slice 12, PR-117 — server-side PDF rendering). This `tar-fs` only
+#     ever runs during `npm install`'s postinstall (extracting Puppeteer's
+#     OWN bundled Chromium download from a tarball Puppeteer's own code
+#     fetches from Google's Chrome-for-Testing CDN — not an
+#     attacker-controlled source) and NEVER at runtime: the shipped
+#     `api/Dockerfile` sets `PUPPETEER_SKIP_DOWNLOAD=true` in every stage
+#     that runs `npm ci` (see that file), so `tar-fs` is never invoked at
+#     all in the built image — it uses the distro `chromium` package
+#     instead. Pinning `puppeteer` to a version whose `@puppeteer/browsers`
+#     resolves a patched `tar-fs` is not currently possible without moving
+#     to a puppeteer major (22+) that is ESM-only and breaks this
+#     CommonJS/ts-jest toolchain (see pdf/chromium-browser.service.ts's doc
+#     comment); tried overriding via package.json `overrides` first — npm
+#     silently would not apply it for this nested transitive position, only
+#     the allowlist route was viable within this slice's time budget.
+#   GHSA-3h5v-q93c-6h6q / GHSA-96hv-2xvq-fx4p — `ws` DoS (many headers /
+#     tiny fragments) advisories describe a `ws` SERVER receiving hostile
+#     input from a remote client. Transitive via `puppeteer-core@ws@8.16.0`
+#     (same PR-117 render pipeline): here `ws` is used the OTHER way round
+#     — Node is the CLIENT, connecting outward to Chromium's own
+#     remote-debugging (CDP) port, which Puppeteer launches as a private
+#     child process with no host port ever published (docker-compose.yml
+#     never exposes it) and no external network reachability. The
+#     "malicious remote client" precondition these advisories require does
+#     not exist in this topology. Same override-attempt/version-lock
+#     constraint as tar-fs above.
 set -euo pipefail
 
-ALLOW="GHSA-mh99-v99m-4gvg"
+ALLOW="GHSA-mh99-v99m-4gvg,GHSA-vj76-c3g6-qr5v,GHSA-8cj5-5rvv-wf4v,GHSA-pq67-2wwv-3xjx,GHSA-3h5v-q93c-6h6q,GHSA-96hv-2xvq-fx4p"
 
 audit_json="$(npm audit --json 2>/dev/null || true)"
 
