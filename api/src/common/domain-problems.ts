@@ -205,3 +205,20 @@ export function attachmentRejectedProblem(detail: string): UnprocessableEntityEx
     detail,
   });
 }
+
+/**
+ * PR-118 — the PDF footer must carry the record's integrity digest
+ * (`approval_step.content_hash`). A job that has never been through a
+ * verify/return/recall/void action has no `approval_step` row yet, so
+ * there is nothing to print in the footer — `GET /records/{recordId}/pdf`
+ * (and the export job that calls the same renderer) reject rather than
+ * emitting a PDF with a fabricated or absent digest.
+ */
+export function pdfNotYetAvailableProblem(recordId: string): ConflictException {
+  return new ConflictException({
+    type: '/errors/pdf-not-yet-available',
+    title: 'PDF not yet available',
+    status: 409,
+    detail: `Record ${recordId} has not been through any approval action yet — no integrity digest exists to print in the footer.`,
+  });
+}

@@ -7,6 +7,20 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY api/package.json ./api/
 COPY shared/package.json ./shared/
+# PR-117 (slice 12): `puppeteer` is a normal (non-dev) `api` dependency, so
+# EVERY `npm ci` in this Dockerfile installs it — including this stage and
+# `prod-deps` below, neither of which ships to the final `runtime` image
+# (only their `node_modules`/build output gets COPY'd forward selectively).
+# Without this, `npm ci` here would trigger puppeteer's own postinstall
+# Chromium download (~200MB) that is NEVER USED (the `runtime` stage's own
+# `PUPPETEER_SKIP_DOWNLOAD=true`/`PUPPETEER_EXECUTABLE_PATH` — see below —
+# only take effect there; they don't retroactively un-download anything
+# fetched in an earlier stage) — wasted bandwidth/build time and a needless
+# network dependency for a build step that has nothing to do with
+# rendering. Sets it here too so no stage in this Dockerfile ever downloads
+# a browser; the distro `chromium` package apk-installed in `runtime` is the
+# only Chromium binary this image ever ships or uses.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm ci --workspaces --include-workspace-root
 
 # ---------- build ----------
@@ -31,6 +45,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY api/package.json ./api/
 COPY shared/package.json ./shared/
+# See `deps` stage's comment above — same reason.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm ci --workspaces --include-workspace-root --omit=dev \
  && npm cache clean --force
 

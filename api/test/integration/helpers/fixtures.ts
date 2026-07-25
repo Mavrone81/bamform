@@ -231,6 +231,16 @@ export interface JobOpts {
   archivedAt?: Date | null;
   voidReason?: string | null;
   draftVersion?: number;
+  /**
+   * 'YYYY-MM-DD'; defaults to CURRENT_DATE. Slice 12 — reports/compliance
+   * and overdue fixtures need a non-default due date set AT INSERT time:
+   * INV-09 (`job_archived_immutable_trg`) rejects ANY `UPDATE` once a row's
+   * stored `status` is already `archived` (including from `adminPool`'s
+   * admin connection — it is a row-content check, not a role grant), so a
+   * create-then-UPDATE-due_on fixture pattern cannot be used for an
+   * ARCHIVED job.
+   */
+  dueOn?: string | null;
 }
 
 export async function createJob(opts: JobOpts): Promise<string> {
@@ -240,7 +250,7 @@ export async function createJob(opts: JobOpts): Promise<string> {
         "frequency", "frequency_scope", "due_on", "generated_at", "status", "assigned_to",
         "submitted_by", "submitted_at", "current_stage_ordinal", "archived_at", "void_reason",
         "draft_version")
-     VALUES ($1, $2, $3, $4, 'M1', ARRAY['M1']::"frequency_t"[], CURRENT_DATE, now(), $5, $6,
+     VALUES ($1, $2, $3, $4, 'M1', ARRAY['M1']::"frequency_t"[], COALESCE($13::date, CURRENT_DATE), now(), $5, $6,
              $7, $8, $9, $10, $11, COALESCE($12, 0))
      RETURNING id`,
     [
@@ -256,6 +266,7 @@ export async function createJob(opts: JobOpts): Promise<string> {
       opts.archivedAt ?? null,
       opts.voidReason ?? null,
       opts.draftVersion ?? null,
+      opts.dueOn ?? null,
     ],
   );
   return result.rows[0].id as string;

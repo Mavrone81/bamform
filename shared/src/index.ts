@@ -10,3 +10,4 @@ export * from './audit';
 export * from './sync';
 export * from './queue';
 export * from './delegation';
+export * from './report';

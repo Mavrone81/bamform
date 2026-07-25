@@ -52,6 +52,7 @@ export const appPool = new Pool({ connectionString: appUrl });
 const RESETTABLE_TABLES = [
   'idempotency_key',
   'notification',
+  'record_export',
   'audit_event',
   'approval_step',
   'attachment',

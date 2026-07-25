@@ -140,6 +140,19 @@ enum AuditActionT {
   @@map("audit_action_t")
 }
 
+// Slice 12 (PR-119) — `POST /records/export`'s async job status. Deliberately
+// its own small enum (not reusing `NotificationStateT`, whose `queued/sent/
+// failed/read` vocabulary is notification-specific) — mirrors how
+// `JobStatusT`/`RevisionStatusT` each get a dedicated enum per DBD §5.
+enum RecordExportStatusT {
+  pending
+  processing
+  done
+  failed
+
+  @@map("record_export_status_t")
+}
+
 // ----------------------------------------------------------------- §6.1 area
 
 model Area {
@@ -205,6 +218,7 @@ model AppUser {
   auditEventsOnBehalf AuditEvent[]           @relation("AuditEventOnBehalfOf")
   notifications      Notification[]
   idempotencyKeys    IdempotencyKey[]
+  recordExports      RecordExport[]
 
   @@map("app_user")
 }
@@ -803,4 +817,31 @@ model IdempotencyKey {
   user AppUser @relation(fields: [userId], references: [id])
 
   @@map("idempotency_key")
+}
+
+// --------------------------------------------------------- §6.24 record_export
+// Slice 12 (PR-119, UR-059) — `POST /records/export`'s async job status row.
+// Additive table (M-04, forward-only). `filterJson` snapshots the resolved
+// filter/recordIds the caller requested (so `GET /exports/{id}` can report
+// what was asked for even after the underlying records change); `objectKey`
+// is the MinIO key of the finished ZIP (ADR-007 — streamed through `api` on
+// every fetch, never presigned), null until `status = done`.
+model RecordExport {
+  id           String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  requestedBy  String              @map("requested_by") @db.Uuid
+  status       RecordExportStatusT
+  recordCount  Int                 @default(0) @map("record_count")
+  filterJson   Json?               @map("filter_json")
+  objectKey    String?             @map("object_key")
+  failedReason String?             @map("failed_reason")
+  requestedAt  DateTime            @map("requested_at") @db.Timestamptz(6)
+  completedAt  DateTime?           @map("completed_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  requester AppUser @relation(fields: [requestedBy], references: [id])
+
+  @@index([requestedBy, createdAt(sort: Desc)])
+  @@map("record_export")
 }
