@@ -363,6 +363,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/assets/{assetId}/schedule': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    /**
+     * Current schedule_rule state for one asset (one entry per frequency)
+     * @description UR-023. 403 (`/errors/out-of-scope`), not a silent 404, when the asset
+     *     exists but is outside the caller's area scope. A row exists for every
+     *     frequency with at least one active template item in the asset's
+     *     template's current revision (PR-053) — created lazily on first read
+     *     if the asset was onboarded after its template revision went current.
+     */
+    get: operations['getAssetSchedule'];
+    /**
+     * Manually adjust one frequency's next due date
+     * @description TEAM_LEADER, ENGINEER or ADMIN (permission matrix §4.1 "Adjust
+     *     schedules"). PR-058/UR-025: `adjustedReason` is mandatory (minimum 10
+     *     characters) and is recorded to the audit trail.
+     */
+    put: operations['adjustAssetSchedule'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/templates': {
     parameters: {
       query?: never;
@@ -588,7 +620,10 @@ export interface paths {
     };
     /**
      * List jobs
-     * @description Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description Area-scoped (PR-API-10). A MAINTAINER sees only jobs assigned to
+     *     them; TEAM_LEADER/ENGINEER/DOC_CONTROLLER/ADMIN/AUDITOR see every
+     *     job in their area scope (API_SPECIFICATION.md §4.1). `overdue` is
+     *     derived at read time (PR-043), never stored.
      */
     get: operations['listJobs'];
     put?: never;
@@ -610,7 +645,10 @@ export interface paths {
     };
     /**
      * Full job including the frozen template revision content
-     * @description Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description `templateRevision.items`/`.measurements` are the ACTIVE rows only
+     *     (DP-3/PR-049 — the revision bound at generation, frozen). 403
+     *     `out-of-scope` if the job's asset is outside the caller's area scope;
+     *     403 `forbidden` if a MAINTAINER requests a job not assigned to them.
      */
     get: operations['getJob'];
     put?: never;
@@ -639,7 +677,10 @@ export interface paths {
     get?: never;
     /**
      * Record or update a checklist item result
-     * @description Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description `Idempotency-Key` is REQUIRED (reachable from the offline outbox,
+     *     PR-API-16). Upserts by `(jobId, templateItemId)`. Transitions the job
+     *     ASSIGNED -> IN_PROGRESS on the first result (PRD §5.1). `If-Match` is
+     *     checked against `draftVersion` when supplied.
      */
     put: operations['recordItemResult'];
     post?: never;
@@ -667,7 +708,9 @@ export interface paths {
     get?: never;
     /**
      * Record or update a measurement reading
-     * @description Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description `judgement` is computed server-side from the frozen
+     *     `template_measurement`'s specification (PR-032) — the request never
+     *     supplies it. `Idempotency-Key` is REQUIRED (PR-API-16).
      */
     put: operations['recordMeasurementResult'];
     post?: never;
@@ -693,9 +736,68 @@ export interface paths {
     put?: never;
     /**
      * Upload a photograph. Validated by magic bytes, not extension.
-     * @description Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description Streamed through the api to MinIO (PR-011/ADR-007 — never presigned).
+     *     Content is sniffed by magic bytes, never trusted from the declared
+     *     MIME type or filename extension (S-30). Size-capped
+     *     (`ATTACHMENT_MAX_BYTES`, S-32) and per-job-capped
+     *     (`ATTACHMENT_MAX_PER_JOB`). `Idempotency-Key` is REQUIRED.
      */
     post: operations['uploadAttachment'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/jobs/{jobId}/attachments/{attachmentId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components['parameters']['JobId'];
+        attachmentId: string;
+      };
+      cookie?: never;
+    };
+    /**
+     * Fetch a stored attachment
+     * @description Streamed through the api, NEVER a presigned URL (PR-011/ADR-007).
+     *     Authorisation is evaluated on EVERY fetch, not only at upload time
+     *     (UR-074, UR-099) — an unauthorised caller gets 403 and the object is
+     *     never read off MinIO (S-19/I-INV-19).
+     */
+    get: operations['getAttachment'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/jobs/{jobId}/parts': {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Record a part consumed on this job
+     * @description UR-034/PR-033. No `DELETE` counterpart — BUILD_HANDOFF non-negotiable
+     *     #7 (`bamform_app` holds no `DELETE` grant on any table, DBD §7.1);
+     *     this supersedes API_SPECIFICATION.md §10.5's documented
+     *     `DELETE /jobs/{id}/parts/{partId}` (see slice-6-report.md).
+     *     `Idempotency-Key` is honoured when supplied but not required.
+     */
+    post: operations['recordPart'];
     delete?: never;
     options?: never;
     head?: never;
@@ -744,8 +846,18 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Verify a record. Requires step-up. Archives on success.
-     * @description Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * Verify a record. Requires step-up. Archives on the final stage.
+     * @description Two-stage route (ADR-011, delivered configuration: stage 1
+     *     TEAM_LEADER, stage 2 ENGINEER — Samuel's confirmed decision). Advances
+     *     `currentStageOrdinal` on a non-final stage; on the LAST stage,
+     *     `SUBMITTED` -> `ARCHIVED` in the SAME transaction (PR-042/INV-13) — the
+     *     job never rests `VERIFIED`. Produces an `approval_step` with the
+     *     drawn signature (encrypted) PLUS a content-bound Ed25519 signature
+     *     over the canonical record (ADR-010, PR-093/094). `onBehalfOf` (PR-076)
+     *     names the delegator when acting under an active delegation; an
+     *     expired/absent delegation is rejected `403`. Self-approval
+     *     (`actor == job.submittedBy`) is rejected `409` (INV-05, PR-044,
+     *     enforced in the service AND by a database trigger).
      */
     post: operations['verifyJob'];
     delete?: never;
@@ -770,9 +882,68 @@ export interface paths {
     put?: never;
     /**
      * Return a record to the maintainer for rework
-     * @description Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description `SUBMITTED` -> `IN_PROGRESS` (PR-074). TEAM_LEADER/ENGINEER. Reason
+     *     required, >= 10 characters (INV-13). All previously entered results
+     *     are preserved; `currentStageOrdinal` resets — a resubmission restarts
+     *     both verification stages, since the content-bound signatures of any
+     *     prior verify no longer describe the (about-to-be-reworked) content.
      */
     post: operations['returnJob'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/jobs/{jobId}/recall': {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Submitter pulls back their own submission before verification
+     * @description `SUBMITTED` -> `IN_PROGRESS` (PR-075, UR-051). Submitter only, only
+     *     while `SUBMITTED`. No request body.
+     */
+    post: operations['recallJob'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/jobs/{jobId}/void': {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Void a job. The record remains visible and queryable.
+     * @description PR-046/INV-12. TEAM_LEADER/ENGINEER/ADMIN. Reason required, >= 10
+     *     characters. Legal from SCHEDULED, ASSIGNED, IN_PROGRESS or SUBMITTED
+     *     - never from VERIFIED/ARCHIVED/VOIDED (PRD §5.1). This is NOT a
+     *     delete (non-negotiable #7 - `bamform_app` holds no `DELETE` grant on
+     *     any table); the job stays queryable with `status: VOIDED`.
+     */
+    post: operations['voidJob'];
     delete?: never;
     options?: never;
     head?: never;
@@ -788,12 +959,75 @@ export interface paths {
     };
     /**
      * Records awaiting the caller's verification, including delegated queues
-     * @description Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description PR-073/076/081, UR-049. A record qualifies when it is `SUBMITTED`,
+     *     the caller is not the submitter, the caller holds a role satisfying
+     *     the CURRENT stage, and the record's area is within the caller's
+     *     scope (or they are unrestricted). PR-076: the effective queue also
+     *     includes any active delegator's queue (window contains now,
+     *     resolved fresh on every request — never cached), each such entry's
+     *     `onBehalfOf` set to that delegator's user id. Ordered by job id
+     *     (UUIDv7, time-ordered) ascending. A non-verifier (holds none of any
+     *     stage's roles) simply gets an empty page — not an error.
      */
     get: operations['getVerificationQueue'];
     put?: never;
     post?: never;
     delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/delegations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The caller's own delegation grants, plus grants made TO them
+     * @description PR-038/PR-076/UR-052. No role restriction — every authenticated user may see their own delegations.
+     */
+    get: operations['listDelegations'];
+    put?: never;
+    /**
+     * Grant delegated verification authority
+     * @description PR-038/UR-052. Permission matrix §4.1 "Create delegation":
+     *     TEAM_LEADER, ENGINEER, ADMIN. `createdBy` is always the authenticated
+     *     caller (never accepted from the request body, PR-090). A
+     *     `TEAM_LEADER`/`ENGINEER` may only delegate AWAY THEIR OWN authority
+     *     (`delegatorId` must equal the caller); only `ADMIN` may set up a
+     *     delegation between two other users.
+     */
+    post: operations['createDelegation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/delegations/{delegationId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        delegationId: components['parameters']['DelegationId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Revoke a delegation early
+     * @description Sets `revokedAt` — does NOT delete the row (BUILD_HANDOFF
+     *     non-negotiable #7, no hard DELETE). Permitted for ADMIN, the
+     *     delegation's own `delegatorId`, or whoever `createdBy` it.
+     *     Idempotent — revoking an already-revoked delegation returns it
+     *     unchanged rather than erroring.
+     */
+    delete: operations['revokeDelegation'];
     options?: never;
     head?: never;
     patch?: never;
@@ -918,7 +1152,24 @@ export interface paths {
     };
     /**
      * Verify the hash chain over the audit log
-     * @description Slice 8 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description Walks `audit_event` ordered by `sequence`, recomputes each row's hash
+     *     using the exact formula the slice-1 database trigger
+     *     (`compute_audit_event_hash_chain`) applies at insert time, and
+     *     checks `prev_hash` linkage. Runs on demand (recompute), the same
+     *     design as `GET /records/{recordId}/integrity`. `AUDITOR`/`ADMIN`
+     *     only (SECURITY_ARCHITECTURE.md §4.2 P2, PR-097/PR-099).
+     *
+     *     CAVEAT — cannot detect tail-truncation: this check detects mutated
+     *     fields, broken hash links, and deletion of a row from the middle or
+     *     head of the chain (the next surviving row's `prev_hash` stops
+     *     matching). It CANNOT detect deletion of the most-recent events — a
+     *     truncated tail leaves the remaining chain fully self-consistent, so
+     *     `intact: true` does not rule that out. The application database role
+     *     is denied `DELETE` on `audit_event`, so this is not exploitable via a
+     *     compromised API (in-scope threat E-8 is already blocked); truncation
+     *     by a database-owner/superuser is only detectable with an external
+     *     (off-box) anchor for the chain head, which is tracked as future work
+     *     and not implemented by this endpoint.
      */
     get: operations['getAuditChainStatus'];
     put?: never;
@@ -1056,6 +1307,34 @@ export interface components {
       locationDetail?: string;
       status?: components['schemas']['AssetStatus'];
       active?: boolean;
+    };
+    ScheduleRule: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      assetId: string;
+      frequency: components['schemas']['Frequency'];
+      /**
+       * @example 1
+       * @example 3
+       * @example 6
+       * @example 12
+       */
+      intervalMonths: number;
+      /** Format: date */
+      anchorDate: string;
+      /** Format: date */
+      lastCompletedOn?: string | null;
+      /** Format: date */
+      nextDueOn: string;
+      adjustedReason?: string | null;
+      active: boolean;
+    };
+    ScheduleAdjust: {
+      frequency: components['schemas']['Frequency'];
+      /** Format: date */
+      nextDueOn: string;
+      adjustedReason: string;
     };
     Area: {
       /** Format: uuid */
@@ -1288,6 +1567,12 @@ export interface components {
       /** Format: date-time */
       recordedAt?: string;
     };
+    PartUsedInput: {
+      partNo?: string | null;
+      description: string;
+      quantity: number;
+      remarks?: string | null;
+    };
     PartUsed: {
       /** Format: uuid */
       id: string;
@@ -1323,7 +1608,8 @@ export interface components {
       action: 'SUBMITTED' | 'VERIFIED' | 'RETURNED' | 'RECALLED' | 'VOIDED';
       /** Format: uuid */
       actorId?: string;
-      actorName: string;
+      /** @description Not currently populated — see schema-level note. */
+      actorName?: string;
       actorRoleCode?: string;
       /** @description Set when acting under delegation */
       onBehalfOfName?: string | null;
@@ -1332,13 +1618,69 @@ export interface components {
       actedAt: string;
       signingKeyId?: string;
     };
+    VerifyJobRequest: {
+      /**
+       * @description Base64 PNG data-URL (`data:image/png;base64,...`, or bare
+       *     base64) captured by the on-system signature pad (the pad UI is
+       *     slice 11; this field is the backend contract it POSTs to).
+       *     422 (`/errors/attachment-rejected`) if empty/absent or not a
+       *     valid PNG (magic-byte check). Magic-byte validated server-side
+       *     (S-30-style); stored ENCRYPTED on `approval_step`
+       *     (field-encryption, PR-106 approach).
+       * @example data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...
+       */
+      drawnSignature: string;
+      /**
+       * Format: uuid
+       * @description The delegator's user id, when acting under an active delegation
+       *     (PR-076). Omit when acting on the caller's own authority.
+       */
+      onBehalfOf?: string | null;
+      comment?: string | null;
+    };
     QueueEntry: components['schemas']['JobSummary'] & {
       /** Format: date-time */
-      submittedAt?: string;
+      submittedAt: string;
       submittedByName?: string;
-      ageHours?: number;
-      escalated?: boolean;
+      ageHours: number;
+      escalated: boolean;
+      /**
+       * Format: uuid
+       * @description The delegator's user id (PR-076) when this entry is present because of an active delegation, not the caller's own eligibility.
+       */
       onBehalfOf?: string | null;
+    };
+    Delegation: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      delegatorId: string;
+      delegatorName?: string;
+      /** Format: uuid */
+      delegateId: string;
+      delegateName?: string;
+      /** Format: date-time */
+      validFrom: string;
+      /** Format: date-time */
+      validTo: string;
+      reason?: string | null;
+      /** Format: uuid */
+      createdBy: string;
+      /** Format: date-time */
+      revokedAt?: string | null;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    CreateDelegationRequest: {
+      /** Format: uuid */
+      delegatorId: string;
+      /** Format: uuid */
+      delegateId: string;
+      /** Format: date-time */
+      validFrom: string;
+      /** Format: date-time */
+      validTo: string;
+      reason?: string | null;
     };
     RecordSummary: {
       /** Format: uuid */
@@ -1408,9 +1750,10 @@ export interface components {
     };
     /**
      * @example {
-     *       "intact": true,
+     *       "intact": false,
      *       "checkedAt": "2026-07-24T02:00:00Z",
-     *       "eventCount": 418322
+     *       "eventCount": 418322,
+     *       "firstBreakSequence": 418299
      *     }
      */
     AuditChainStatus: {
@@ -1418,8 +1761,8 @@ export interface components {
       /** Format: date-time */
       checkedAt: string;
       eventCount: number;
-      /** @description Set only when `intact` is false - the first sequence number whose hash link failed to verify. */
-      firstBreakSequence?: number | null;
+      /** @description Key is always present. `null` unless `intact` is false, in which case it's the first sequence number whose hash link failed to verify. */
+      firstBreakSequence: number | null;
     };
     MeasurementTrend: {
       assetCode: string;
@@ -1457,6 +1800,7 @@ export interface components {
     AssetId: string;
     JobId: string;
     RevisionId: string;
+    DelegationId: string;
     /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
     IdempotencyKey: string;
     /** @description The job draftVersion the client based this mutation on. */
@@ -2118,6 +2462,58 @@ export interface operations {
       404: components['responses']['Problem'];
     };
   };
+  getAssetSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Schedule rules, one per scheduled frequency */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduleRule'][];
+        };
+      };
+      404: components['responses']['Problem'];
+    };
+  };
+  adjustAssetSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScheduleAdjust'];
+      };
+    };
+    responses: {
+      /** @description Updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScheduleRule'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
   listTemplates: {
     parameters: {
       query?: {
@@ -2550,6 +2946,7 @@ export interface operations {
           'application/json': components['schemas']['Job'];
         };
       };
+      403: components['responses']['Problem'];
       404: components['responses']['Problem'];
     };
   };
@@ -2664,6 +3061,64 @@ export interface operations {
       422: components['responses']['Problem'];
     };
   };
+  getAttachment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components['parameters']['JobId'];
+        attachmentId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The stored image bytes */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'image/jpeg': string;
+          'image/png': string;
+          'image/webp': string;
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  recordPart: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PartUsedInput'];
+      };
+    };
+    responses: {
+      /** @description Recorded */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PartUsed'];
+        };
+      };
+      409: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
   submitJob: {
     parameters: {
       query?: never;
@@ -2685,6 +3140,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['Job'];
+        };
+      };
+      /** @description Job is not IN_PROGRESS (PRD §5.1) - invalid-transition */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
         };
       };
       /** @description Mandatory items outstanding - the list is returned */
@@ -2712,13 +3176,11 @@ export interface operations {
     };
     requestBody?: {
       content: {
-        'application/json': {
-          comment?: string;
-        };
+        'application/json': components['schemas']['VerifyJobRequest'];
       };
     };
     responses: {
-      /** @description Verified and archived */
+      /** @description Verified (and archived, if this was the final stage) */
       200: {
         headers: {
           [name: string]: unknown;
@@ -2727,7 +3189,12 @@ export interface operations {
           'application/json': components['schemas']['Job'];
         };
       };
-      /** @description Step-up required, or not permitted for this stage */
+      /**
+       * @description `/errors/step-up-required` - re-authentication needed (PR-API-07);
+       *     `/errors/forbidden` - actor does not hold a role eligible for this
+       *     stage, or (S-25) no currently-active delegation permits acting on
+       *     behalf of the named user
+       */
       403: {
         headers: {
           [name: string]: unknown;
@@ -2736,8 +3203,21 @@ export interface operations {
           'application/problem+json': components['schemas']['Problem'];
         };
       };
-      /** @description Actor is the submitter, or invalid state transition */
+      /**
+       * @description `/errors/self-approval` - actor is the submitter (INV-05, S-22);
+       *     `/errors/invalid-transition` - job is not SUBMITTED, or was
+       *     already advanced by another verifier
+       */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      /** @description `/errors/attachment-rejected` - drawnSignature is not a valid PNG (magic-byte check) */
+      422: {
         headers: {
           [name: string]: unknown;
         };
@@ -2776,6 +3256,75 @@ export interface operations {
           'application/json': components['schemas']['Job'];
         };
       };
+      409: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  recallJob: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Recalled */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Job'];
+        };
+      };
+      /** @description `/errors/forbidden` - only the submitter may recall this record */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      409: components['responses']['Problem'];
+    };
+  };
+  voidJob: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': {
+          reason: string;
+        };
+      };
+    };
+    responses: {
+      /** @description Voided */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Job'];
+        };
+      };
+      409: components['responses']['Problem'];
       422: components['responses']['Problem'];
     };
   };
@@ -2805,9 +3354,87 @@ export interface operations {
       };
     };
   };
+  listDelegations: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Delegations involving the caller, either direction */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['Delegation'][];
+          };
+        };
+      };
+    };
+  };
+  createDelegation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateDelegationRequest'];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Delegation'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  revokeDelegation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        delegationId: components['parameters']['DelegationId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked (or already was) */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Delegation'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
   syncBootstrap: {
     parameters: {
       query?: {
+        /** @description Opaque syncToken or an ISO date-time; jobs/deletedJobIds are restricted to what changed since. */
         since?: string;
       };
       header?: never;
@@ -2825,6 +3452,7 @@ export interface operations {
           'application/json': components['schemas']['SyncBootstrap'];
         };
       };
+      422: components['responses']['Problem'];
     };
   };
   syncOutbox: {
@@ -2854,6 +3482,7 @@ export interface operations {
           };
         };
       };
+      422: components['responses']['Problem'];
       429: components['responses']['Problem'];
     };
   };
