@@ -35,13 +35,13 @@ export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
   { method: 'GET', path: '/health/ready' },
   { method: 'GET', path: '/audit-events/chain-status' },
   { method: 'GET', path: '/records/{recordId}/integrity' },
-  // Slice 6 — jobs, results, parts, attachments, submission gate
-  { method: 'GET', path: '/jobs' },
-  { method: 'GET', path: '/jobs/{jobId}' },
-  { method: 'PUT', path: '/jobs/{jobId}/items/{templateItemId}' },
-  { method: 'PUT', path: '/jobs/{jobId}/measurements/{templateMeasurementId}' },
-  { method: 'POST', path: '/jobs/{jobId}/attachments' },
-  { method: 'POST', path: '/jobs/{jobId}/submit' },
+  // Slice 6 — jobs, results, parts, attachments, submission gate — DONE.
+  // GET /jobs, GET /jobs/{jobId}, PUT items/measurements, POST attachments,
+  // POST submit moved out of this allowlist (implemented, contract-enforced
+  // below); GET /jobs/{jobId}/attachments/{attachmentId} and
+  // POST /jobs/{jobId}/parts are new paths added to openapi.yaml alongside
+  // the implementation, not documented-then-implemented, so they never
+  // needed an allowlist entry.
   // Slice 7 — approval: verify/return/recall/void, signatures, archive
   { method: 'POST', path: '/jobs/{jobId}/verify' },
   { method: 'POST', path: '/jobs/{jobId}/return' },
@@ -123,5 +123,13 @@ export const COLLECTION_ENDPOINTS: readonly CollectionEndpointClassification[] =
     path: '/api/v1/templates/{templateId}/revisions',
     areaScoped: false,
     reason: 'template_revision (DBD §6.10) is global reference data with no areaId column.',
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/jobs',
+    areaScoped: true,
+    reason:
+      'job (DBD §6.15) has no areaId column of its own, but job.asset.areaId does — PR-API-10 requires filtering by user_area_scope through that relation. (A role-driven "own jobs only" restriction also applies for MAINTAINER — see src/jobs/job-access.ts — but that is a role rule, not the area-scope mechanism this check verifies.)',
+    sourceFile: 'src/jobs/jobs.repository.ts',
   },
 ];
