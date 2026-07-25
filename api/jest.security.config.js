@@ -58,6 +58,9 @@ module.exports = {
     '<rootDir>/test/integration/approval-delegation.spec.ts', // S-25 (expired/revoked/absent delegation rejected)
     '<rootDir>/test/integration/records-integrity.spec.ts', // S-10 (tampered content_hash detected)
 
+    // -- slice 8 — audit hash-chain verification ------------------------
+    '<rootDir>/test/integration/audit-chain-status.spec.ts', // S-11 (chain break detected via GET /audit-events/chain-status) + AUDITOR/ADMIN role gate
+
     // -- honestly-tracked gaps: pending cases only, never faked ----------
     '<rootDir>/test/security/pending-cases.spec.ts',
   ],

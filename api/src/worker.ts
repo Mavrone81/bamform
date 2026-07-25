@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import type Redis from 'ioredis';
+import { AuditChainDailyVerificationService } from './audit/audit-chain-daily-verification.service';
 import { RedactingLogger } from './common/logging/redacting-logger';
 import { REDIS_CLIENT } from './redis/redis.module';
 import { cronMatches } from './scheduling/cron';
@@ -21,6 +22,14 @@ import { WorkerModule } from './worker.module';
  * signal — see `worker-healthcheck.ts`), and calls
  * `SchedulerService#run()` (PR-050/051 — lock + generation) once per
  * matching `SCHEDULER_CRON` minute when `SCHEDULER_ENABLED=true`.
+ *
+ * Slice 8 adds a second, independent cron check on the SAME tick loop:
+ * `AuditChainDailyVerificationService#run()` (PR-099 — the daily hash-chain
+ * verification) once per matching `AUDIT_CHAIN_VERIFY_CRON` minute, gated
+ * behind the SAME `SCHEDULER_ENABLED` flag ("like slice 5" per
+ * slice-8-brief.md) — a separate cron expression and its own
+ * last-fired-minute tracker, since the daily verification cadence (default
+ * `0 2 * * *`) is unrelated to the hourly job-generation sweep's.
  *
  * Deliberately ticks far more often than the default hourly cron rather
  * than trying to compute "next fire time" and sleep until then — simpler,
@@ -44,13 +53,19 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService);
   const redis = app.get<Redis>(REDIS_CLIENT);
   const scheduler = app.get(SchedulerService);
+  const auditChainDailyVerification = app.get(AuditChainDailyVerificationService);
 
   const enabled = (config.get<string>('SCHEDULER_ENABLED') ?? 'true') !== 'false';
   const cron = config.get<string>('SCHEDULER_CRON') ?? '0 * * * *';
+  const auditChainCron = config.get<string>('AUDIT_CHAIN_VERIFY_CRON') ?? '0 2 * * *';
 
-  logger.log(`worker starting — SCHEDULER_ENABLED=${enabled} SCHEDULER_CRON="${cron}"`);
+  logger.log(
+    `worker starting — SCHEDULER_ENABLED=${enabled} SCHEDULER_CRON="${cron}" ` +
+      `AUDIT_CHAIN_VERIFY_CRON="${auditChainCron}"`,
+  );
 
   let lastFiredMinuteKey: string | null = null;
+  let lastFiredAuditChainMinuteKey: string | null = null;
   let shuttingDown = false;
   let tickInFlight = false;
 
@@ -66,16 +81,21 @@ async function bootstrap(): Promise<void> {
       }
 
       const currentMinuteKey = minuteKeyOf(now);
-      if (currentMinuteKey === lastFiredMinuteKey) {
-        return; // already ran the scheduler for this matching minute
-      }
-      if (!cronMatches(cron, now)) {
-        return;
+
+      if (currentMinuteKey !== lastFiredMinuteKey && cronMatches(cron, now)) {
+        lastFiredMinuteKey = currentMinuteKey;
+        const result = await scheduler.run();
+        logger.log(`scheduler run: ${JSON.stringify(result)}`);
       }
 
-      lastFiredMinuteKey = currentMinuteKey;
-      const result = await scheduler.run();
-      logger.log(`scheduler run: ${JSON.stringify(result)}`);
+      if (currentMinuteKey !== lastFiredAuditChainMinuteKey && cronMatches(auditChainCron, now)) {
+        lastFiredAuditChainMinuteKey = currentMinuteKey;
+        const result = await auditChainDailyVerification.run();
+        logger.log(
+          `audit chain daily verification run: intact=${result.intact} ` +
+            `eventCount=${result.eventCount} firstBreakSequence=${String(result.firstBreakSequence)}`,
+        );
+      }
     } catch (error) {
       const err = error as Error;
       logger.error(`tick failed: ${err.message}`, err.stack);

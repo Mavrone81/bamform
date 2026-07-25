@@ -187,7 +187,20 @@ describe('test:contract — response-schema conformance', () => {
         'displayOrder',
       ],
     },
+    {
+      // Slice 8 — AuditEventsController#chainStatus (`GET /audit-events/chain-status`)
+      // returns exactly these four keys (see audit-events.controller.ts); the
+      // slice-7 review caught a contract-vs-code mismatch once, so this is
+      // pinned the same way the other response schemas above are.
+      schemaName: 'AuditChainStatus',
+      knownKeys: ['intact', 'checkedAt', 'eventCount', 'firstBreakSequence'],
+    },
   ];
+
+  it('AuditChainStatus documents intact/checkedAt/eventCount as required, firstBreakSequence as optional', () => {
+    const schema = getSchema('AuditChainStatus') as { required?: string[] };
+    expect((schema.required ?? []).sort()).toEqual(['checkedAt', 'eventCount', 'intact']);
+  });
 
   it.each(RESPONSE_SCHEMAS_WITH_KNOWN_KEYS)(
     'openapi $schemaName documents exactly the keys the mapper produces (no leak, no gap)',

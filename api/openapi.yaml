@@ -1416,7 +1416,13 @@ paths:
       tags: [Audit]
       operationId: getAuditChainStatus
       summary: Verify the hash chain over the audit log
-      description: Slice 8 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        Walks `audit_event` ordered by `sequence`, recomputes each row's hash
+        using the exact formula the slice-1 database trigger
+        (`compute_audit_event_hash_chain`) applies at insert time, and
+        checks `prev_hash` linkage. Runs on demand (recompute), the same
+        design as `GET /records/{recordId}/integrity`. `AUDITOR`/`ADMIN`
+        only (SECURITY_ARCHITECTURE.md §4.2 P2, PR-097/PR-099).
       responses:
         '200':
           description: Chain verification result
