@@ -103,7 +103,12 @@ export function JobList() {
 
   return (
     <main className="app-shell" aria-labelledby="job-list-heading">
-      <h1 id="job-list-heading">Your jobs</h1>
+      <div className="card-row">
+        <h1 id="job-list-heading">Your jobs</h1>
+        <button type="button" onClick={() => navigate('/queue')}>
+          Verifier queue
+        </button>
+      </div>
 
       <p className="status-chip" data-tone={isOnline ? 'good' : 'attention'} role="status">
         <span aria-hidden="true">{isOnline ? '◉' : '◌'}</span>

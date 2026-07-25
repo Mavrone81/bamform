@@ -3,6 +3,9 @@ import { RouterProvider, useRouter, matchPath } from './router';
 import { SignIn } from './screens/SignIn';
 import { JobList } from './screens/JobList';
 import { RecordCapture } from './screens/RecordCapture';
+import { VerifierQueue } from './screens/VerifierQueue';
+import { RecordReview } from './screens/RecordReview';
+import { Delegations } from './screens/Delegations';
 import { getAccessToken, onTokenChange, ensureFreshToken } from './auth';
 import { watchOnlineAndDrain } from './offline/sync-engine';
 import { notifySynced } from './offline/sync-events';
@@ -37,6 +40,10 @@ function Screens() {
 
   if (!authed) return <SignIn />;
 
+  const reviewParams = matchPath('/jobs/:id/review', path);
+  if (reviewParams) return <RecordReview jobId={reviewParams.id} />;
+  if (matchPath('/queue', path)) return <VerifierQueue />;
+  if (matchPath('/delegations', path)) return <Delegations />;
   const jobParams = matchPath('/jobs/:id', path);
   if (jobParams) return <RecordCapture jobId={jobParams.id} />;
   return <JobList />;
