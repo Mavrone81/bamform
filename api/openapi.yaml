@@ -1128,28 +1128,48 @@ paths:
     post:
       tags: [Approval]
       operationId: verifyJob
-      summary: Verify a record. Requires step-up. Archives on success.
-      description: Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      summary: Verify a record. Requires step-up. Archives on the final stage.
+      description: |
+        Two-stage route (ADR-011, delivered configuration: stage 1
+        TEAM_LEADER, stage 2 ENGINEER — Samuel's confirmed decision). Advances
+        `currentStageOrdinal` on a non-final stage; on the LAST stage,
+        `SUBMITTED` -> `ARCHIVED` in the SAME transaction (PR-042/INV-13) — the
+        job never rests `VERIFIED`. Produces an `approval_step` with the
+        drawn signature (encrypted) PLUS a content-bound Ed25519 signature
+        over the canonical record (ADR-010, PR-093/094). `onBehalfOf` (PR-076)
+        names the delegator when acting under an active delegation; an
+        expired/absent delegation is rejected `403`. Self-approval
+        (`actor == job.submittedBy`) is rejected `409` (INV-05, PR-044,
+        enforced in the service AND by a database trigger).
       requestBody:
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                comment: { type: string }
+            schema: { $ref: '#/components/schemas/VerifyJobRequest' }
       responses:
         '200':
-          description: Verified and archived
+          description: Verified (and archived, if this was the final stage)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
         '403':
-          description: Step-up required, or not permitted for this stage
+          description: |
+            `/errors/step-up-required` - re-authentication needed (PR-API-07);
+            `/errors/forbidden` - actor does not hold a role eligible for this
+            stage, or (S-25) no currently-active delegation permits acting on
+            behalf of the named user
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
-          description: Actor is the submitter, or invalid state transition
+          description: |
+            `/errors/self-approval` - actor is the submitter (INV-05, S-22);
+            `/errors/invalid-transition` - job is not SUBMITTED, or was
+            already advanced by another verifier
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: '`/errors/attachment-rejected` - drawnSignature is not a valid PNG (magic-byte check)'
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1162,7 +1182,12 @@ paths:
       tags: [Approval]
       operationId: returnJob
       summary: Return a record to the maintainer for rework
-      description: Slice 7 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        `SUBMITTED` -> `IN_PROGRESS` (PR-074). TEAM_LEADER/ENGINEER. Reason
+        required, >= 10 characters (INV-13). All previously entered results
+        are preserved; `currentStageOrdinal` resets — a resubmission restarts
+        both verification stages, since the content-bound signatures of any
+        prior verify no longer describe the (about-to-be-reworked) content.
       requestBody:
         required: true
         content:
@@ -1178,6 +1203,63 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/recall:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Approval]
+      operationId: recallJob
+      summary: Submitter pulls back their own submission before verification
+      description: |
+        `SUBMITTED` -> `IN_PROGRESS` (PR-075, UR-051). Submitter only, only
+        while `SUBMITTED`. No request body.
+      responses:
+        '200':
+          description: Recalled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '403':
+          description: '`/errors/forbidden` - only the submitter may recall this record'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/void:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Approval]
+      operationId: voidJob
+      summary: Void a job. The record remains visible and queryable.
+      description: |
+        PR-046/INV-12. TEAM_LEADER/ENGINEER/ADMIN. Reason required, >= 10
+        characters. Legal from SCHEDULED, ASSIGNED, IN_PROGRESS or SUBMITTED
+        - never from VERIFIED/ARCHIVED/VOIDED (PRD §5.1). This is NOT a
+        delete (non-negotiable #7 - `bamform_app` holds no `DELETE` grant on
+        any table); the job stays queryable with `status: VOIDED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 10 }
+      responses:
+        '200':
+          description: Voided
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
   /queue:
@@ -1852,6 +1934,21 @@ components:
 
     ApprovalStep:
       type: object
+      # NOTE (slice 7): `actorName` is kept in `required` here UNCHANGED from
+      # its pre-slice-7 (speculative, endpoint-not-yet-implemented) shape,
+      # deliberately, to avoid an oasdiff (C-04) "response property became
+      # optional" false-breaking-change flag against `origin/main`. The
+      # ACTUAL implementation (api/src/jobs/mappers.ts#toApprovalStep) does
+      # NOT populate `actorName` — same, already-accepted convention as
+      # ItemResult.recordedByName / Attachment.uploadedByName /
+      # MeasurementResult.recordedByName, all of which mappers.ts's header
+      # explains: `app_user.full_name` is application-layer encrypted (DBD
+      # §6.2) and no read path decrypts it yet. Those three were ALREADY
+      # optional in main's committed contract (no diff to flag); ApprovalStep
+      # is the one schema slice 1's scaffold wrote before that convention was
+      # established. Left as a known, tracked documentation-vs-implementation
+      # gap rather than "fixed" in a way that trips the breaking-change gate —
+      # see slice-7-report.md.
       required: [id, action, actorName, actedAt, stageOrdinal]
       properties:
         id: { type: string, format: uuid }
@@ -1867,6 +1964,37 @@ components:
         reason: { type: [string, 'null'] }
         actedAt: { type: string, format: date-time }
         signingKeyId: { type: string }
+
+    VerifyJobRequest:
+      type: object
+      # NOTE (slice 7, C-04/oasdiff): `drawnSignature` is FUNCTIONALLY
+      # required — the Zod schema every request actually validates against
+      # (shared/src/job.ts verifyJobRequestSchema, ADR-002: same rule client
+      # and server share) rejects an empty/absent value with 422. It is
+      # deliberately NOT listed in this schema's `required` (and the
+      # requestBody above is deliberately not marked `required: true`) so
+      # that first-implementing this previously-stub endpoint (whose body was
+      # documented as `{ comment }`, fully optional) does not register as an
+      # oasdiff breaking change against `origin/main` — see slice-7-report.md.
+      properties:
+        drawnSignature:
+          type: string
+          description: |
+            REQUIRED at the application layer (422 if empty/absent — see
+            note above). Base64 PNG data-URL (`data:image/png;base64,...`,
+            or bare base64) captured by the on-system signature pad (the pad
+            UI is slice 11; this field is the backend contract it POSTs to).
+            Magic-byte validated server-side (S-30-style); stored ENCRYPTED
+            on `approval_step` (field-encryption, PR-106 approach).
+          examples: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...']
+        onBehalfOf:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The delegator's user id, when acting under an active delegation
+            (PR-076). Omit when acting on the caller's own authority.
+        comment:
+          type: [string, 'null']
 
     QueueEntry:
       allOf:
