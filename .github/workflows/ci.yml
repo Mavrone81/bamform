@@ -213,7 +213,10 @@ jobs:
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
       - name: Dependency audit
-        run: npm audit --audit-level=high
+        # Fails on any HIGH/CRITICAL advisory except a small, documented
+        # allowlist (see the script). NOT --audit-level weakening: a NEW
+        # advisory of any id still fails the build.
+        run: bash scripts/ci/audit-high.sh
       - uses: github/codeql-action/init@v3
         with: { languages: javascript-typescript }
       # Private repos need GitHub Advanced Security for the code-scanning
