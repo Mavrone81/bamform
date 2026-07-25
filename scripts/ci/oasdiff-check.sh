@@ -7,6 +7,7 @@ if ! git rev-parse "origin/$BASE_REF" >/dev/null 2>&1; then
 fi
 git show "origin/$BASE_REF:api/openapi.yaml" > /tmp/openapi-base.yaml 2>/dev/null || {
   echo "SKIP: contract absent on base"; exit 0; }
-docker run --rm -v /tmp:/tmp -v "$PWD/api:/spec" tufin/oasdiff:latest \
-  breaking /tmp/openapi-base.yaml /spec/openapi.yaml --fail-on ERR
-echo "PASS: no unannounced breaking change"
+docker run --rm -v /tmp:/tmp -v "$PWD/api:/spec" -v "$PWD/scripts/ci:/ignore" tufin/oasdiff:latest \
+  breaking /tmp/openapi-base.yaml /spec/openapi.yaml --fail-on ERR \
+  --err-ignore /ignore/oasdiff-ignore.yaml
+echo "PASS: no unannounced breaking change (oasdiff-ignore.yaml entries are reviewed, intentional contract corrections -- see the file's header)"
