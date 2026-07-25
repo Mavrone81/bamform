@@ -7,3 +7,4 @@ export * from './template';
 export * from './schedule';
 export * from './job';
 export * from './audit';
+export * from './sync';
