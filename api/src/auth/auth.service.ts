@@ -300,7 +300,13 @@ export class AuthService {
   }
 
   private async rolesFor(tx: Prisma.TransactionClient, userId: string): Promise<string[]> {
-    const userRoles = await tx.userRole.findMany({ where: { userId }, include: { role: true } });
+    // Slice 13a: `active: false` is how `PATCH /users/{id}` revokes a role
+    // without a `DELETE` (INV-16) — excluded here so a revoked role never
+    // makes it into a freshly-minted access token.
+    const userRoles = await tx.userRole.findMany({
+      where: { userId, active: true },
+      include: { role: true },
+    });
     return userRoles.map((userRole) => userRole.role.code);
   }
 }

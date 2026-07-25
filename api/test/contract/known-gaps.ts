@@ -61,6 +61,10 @@ export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
   // GET /exports/{exportId}/download, GET /reports/compliance|overdue|pending
   // are new paths added to openapi.yaml alongside their implementation
   // (same convention as slice 6/7/9/11a's new paths — never allowlisted).
+  // Slice 13a — user/role administration + machine-code provisional
+  // generation — DONE. GET/POST /users, GET/PATCH /users/{userId},
+  // GET /roles are new paths added to openapi.yaml alongside their
+  // implementation (same convention as above — never allowlisted here).
 ];
 
 /**
@@ -155,5 +159,18 @@ export const COLLECTION_ENDPOINTS: readonly CollectionEndpointClassification[] =
     areaScoped: false,
     reason:
       "delegation (DBD §6.5) has no areaId column and is not filtered by area — it is filtered by IDENTITY (the caller's own grants, either direction, src/delegations/delegations.repository.ts#findForUser), an orthogonal mechanism to PR-API-10 area scoping.",
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/users',
+    areaScoped: false,
+    reason:
+      'app_user (DBD §6.2/6.3) has no areaId column. user_area_scope is the REVERSE relation (which areas a user may operate in), not a property of the user row itself to filter the admin listing by — API_SPECIFICATION.md §10.9 documents /users as "ADMIN only" with no area restriction, unlike GET /assets\' explicit PR-API-10 note. ADMIN administers users system-wide.',
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/roles',
+    areaScoped: false,
+    reason: 'role (DBD §6.3) is global reference data, seeded by migration, with no areaId column.',
   },
 ];

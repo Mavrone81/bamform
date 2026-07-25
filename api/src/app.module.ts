@@ -21,6 +21,7 @@ import { PdfQueueModule } from './pdf/pdf-queue.module';
 import { RecordsModule } from './records/records.module';
 import { ExportsModule } from './exports/exports.module';
 import { ReportsModule } from './reports/reports.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { ReportsModule } from './reports/reports.module';
     ExportsModule,
     ReportsModule,
     SyncModule,
+    UsersModule,
   ],
   controllers: [HealthController],
 })

@@ -246,6 +246,15 @@ model UserRole {
   roleId     String   @map("role_id") @db.Uuid
   grantedBy  String   @map("granted_by") @db.Uuid
   grantedAt  DateTime @default(now()) @map("granted_at") @db.Timestamptz(6)
+  // Slice 13a: `bamform_app` has no DELETE grant on any table (INV-16,
+  // `api/prisma/grants.sql`), so revoking a role via `PATCH /users/{id}`
+  // (roleCodes replace) cannot delete the row — it flips this to `false`
+  // instead (same soft-revoke convention as `delegation.revokedAt`,
+  // `template_item.active`). Every reader of a user's ACTIVE role set
+  // (`auth.service.ts#roleCodesFor`, `current-user.builder.ts`) filters on
+  // this; a re-grant of a previously-revoked role flips it back to `true`
+  // (upsert), never inserts a second row for the same (userId, roleId).
+  active     Boolean  @default(true)
 
   user    AppUser @relation("UserRoleUser", fields: [userId], references: [id])
   role    Role    @relation(fields: [roleId], references: [id])
