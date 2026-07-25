@@ -85,6 +85,17 @@ jobs:
         # changes canonical serialisation, /records/{id}/integrity would begin
         # reporting tampering on every historical record (PR-TST-04).
         run: npm run test:unit -- --testNamePattern="canonical serialisation"
+      - name: Web unit tests (Vitest) with coverage
+        # web has its own coverage gate, enforced inline by vitest.config.ts
+        # (95% lines / 90% branches on offline/**, auth/**, lib/** — the
+        # RK-01 outbox/sync surface; a failing threshold fails this step
+        # directly, vitest exits non-zero). This is NOT part of job 4's nyc
+        # merge gate: vitest's v8 coverage provider writes to web/coverage/,
+        # never to the repo-root .nyc_output/ that job 4's api jest configs
+        # write into and nyc merges — the two coverage gates are independent
+        # by construction, so wiring this here cannot loosen job 4's 80%/70%
+        # combined api gate.
+        run: npm run test:unit:web
 
   # ---------------------------------------------------------------- 4
   integration:
@@ -273,11 +284,21 @@ jobs:
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - name: Compose the full stack
-        run: docker compose -f docker-compose.ci.yml up -d --wait
+      - name: Serve the production build (bamform-web only)
+        # web/playwright.config.ts's offline/a11y/e2e projects intercept
+        # every /api/v1/** call at the browser network boundary
+        # (e2e/support/fake-server.ts) — the origin under test never
+        # actually reaches bamform-api. Composing bamform-api/postgres/
+        # redis/minio too would add real failure surface (e.g. the api
+        # track's MinIO image) for zero test value, so only the static
+        # nginx-served build is brought up here.
+        run: docker compose -f docker-compose.ci.yml up -d --wait bamform-web
       - name: Offline suite O-01 to O-16
         # RK-01 — losing a technician's completed record is the highest-impact
-        # risk in the project. No known-issue waivers permitted here.
+        # risk in the project. No known-issue waivers permitted here. O-06/
+        # O-07/O-12 are test.fixme (attachments UI / SW-update lifecycle not
+        # built this pass — web/e2e/offline/pending.spec.ts) and report as
+        # skipped, not passed or failed.
         run: npm run test:offline
       - uses: actions/upload-artifact@v4
         if: always()
@@ -297,9 +318,20 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
-      - run: npx playwright install --with-deps
-      - run: docker compose -f docker-compose.ci.yml up -d --wait
+      - run: npx playwright install --with-deps chromium
+      - run: docker compose -f docker-compose.ci.yml up -d --wait bamform-web
       - name: Journeys E-01 to E-14 at ${{ matrix.viewport }}px
+        # HONEST STATUS: E-01..E-14 (URD 5.x journeys, docs/TEST_PLAN.md §10)
+        # are slice 11/12/13 work — verifier queue, PDF render, admin UI —
+        # none of which exist on main yet; web/e2e/journeys has zero spec
+        # files today, so this step genuinely fails with "No tests found"
+        # per viewport rather than fabricating a pass. The matrix/viewport
+        # plumbing (VIEWPORT_WIDTH -> web/playwright.config.ts's `e2e`
+        # project) is wired correctly so the first journey spec that lands
+        # runs at all three widths with no further CI change. Do not add
+        # `--pass-with-no-tests` or any other device to force this job
+        # green before real journeys exist — that would hide, not surface,
+        # the gap. See .superpowers/sdd/ci-frontend-report.md.
         run: npm run test:e2e
         env: { VIEWPORT_WIDTH: "${{ matrix.viewport }}" }
       - uses: actions/upload-artifact@v4
@@ -319,8 +351,12 @@ jobs:
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: docker compose -f docker-compose.ci.yml up -d --wait
+      - run: docker compose -f docker-compose.ci.yml up -d --wait bamform-web
       - name: axe-core — WCAG 2.1 AA, zero violations
+        # Covers the three screens that exist (SignIn/JobList/RecordCapture)
+        # at 375px — the only viewport this foundation pass tested (see job
+        # 8's honest-pending note re: the wider matrix). 6/6 per
+        # web/e2e/a11y/pages.spec.ts.
         run: npm run test:a11y
 
   # --------------------------------------------------------------- 10
