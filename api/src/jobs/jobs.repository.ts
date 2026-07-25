@@ -73,6 +73,56 @@ export class JobsRepository {
       select: { id: true, assignedTo: true, asset: { select: { areaId: true } } },
     });
   }
+
+  /**
+   * `GET /sync/bootstrap` (PR-API-22/PR-059) — the SAME area+assignee scope
+   * `findMany` applies above, but with `JOB_FULL_INCLUDE` (the frozen
+   * revision + all current results, slice 6's `toJob`) so the device can
+   * render every returned job offline with no further call, batched in ONE
+   * query rather than N `findById` round-trips per job.
+   *
+   * `since`, when supplied, restricts to jobs that plausibly changed: the
+   * job's own lifecycle timestamps, OR any child row (result/part/
+   * attachment/approval-step) recorded since then. `job.updatedAt` is
+   * deliberately NOT used — no model in this schema sets `@updatedAt`
+   * (checked: none of the 20-odd models do), so it would only reflect
+   * row-creation time and silently miss "a result was recorded on an
+   * existing job", which is precisely PR-059's "any draft results already
+   * recorded" case. Introducing `@updatedAt` for `Job` alone would be a
+   * schema-convention change wider than this slice's mandate — see
+   * slice-9-report.md.
+   */
+  findManyFull(allowedAreaIds: string[] | null, restrictToAssignee: string | null, since?: Date) {
+    const assetScope = applyAreaScope<Prisma.AssetWhereInput>({}, allowedAreaIds);
+
+    const where: Prisma.JobWhereInput = {
+      assignedTo: restrictToAssignee ?? undefined,
+      asset: Object.keys(assetScope).length > 0 ? assetScope : undefined,
+      OR: since ? sinceOrConditions(since) : undefined,
+    };
+
+    return this.prisma.job.findMany({
+      where,
+      include: JOB_FULL_INCLUDE,
+      orderBy: { id: 'asc' },
+    });
+  }
+}
+
+/** PR-059 "any draft results already recorded" — see `findManyFull`'s header. */
+function sinceOrConditions(since: Date): Prisma.JobWhereInput[] {
+  return [
+    { generatedAt: { gte: since } },
+    { startedAt: { gte: since } },
+    { submittedAt: { gte: since } },
+    { verifiedAt: { gte: since } },
+    { archivedAt: { gte: since } },
+    { itemResults: { some: { recordedAt: { gte: since } } } },
+    { measurementResults: { some: { recordedAt: { gte: since } } } },
+    { partsUsed: { some: { createdAt: { gte: since } } } },
+    { attachments: { some: { uploadedAt: { gte: since } } } },
+    { approvalSteps: { some: { actedAt: { gte: since } } } },
+  ];
 }
 
 function buildDueOnFilter(dueFrom?: string, dueTo?: string): Prisma.DateTimeFilter | undefined {

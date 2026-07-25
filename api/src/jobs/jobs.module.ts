@@ -39,5 +39,12 @@ import { VerificationService } from './verification.service';
     ApprovalTransitionsService,
     IntegrityService,
   ],
+  // Slice 9 (`sync.module.ts`) reuses these directly rather than
+  // reimplementing job assembly/result/part capture: `JobsRepository`
+  // (batched frozen-revision read for bootstrap), `JobAccessService`
+  // (area+assignee scope), `ResultsService`/`PartsService` (the outbox
+  // drain dispatches straight into their existing idempotency-backed,
+  // per-mutation-transactional methods — see `sync-outbox.service.ts`).
+  exports: [JobsRepository, JobAccessService, ResultsService, PartsService],
 })
 export class JobsModule {}
