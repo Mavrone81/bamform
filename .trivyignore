@@ -18,3 +18,12 @@
 CVE-2024-12905
 CVE-2025-48387
 CVE-2025-59343
+#
+# ws — pulled by puppeteer as its Chrome DevTools Protocol (CDP) client. It
+# connects ONLY to the local Chromium child process's debug port over loopback
+# (never binds/listens, never faces the network or any request), so these
+# advisories are not reachable in this topology. Same advisories as the
+# audit-high.sh npm-audit allowlist; overrides.ws pins the fixed line for the
+# next clean lockfile regen.
+CVE-2024-37890
+CVE-2026-48779
