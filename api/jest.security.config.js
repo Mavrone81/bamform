@@ -16,7 +16,10 @@
 // provisions Postgres + Redis service containers (see ci.yml "6 · Security"
 // — a minimal, explained addition; those two services did not exist in
 // job 6 before this change, and there is no way to prove S-06..S-09 without
-// them).
+// them). Slice 6 adds a MinIO service container to the SAME job for the
+// same reason: S-19/S-30/S-32 are real end-to-end attacks against the
+// attachment endpoints (IDOR fetch, magic-byte upload, oversized upload)
+// with no unit-level equivalent either.
 module.exports = {
   displayName: 'security',
   rootDir: '.',
@@ -43,6 +46,10 @@ module.exports = {
     '<rootDir>/test/integration/schema-constraints.spec.ts', // S-23 (author cannot approve own revision)
     '<rootDir>/test/integration/triggers.spec.ts', // S-22 (submitter cannot verify own record)
     '<rootDir>/test/integration/grants.spec.ts', // S-26 (bamform_app denied UPDATE on audit_event)
+
+    // -- real Postgres + Redis + MinIO (slice 6; job 6 now provisions all three) --
+    '<rootDir>/test/integration/attachments-security.spec.ts', // S-19, S-30, I-INV-19
+    '<rootDir>/test/integration/jobs-attachments.spec.ts', // S-32 (oversized attachment rejected)
 
     // -- honestly-tracked gaps: pending cases only, never faked ----------
     '<rootDir>/test/security/pending-cases.spec.ts',
