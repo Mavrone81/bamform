@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ApprovalActionT, AuditActionT, JobStatusT } from '@prisma/client';
 import type { Job, ReturnJobRequest, VoidJobRequest } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
@@ -9,6 +9,7 @@ import { IdempotencyService } from '../common/idempotency.service';
 import { computeContentHash } from '../crypto/content-hash';
 import { RECORD_SIGNING_SERVICE } from '../crypto/crypto.tokens';
 import type { RecordSigningService } from '../crypto/record-signer';
+import { NotificationQueueService } from '../notifications/notification-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApprovalRepository } from './approval.repository';
 import { buildCanonicalJobRecord } from './canonical-job-record';
@@ -29,6 +30,8 @@ import { toJob } from './mappers';
  */
 @Injectable()
 export class ApprovalTransitionsService {
+  private readonly logger = new Logger(ApprovalTransitionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobs: JobsService,
@@ -36,6 +39,7 @@ export class ApprovalTransitionsService {
     private readonly audit: AuditEventService,
     private readonly idempotency: IdempotencyService,
     @Inject(RECORD_SIGNING_SERVICE) private readonly recordSigner: RecordSigningService,
+    private readonly notificationQueue: NotificationQueueService,
   ) {}
 
   async return_(
@@ -180,132 +184,149 @@ export class ApprovalTransitionsService {
     const approvalStepId = randomUUID();
     const now = new Date();
 
-    return this.prisma.$transaction(async (tx) => {
-      const guarded = await tx.job.updateMany({
-        where: { id: params.jobId, ...params.dbUpdateWhereExtra },
-        data: params.dbUpdateData,
-      });
-      if (guarded.count === 0) {
-        throw forbiddenProblem(
-          'This record changed state before this action could be applied — reload and retry.',
-        );
-      }
+    return this.prisma
+      .$transaction(async (tx) => {
+        const guarded = await tx.job.updateMany({
+          where: { id: params.jobId, ...params.dbUpdateWhereExtra },
+          data: params.dbUpdateData,
+        });
+        if (guarded.count === 0) {
+          throw forbiddenProblem(
+            'This record changed state before this action could be applied — reload and retry.',
+          );
+        }
 
-      const priorSteps = await this.approvalRepo.listApprovalSteps(params.jobId, tx);
+        const priorSteps = await this.approvalRepo.listApprovalSteps(params.jobId, tx);
 
-      const canonicalRecord = buildCanonicalJobRecord({
-        job: {
-          id: job.id,
-          jobNumber: job.jobNumber,
-          assetId: job.assetId,
-          templateRevisionId: job.templateRevisionId,
-          frequency: job.frequency,
-          status: params.canonicalStatus,
-        },
-        templateRevision: {
-          id: job.templateRevision.id,
-          formTemplateId: job.templateRevision.formTemplateId,
-          revisionCode: job.templateRevision.revisionCode,
-          sequenceOrdinal: job.templateRevision.sequenceOrdinal,
-        },
-        submitter: { userId: job.submittedBy, submittedAt: job.submittedAt },
-        itemResults: job.itemResults.map((r) => ({
-          id: r.id,
-          templateItemId: r.templateItemId,
-          status: r.status,
-          remark: r.remark,
-        })),
-        measurementResults: job.measurementResults.map((r) => ({
-          id: r.id,
-          templateMeasurementId: r.templateMeasurementId,
-          readingNumeric: r.readingNumeric ? r.readingNumeric.toString() : null,
-          readingText: r.readingText,
-          judgement: JUDGEMENT_FROM_DB[r.judgement],
-        })),
-        partsUsed: job.partsUsed.map((p) => ({
-          id: p.id,
-          partNo: p.partNo,
-          description: p.description,
-          quantity: p.quantity.toString(),
-        })),
-        attachments: job.attachments.map((a) => ({
-          id: a.id,
-          sha256Hex: Buffer.from(a.sha256).toString('hex'),
-        })),
-        approvalSteps: [
-          ...priorSteps.map((s) => ({
-            id: s.id,
-            stageOrdinal: s.stageOrdinal,
-            action: s.action,
-            actorId: s.actorId,
-            onBehalfOfId: s.onBehalfOfId,
-            reason: s.reason,
-            actedAt: s.actedAt,
+        const canonicalRecord = buildCanonicalJobRecord({
+          job: {
+            id: job.id,
+            jobNumber: job.jobNumber,
+            assetId: job.assetId,
+            templateRevisionId: job.templateRevisionId,
+            frequency: job.frequency,
+            status: params.canonicalStatus,
+          },
+          templateRevision: {
+            id: job.templateRevision.id,
+            formTemplateId: job.templateRevision.formTemplateId,
+            revisionCode: job.templateRevision.revisionCode,
+            sequenceOrdinal: job.templateRevision.sequenceOrdinal,
+          },
+          submitter: { userId: job.submittedBy, submittedAt: job.submittedAt },
+          itemResults: job.itemResults.map((r) => ({
+            id: r.id,
+            templateItemId: r.templateItemId,
+            status: r.status,
+            remark: r.remark,
           })),
-          {
-            id: approvalStepId,
-            stageOrdinal: params.stageOrdinal,
-            action: params.action,
-            actorId: params.actor.actorId,
-            onBehalfOfId: null,
-            reason: params.reason,
-            actedAt: now,
-          },
-        ],
+          measurementResults: job.measurementResults.map((r) => ({
+            id: r.id,
+            templateMeasurementId: r.templateMeasurementId,
+            readingNumeric: r.readingNumeric ? r.readingNumeric.toString() : null,
+            readingText: r.readingText,
+            judgement: JUDGEMENT_FROM_DB[r.judgement],
+          })),
+          partsUsed: job.partsUsed.map((p) => ({
+            id: p.id,
+            partNo: p.partNo,
+            description: p.description,
+            quantity: p.quantity.toString(),
+          })),
+          attachments: job.attachments.map((a) => ({
+            id: a.id,
+            sha256Hex: Buffer.from(a.sha256).toString('hex'),
+          })),
+          approvalSteps: [
+            ...priorSteps.map((s) => ({
+              id: s.id,
+              stageOrdinal: s.stageOrdinal,
+              action: s.action,
+              actorId: s.actorId,
+              onBehalfOfId: s.onBehalfOfId,
+              reason: s.reason,
+              actedAt: s.actedAt,
+            })),
+            {
+              id: approvalStepId,
+              stageOrdinal: params.stageOrdinal,
+              action: params.action,
+              actorId: params.actor.actorId,
+              onBehalfOfId: null,
+              reason: params.reason,
+              actedAt: now,
+            },
+          ],
+        });
+        const contentHash = computeContentHash(canonicalRecord);
+        const signature = this.recordSigner.sign(contentHash);
+
+        await this.approvalRepo.createApprovalStep(tx, {
+          id: approvalStepId,
+          jobId: params.jobId,
+          stageOrdinal: params.stageOrdinal,
+          action: params.action,
+          actorId: params.actor.actorId,
+          onBehalfOfId: null,
+          actorRoleCode: params.actorRoleCode, // return/recall/void are not stage-role-gated per API_SPECIFICATION.md §4.1
+          reason: params.reason,
+          actedAt: now,
+          sourceIp: params.actor.sourceIp,
+          contentHash,
+          signature,
+          signingKeyId: this.recordSigner.kid,
+          stepUpVerifiedAt: null,
+          drawnSignatureCt: null,
+          drawnSignatureDekVersion: null,
+        });
+
+        await this.audit.record(tx, {
+          actorId: params.actor.actorId,
+          action: AuditActionT.state_change,
+          entityType: 'job',
+          entityId: params.jobId,
+          before: params.auditBefore,
+          after: params.auditAfter,
+          sourceIp: params.actor.sourceIp,
+          requestId: params.actor.requestId,
+        });
+
+        const full = await tx.job.findUniqueOrThrow({
+          where: { id: params.jobId },
+          include: JOB_FULL_INCLUDE,
+        });
+        const dtoOut = toJob(full);
+
+        if (params.idempotencyKey && params.fingerprint) {
+          await this.idempotency.recordWithin(
+            tx,
+            {
+              key: params.idempotencyKey,
+              userId: params.actor.actorId,
+              endpoint: params.endpoint,
+              fingerprint: params.fingerprint,
+            },
+            { status: 200, body: dtoOut },
+          );
+        }
+
+        return dtoOut;
+      })
+      .then(async (dtoOut) => {
+        // PR-077 — return/recall/void all take the job OUT of "awaiting
+        // verification at this stage" the same way a `verify` does; a stale
+        // escalation timer left running for a job that is back IN_PROGRESS
+        // (or voided) would fire a false reminder. Best-effort, outside the
+        // transaction — see `VerificationService#verify`'s identical pattern.
+        try {
+          await this.notificationQueue.cancelEscalation(params.jobId, params.stageOrdinal);
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `escalation cancel failed for job ${params.jobId} stage ${params.stageOrdinal}: ${err.message}`,
+          );
+        }
+        return dtoOut;
       });
-      const contentHash = computeContentHash(canonicalRecord);
-      const signature = this.recordSigner.sign(contentHash);
-
-      await this.approvalRepo.createApprovalStep(tx, {
-        id: approvalStepId,
-        jobId: params.jobId,
-        stageOrdinal: params.stageOrdinal,
-        action: params.action,
-        actorId: params.actor.actorId,
-        onBehalfOfId: null,
-        actorRoleCode: params.actorRoleCode, // return/recall/void are not stage-role-gated per API_SPECIFICATION.md §4.1
-        reason: params.reason,
-        actedAt: now,
-        sourceIp: params.actor.sourceIp,
-        contentHash,
-        signature,
-        signingKeyId: this.recordSigner.kid,
-        stepUpVerifiedAt: null,
-        drawnSignatureCt: null,
-        drawnSignatureDekVersion: null,
-      });
-
-      await this.audit.record(tx, {
-        actorId: params.actor.actorId,
-        action: AuditActionT.state_change,
-        entityType: 'job',
-        entityId: params.jobId,
-        before: params.auditBefore,
-        after: params.auditAfter,
-        sourceIp: params.actor.sourceIp,
-        requestId: params.actor.requestId,
-      });
-
-      const full = await tx.job.findUniqueOrThrow({
-        where: { id: params.jobId },
-        include: JOB_FULL_INCLUDE,
-      });
-      const dtoOut = toJob(full);
-
-      if (params.idempotencyKey && params.fingerprint) {
-        await this.idempotency.recordWithin(
-          tx,
-          {
-            key: params.idempotencyKey,
-            userId: params.actor.actorId,
-            endpoint: params.endpoint,
-            fingerprint: params.fingerprint,
-          },
-          { status: 200, body: dtoOut },
-        );
-      }
-
-      return dtoOut;
-    });
   }
 }

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { QueueModule } from '../queue/queue.module';
 import { ApprovalController } from './approval.controller';
 import { ApprovalRepository } from './approval.repository';
 import { ApprovalTransitionsService } from './approval-transitions.service';
@@ -22,9 +23,14 @@ import { VerificationService } from './verification.service';
  * come from the global `CommonModule`/`AuditModule` (slices 1-5);
  * `MinioService` from the global `MinioModule`; `FIELD_ENCRYPTION_SERVICE`/
  * `RECORD_SIGNING_SERVICE` from the global `CryptoModule` (slice 3) — none
- * are re-declared here.
+ * are re-declared here. `NotificationQueueService` similarly comes from the
+ * global `NotificationQueueModule` (slice 11a). `QueueModule` IS imported
+ * explicitly (not global) for `VerifierEligibilityService` — PR-077/UR-063's
+ * "notify whoever is eligible to verify this stage right now", reused by
+ * `SubmissionService` rather than re-deriving the eligibility rule.
  */
 @Module({
+  imports: [QueueModule],
   controllers: [JobsController, AttachmentsController, ApprovalController, RecordsController],
   providers: [
     JobAccessService,
