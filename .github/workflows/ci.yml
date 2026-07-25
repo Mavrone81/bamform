@@ -29,6 +29,13 @@ env:
   SCHEDULER_ENABLED: "false"
   NOTIFICATION_ENABLED: "false"
   APP_ENV: ci
+  # puppeteer's postinstall downloads a ~150 MB Chromium during `npm ci`; that
+  # download stalls indefinitely on the runner and hangs EVERY job's install
+  # (slice 12). No CI job needs puppeteer's bundled browser — the PDF-render
+  # tests (job 4) launch the runner's preinstalled Chrome via
+  # PUPPETEER_EXECUTABLE_PATH (see job 4), and prod uses the Alpine system
+  # chromium. So skip the download globally.
+  PUPPETEER_SKIP_DOWNLOAD: "true"
 
 jobs:
 
@@ -139,6 +146,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - run: npm ci
+      - name: Locate a Chromium for the PDF-render tests (PUPPETEER_SKIP_DOWNLOAD is on)
+        # ubuntu-latest ships google-chrome-stable preinstalled; puppeteer 21.x
+        # drives it fine. Export the path so the integration step (and the
+        # worker's ChromiumBrowserService, which reads PUPPETEER_EXECUTABLE_PATH
+        # via ConfigService — same var prod sets to the Alpine chromium) uses it.
+        run: |
+          CHROME="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium-browser || command -v chromium || true)"
+          if [ -z "$CHROME" ]; then echo "no preinstalled Chrome found on the runner" >&2; exit 1; fi
+          echo "PUPPETEER_EXECUTABLE_PATH=$CHROME" >> "$GITHUB_ENV"
+          echo "Using Chromium at $CHROME"
       - name: Apply migrations
         run: npx prisma migrate deploy --schema=api/prisma/schema.prisma
         env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
