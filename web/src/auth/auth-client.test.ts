@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { login, refresh, logout, ensureFreshToken } from './auth-client';
-import { getAccessToken, isTokenStale, _resetForTests } from './token-store';
+import { login, refresh, logout, ensureFreshToken, stepUp } from './auth-client';
+import { getAccessToken, isTokenStale, setAccessToken, _resetForTests } from './token-store';
 
 function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 401): Response {
   return {
@@ -112,5 +112,38 @@ describe('ensureFreshToken', () => {
     const token = await ensureFreshToken();
     expect(token).toBe('tok-4');
     expect(isTokenStale()).toBe(false);
+  });
+});
+
+describe('stepUp', () => {
+  it('PR-API-07: sends the bearer token + password and resolves on success', async () => {
+    setAccessToken('tok-5', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ stepUpValidUntil: '2026-07-24T02:30:00Z' }),
+    );
+
+    await expect(stepUp('correct-horse-battery-staple')).resolves.toBeUndefined();
+
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain('/auth/step-up');
+    expect(init?.credentials).toBe('include');
+    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer tok-5');
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'correct-horse-battery-staple' });
+  });
+
+  it('throws (never revealing why) on a rejected step-up, and never retains the password', async () => {
+    setAccessToken('tok-6', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, false, 401));
+
+    await expect(stepUp('wrong-password')).rejects.toThrow('step-up failed: 401');
+  });
+
+  it('omits the Authorization header when no access token is held', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ stepUpValidUntil: '2026-07-24T02:30:00Z' }),
+    );
+    await stepUp('some-password');
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    expect((init?.headers as Record<string, string>).Authorization).toBeUndefined();
   });
 });

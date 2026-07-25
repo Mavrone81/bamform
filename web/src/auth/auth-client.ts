@@ -61,3 +61,30 @@ export async function ensureFreshToken(): Promise<string | null> {
   const result = await refresh();
   return result?.accessToken ?? null;
 }
+
+/**
+ * PR-API-07: re-authenticates immediately before a signing action
+ * (verify/approve). Called from the Record Review screen only after
+ * `verifyJob` comes back 403 `step-up-required` — never speculatively. The
+ * password is sent once, straight through to the server, and is never
+ * stored anywhere on this device (non-negotiable #10 applies here too,
+ * even though this value is not the access token): the caller passes it in,
+ * this function does not retain a reference to it after the fetch resolves.
+ */
+export async function stepUp(password: string): Promise<void> {
+  const token = getAccessToken();
+  const res = await fetch(`${API_BASE}/auth/step-up`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    // Mirrors `login`'s PR-007 convention: the client never surfaces WHY
+    // (wrong password vs. rate-limited) — that judgement stays server-side.
+    throw new Error(`step-up failed: ${res.status}`);
+  }
+}

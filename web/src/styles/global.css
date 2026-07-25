@@ -245,3 +245,27 @@ button:disabled {
   left: var(--space-2);
   top: var(--space-2);
 }
+
+/* ---- Signature pad (slice 11b) ---- */
+.signature-pad-canvas {
+  display: block;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* ---- Read-only record review (slice 11b) ---- */
+.readonly-value {
+  font-weight: 600;
+}
+
+.approval-step {
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding: var(--space-3) 0;
+}
+
+.approval-step:last-child {
+  border-bottom: none;
+}

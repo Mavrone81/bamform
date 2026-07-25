@@ -1,5 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test';
-import { FakeServer, type SeedJob } from './fake-server';
+import { FakeServer, E2E_USERS, E2E_PASSWORD, type SeedJob } from './fake-server';
 
 export const DEFAULT_JOB: SeedJob = {
   id: 'job-1',
@@ -13,12 +13,24 @@ export const DEFAULT_JOB: SeedJob = {
   ],
 };
 
-async function signIn(page: Page): Promise<void> {
+/** Signs in as an arbitrary user (default: the technician every existing
+ * offline/a11y spec uses) — exported so the verifier-queue/delegation
+ * journeys (E-02/03/04), which need several distinct actors, can reuse it
+ * instead of duplicating the sign-in flow per actor. */
+export async function signInAs(
+  page: Page,
+  email: string = E2E_USERS.technician.email,
+  password: string = E2E_PASSWORD,
+): Promise<void> {
   await page.goto('/sign-in');
-  await page.getByLabel('Email').fill('tech@bevorasg.com');
-  await page.getByLabel('Password').fill('correct-horse-battery-staple');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
+}
+
+async function signIn(page: Page): Promise<void> {
+  await signInAs(page);
 }
 
 interface Fixtures {

@@ -1,12 +1,21 @@
 import { getAccessToken, ensureFreshToken, refresh } from '../auth/index';
 import { TransportError } from './transport';
 import { API_BASE } from './config';
+import { uuidv7 } from '../lib/uuidv7';
 import type {
   SyncTransport,
   OutboxMutation,
   DrainOutboxResponse,
   SubmitJobResponse,
   SyncBootstrap,
+  Job,
+  QueuePage,
+  DelegationsPage,
+  JobActionResponse,
+  DelegationActionResponse,
+  VerifyJobRequest,
+  CreateDelegationRequest,
+  Problem,
 } from './transport';
 
 async function authorizedFetch(
@@ -80,6 +89,90 @@ export class HttpSyncTransport implements SyncTransport {
       return { status: res.status, ok: true, body: await res.json() };
     }
     const problem = await res.json().catch(() => undefined);
+    return { status: res.status, ok: false, problem };
+  }
+
+  async getJob(jobId: string): Promise<Job> {
+    const res = await authorizedFetch(`/jobs/${jobId}`);
+    if (!res.ok) {
+      throw new TransportError(`getJob failed: ${res.status}`);
+    }
+    return (await res.json()) as Job;
+  }
+
+  async getQueue(params?: { limit?: number; cursor?: string }): Promise<QueuePage> {
+    const query = new URLSearchParams();
+    if (params?.limit != null) query.set('limit', String(params.limit));
+    if (params?.cursor) query.set('cursor', params.cursor);
+    const qs = query.toString();
+    const res = await authorizedFetch(`/queue${qs ? `?${qs}` : ''}`);
+    if (!res.ok) {
+      throw new TransportError(`getQueue failed: ${res.status}`);
+    }
+    return (await res.json()) as QueuePage;
+  }
+
+  async verifyJob(
+    jobId: string,
+    request: VerifyJobRequest,
+    idempotencyKey: string = uuidv7(),
+  ): Promise<JobActionResponse> {
+    const res = await authorizedFetch(`/jobs/${jobId}/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(request),
+    });
+    if (res.ok) {
+      return { status: res.status, ok: true, body: await res.json() };
+    }
+    const problem: Problem | undefined = await res.json().catch(() => undefined);
+    return { status: res.status, ok: false, problem };
+  }
+
+  async returnJob(
+    jobId: string,
+    reason: string,
+    idempotencyKey: string = uuidv7(),
+  ): Promise<JobActionResponse> {
+    const res = await authorizedFetch(`/jobs/${jobId}/return`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ reason }),
+    });
+    if (res.ok) {
+      return { status: res.status, ok: true, body: await res.json() };
+    }
+    const problem: Problem | undefined = await res.json().catch(() => undefined);
+    return { status: res.status, ok: false, problem };
+  }
+
+  async getDelegations(): Promise<DelegationsPage> {
+    const res = await authorizedFetch('/delegations');
+    if (!res.ok) {
+      throw new TransportError(`getDelegations failed: ${res.status}`);
+    }
+    return (await res.json()) as DelegationsPage;
+  }
+
+  async createDelegation(request: CreateDelegationRequest): Promise<DelegationActionResponse> {
+    const res = await authorizedFetch('/delegations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (res.ok) {
+      return { status: res.status, ok: true, body: await res.json() };
+    }
+    const problem: Problem | undefined = await res.json().catch(() => undefined);
+    return { status: res.status, ok: false, problem };
+  }
+
+  async revokeDelegation(delegationId: string): Promise<DelegationActionResponse> {
+    const res = await authorizedFetch(`/delegations/${delegationId}`, { method: 'DELETE' });
+    if (res.ok) {
+      return { status: res.status, ok: true, body: await res.json() };
+    }
+    const problem: Problem | undefined = await res.json().catch(() => undefined);
     return { status: res.status, ok: false, problem };
   }
 }
