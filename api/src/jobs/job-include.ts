@@ -25,6 +25,11 @@ export const JOB_FULL_INCLUDE = {
   measurementResults: true,
   partsUsed: true,
   attachments: true,
+  // Slice 7 — never includes the encrypted drawn-signature bytes in a
+  // read path; `mappers.ts#toApprovalStep` maps only the non-personal
+  // columns (see openapi.yaml's ApprovalStep schema, which has no
+  // drawn-signature field).
+  approvalSteps: { orderBy: { actedAt: 'asc' as const } },
 } satisfies Prisma.JobInclude;
 
 export type JobSummaryRow = Prisma.JobGetPayload<{ include: typeof JOB_SUMMARY_INCLUDE }>;
