@@ -1296,6 +1296,7 @@ paths:
       parameters:
         - name: since
           in: query
+          description: Opaque syncToken or an ISO date-time; jobs/deletedJobIds are restricted to what changed since.
           schema: { type: string, format: date-time }
       responses:
         '200':
@@ -1303,6 +1304,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SyncBootstrap' }
+        '422': { $ref: '#/components/responses/Problem' }
 
   /sync/outbox:
     post:
@@ -1338,6 +1340,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/OutboxResult' }
                   syncToken: { type: string }
+        '422': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
 
   /records/{recordId}/pdf:

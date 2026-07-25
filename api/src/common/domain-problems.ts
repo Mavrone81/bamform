@@ -170,6 +170,32 @@ export function draftConflictProblem(currentDraftVersion: number): ConflictExcep
   });
 }
 
+/**
+ * PR-API-26/27 — `POST /jobs/{id}/submit`, attachments, and any other
+ * method+path that isn't one of the outbox-reachable result/part endpoints
+ * are rejected per-mutation, not silently dropped or 500'd. Submit stays a
+ * separate atomic call (PR-065: never SUBMITTED on partially-transmitted
+ * data); attachments upload on their own channel (PR-067).
+ */
+export function outboxMutationNotAllowedProblem(
+  method: string,
+  path: string,
+): UnprocessableEntityException {
+  return new UnprocessableEntityException({
+    type: '/errors/validation-failed',
+    title: 'Validation failed',
+    status: 422,
+    detail: `${method} ${path} is not permitted inside an offline outbox batch. Submit and attachments use their own dedicated endpoints.`,
+    errors: [
+      {
+        pointer: '/path',
+        code: 'OUTBOX_ROUTE_NOT_ALLOWED',
+        message: 'This method/path is not one of the outbox-reachable mutation endpoints.',
+      },
+    ],
+  });
+}
+
 /** SECURITY_ARCHITECTURE.md §10.1: attachment failed type/size/magic-byte validation (S-30, S-32). */
 export function attachmentRejectedProblem(detail: string): UnprocessableEntityException {
   return new UnprocessableEntityException({

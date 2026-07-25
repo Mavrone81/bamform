@@ -30,6 +30,13 @@ import { RefreshTokenService } from './refresh/refresh-token.service';
     TokenDenylistService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
-  exports: [PasswordService],
+  // `AuthService` exported (slice 9) so `sync.module.ts`'s
+  // `SyncBootstrapService` can reuse `AuthService#me` (`buildCurrentUser`,
+  // `current-user.builder.ts`) verbatim for the bootstrap `user` field
+  // (`{id, fullName, roles}` per API_SPECIFICATION.md §11.1 — `CurrentUser`
+  // in openapi.yaml carries more optional fields, all genuinely useful
+  // offline: areaScope, activeDelegations, stepUpValidUntil) instead of
+  // re-querying/re-decrypting `app_user` a second way.
+  exports: [PasswordService, AuthService],
 })
 export class AuthModule {}

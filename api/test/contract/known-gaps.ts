@@ -50,9 +50,9 @@ export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
   // (slice-7-brief.md Constraints: "Do NOT build the verifier-queue UI
   // (slice 11)") — stays allowlisted for slice 11.
   { method: 'GET', path: '/queue' },
-  // Slice 9 — sync API: bootstrap, outbox, idempotency store
-  { method: 'GET', path: '/sync/bootstrap' },
-  { method: 'POST', path: '/sync/outbox' },
+  // Slice 9 — sync API: bootstrap, outbox, idempotency store — DONE.
+  // GET /sync/bootstrap and POST /sync/outbox moved OUT of this allowlist
+  // (implemented, contract-enforced below).
   // Slice 12 — PDF render, archive search/export, reports/trending
   { method: 'GET', path: '/records/{recordId}/pdf' },
   { method: 'GET', path: '/reports/measurements' },

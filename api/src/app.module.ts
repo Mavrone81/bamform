@@ -13,6 +13,7 @@ import { TemplatesModule } from './templates/templates.module';
 import { SchedulingModule } from './scheduling/scheduling.module';
 import { MinioModule } from './storage/minio.module';
 import { JobsModule } from './jobs/jobs.module';
+import { SyncModule } from './sync/sync.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { JobsModule } from './jobs/jobs.module';
     SchedulingModule,
     MinioModule,
     JobsModule,
+    SyncModule,
   ],
   controllers: [HealthController],
 })
