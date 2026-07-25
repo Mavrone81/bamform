@@ -21,6 +21,16 @@
 #                               production does.
 #   - record_signing_key.pem — Ed25519 private key, DISTINCT from jwt_signing_key.pem
 #                               (PR-SEC-07, PR-094)
+#   - minio_root_password    — slice 6 (attachments, ADR-007). Deliberately the SAME
+#                               fixed, documented, non-secret string
+#                               `.github/workflows/ci.yml`'s `bamform-minio` service
+#                               containers (jobs 4 and 6) already use — GH Actions
+#                               service containers start before any step in the job
+#                               runs, so their env cannot read a freshly-generated
+#                               random value; a real production deploy provisions
+#                               `./secrets/minio_root_password` separately (openssl,
+#                               per DEPLOYMENT_RUNBOOK) and never runs this script, so
+#                               fixing this one value here never touches a real secret.
 #
 # Idempotent — never regenerates a file that already exists (regenerating
 # jwt_signing_key would invalidate every issued token; regenerating blind_index_key
@@ -68,5 +78,10 @@ if [ ! -f secrets/dek_wrapped ]; then
   '
 fi
 
+if [ ! -f secrets/minio_root_password ]; then
+  echo "==> generating secrets/minio_root_password (dev/test/CI only — see header comment)"
+  printf '%s' 'ci_ephemeral_not_a_real_secret' > secrets/minio_root_password
+fi
+
 chmod 600 secrets/jwt_signing_key.pem secrets/record_signing_key.pem secrets/blind_index_key \
-  secrets/kek secrets/dek_wrapped 2>/dev/null || true
+  secrets/kek secrets/dek_wrapped secrets/minio_root_password 2>/dev/null || true

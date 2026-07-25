@@ -36,3 +36,24 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  # Slice 6 (attachments, ADR-007) — S-19/S-30/I-INV-19 need a real object
+  # store. Password is the SAME fixed, documented, non-secret string
+  # `scripts/dev/generate-dev-secrets.sh` writes to `secrets/minio_root_password`
+  # (which `SecretFileLoader` falls back to) and `.github/workflows/ci.yml`'s
+  # `bamform-minio` service containers already use — see that script's header.
+  bamform-test-minio:
+    image: minio/minio
+    command: ['server', '/data']
+    environment:
+      MINIO_ROOT_USER: bamform
+      MINIO_ROOT_PASSWORD: ci_ephemeral_not_a_real_secret
+    ports:
+      - '127.0.0.1:19000:9000'
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 3s
+      timeout: 3s
+      retries: 20

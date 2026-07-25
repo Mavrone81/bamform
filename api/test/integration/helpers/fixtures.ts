@@ -224,21 +224,24 @@ export interface JobOpts {
   approvalRouteId: string;
   jobNumber: string;
   status: string;
+  assignedTo?: string | null;
   submittedBy?: string | null;
   submittedAt?: Date | null;
   currentStageOrdinal?: number | null;
   archivedAt?: Date | null;
   voidReason?: string | null;
+  draftVersion?: number;
 }
 
 export async function createJob(opts: JobOpts): Promise<string> {
   const result = await adminPool.query(
     `INSERT INTO "job"
        ("job_number", "asset_id", "template_revision_id", "approval_route_id",
-        "frequency", "frequency_scope", "due_on", "generated_at", "status",
-        "submitted_by", "submitted_at", "current_stage_ordinal", "archived_at", "void_reason")
-     VALUES ($1, $2, $3, $4, 'M1', ARRAY['M1']::"frequency_t"[], CURRENT_DATE, now(), $5,
-             $6, $7, $8, $9, $10)
+        "frequency", "frequency_scope", "due_on", "generated_at", "status", "assigned_to",
+        "submitted_by", "submitted_at", "current_stage_ordinal", "archived_at", "void_reason",
+        "draft_version")
+     VALUES ($1, $2, $3, $4, 'M1', ARRAY['M1']::"frequency_t"[], CURRENT_DATE, now(), $5, $6,
+             $7, $8, $9, $10, $11, COALESCE($12, 0))
      RETURNING id`,
     [
       opts.jobNumber,
@@ -246,11 +249,13 @@ export async function createJob(opts: JobOpts): Promise<string> {
       opts.templateRevisionId,
       opts.approvalRouteId,
       opts.status,
+      opts.assignedTo ?? null,
       opts.submittedBy ?? null,
       opts.submittedAt ?? null,
       opts.currentStageOrdinal ?? null,
       opts.archivedAt ?? null,
       opts.voidReason ?? null,
+      opts.draftVersion ?? null,
     ],
   );
   return result.rows[0].id as string;
@@ -263,13 +268,21 @@ export async function createJobFixture(
   extra: Partial<
     Pick<
       JobOpts,
-      'submittedBy' | 'submittedAt' | 'currentStageOrdinal' | 'archivedAt' | 'voidReason'
+      | 'assignedTo'
+      | 'submittedBy'
+      | 'submittedAt'
+      | 'currentStageOrdinal'
+      | 'archivedAt'
+      | 'voidReason'
+      | 'draftVersion'
     >
   > = {},
 ): Promise<{
   jobId: string;
   authorId: string;
   approvalRouteId: string;
+  assetId: string;
+  revisionId: string;
 }> {
   const authorId = await createUser('author');
   const approvalRouteId = await getSeededApprovalRouteId();
@@ -288,5 +301,5 @@ export async function createJobFixture(
     status,
     ...extra,
   });
-  return { jobId, authorId, approvalRouteId };
+  return { jobId, authorId, approvalRouteId, assetId, revisionId };
 }

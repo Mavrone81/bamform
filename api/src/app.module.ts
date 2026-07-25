@@ -11,6 +11,8 @@ import { AssetTypesModule } from './asset-types/asset-types.module';
 import { AssetsModule } from './assets/assets.module';
 import { TemplatesModule } from './templates/templates.module';
 import { SchedulingModule } from './scheduling/scheduling.module';
+import { MinioModule } from './storage/minio.module';
+import { JobsModule } from './jobs/jobs.module';
 
 @Module({
   imports: [
@@ -28,6 +30,8 @@ import { SchedulingModule } from './scheduling/scheduling.module';
     AssetsModule,
     TemplatesModule,
     SchedulingModule,
+    MinioModule,
+    JobsModule,
   ],
   controllers: [HealthController],
 })

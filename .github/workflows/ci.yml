@@ -201,6 +201,12 @@ jobs:
     # Postgres + Redis (mirrored from job 4's "integration" service block)
     # is the minimal fix so this job can actually execute those cases
     # instead of only re-asserting that job 4 already passed them.
+    #
+    # Slice 6 adds `minio` (mirrored from job 4's own MinIO service block,
+    # same image/env) for the SAME reason: S-19 (attachment IDOR, 403),
+    # S-30 (magic-byte rejects a renamed executable) and S-32 (oversized
+    # attachment rejected) are genuine end-to-end attacks against the real
+    # attachment upload/fetch endpoints with no unit-level equivalent.
     services:
       postgres:
         image: postgres:16-alpine
@@ -218,6 +224,14 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 5
         ports: ["6379:6379"]
+      minio:
+        # See job 4's identical service block for why this pinned mirror
+        # (bitnami/minio:latest 404s — Bitnami purged all tags Aug 2025).
+        image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+        env:
+          MINIO_ROOT_USER: bamform
+          MINIO_ROOT_PASSWORD: ci_ephemeral_not_a_real_secret
+        ports: ["9000:9000"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -268,6 +282,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test
           REDIS_URL: redis://localhost:6379
+          MINIO_ENDPOINT: localhost:9000
       - name: CSP contains no unsafe-inline or unsafe-eval (S-28)
         run: bash scripts/ci/assert-csp-safe.sh
       - name: Passwords never appear in log output (S-15)

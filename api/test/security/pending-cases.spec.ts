@@ -4,14 +4,15 @@
  * — each is a `test.todo(...)`, which Jest reports as "todo" and which can
  * never silently pass: there is no function body to fake a pass with.
  *
- * A case appears here only when slices 1-4 genuinely do not yet implement
+ * A case appears here only when slices 1-4/6 genuinely do not yet implement
  * the feature/endpoint the case exercises (verified by searching api/src
- * for the relevant module — records/attachments/notifications/PDF/
- * delegation-acting/security-headers-middleware/AUDITOR-role enforcement/
- * a chain-verification routine none of these exist yet). As each later
- * slice lands, replace the corresponding line below with a real spec file
- * added to jest.security.config.js's testMatch — never with a stub that
- * asserts nothing.
+ * for the relevant module — records/notifications/PDF/delegation-acting/
+ * security-headers-middleware/AUDITOR-role enforcement/a chain-verification
+ * routine none of these exist yet; attachments now DO, slice 6 — S-19/S-30/
+ * S-32 moved out of this file). As each later slice lands, replace the
+ * corresponding line below with a real spec file added to
+ * jest.security.config.js's testMatch — never with a stub that asserts
+ * nothing.
  *
  * Full S-01..S-34 status (see jest.security.config.js's testMatch comments
  * and .superpowers/sdd/ci-C-report.md for the complete file-by-file map):
@@ -30,14 +31,16 @@
  *     S-23        api/test/integration/schema-constraints.spec.ts (I-INV-03)
  *     S-26        api/test/integration/grants.spec.ts (I-INV-08)
  *     S-29        api/test/integration/auth-flow.spec.ts
+ *     S-19        api/test/integration/attachments-security.spec.ts (slice 6 — attachment IDOR, 403, object not served)
+ *     S-30        api/test/integration/attachments-security.spec.ts (slice 6 — magic-byte rejects a renamed executable)
+ *     S-32        api/test/integration/jobs-attachments.spec.ts (slice 6 — attachment over ATTACHMENT_MAX_BYTES rejected)
  *   HANDLED BY A DIFFERENT JOB-6 STEP (not test:security):
  *     S-15        npm run test:log-redaction (this same job, next step)
  *     S-28        bash scripts/ci/assert-csp-safe.sh (this same job)
  *     S-33        npm audit / CodeQL / Trivy (this same job, earlier steps)
  *     S-34        gitleaks-action (job 2 · Secret scan)
- *   PENDING — feature not yet built in slices 1-4 (test.todo below):
- *     S-10, S-11, S-12, S-14, S-16, S-17, S-19, S-20, S-24, S-25, S-27,
- *     S-30, S-31, S-32
+ *   PENDING — feature not yet built in slices 1-4/6 (test.todo below):
+ *     S-10, S-11, S-12, S-14, S-16, S-17, S-20, S-24, S-25, S-27, S-31
  */
 describe('S-01..S-34 pending cases (later slices) — tracked, never faked', () => {
   test.todo(
@@ -83,12 +86,6 @@ describe('S-01..S-34 pending cases (later slices) — tracked, never faked', () 
   );
 
   test.todo(
-    'S-19 (I-7): an attachment URL requested by an unauthorised user is rejected 403. PENDING: ' +
-      'no attachment/MinIO endpoint exists yet — job 4\'s own comment confirms "MinIO is not yet ' +
-      'used by any test in slices 1-4" (.github/workflows/ci.yml) — later slice.',
-  );
-
-  test.todo(
     'S-20 (I-9): trigger a 500 — no stack trace, SQL or hostname in the response. PENDING: no ' +
       'global exception filter exists yet under api/src to assert a sanitised 500 body against — ' +
       'later slice.',
@@ -115,17 +112,7 @@ describe('S-01..S-34 pending cases (later slices) — tracked, never faked', () 
   );
 
   test.todo(
-    'S-30 (§10.1): upload a renamed executable as .jpg — rejected by magic-byte check. PENDING: ' +
-      'no attachment upload endpoint exists yet — later slice.',
-  );
-
-  test.todo(
     'S-31 (§10.1): a remark containing markup, rendered to PDF — escaped, no injection. ' +
       'PENDING: no PDF rendering feature exists yet — later slice.',
-  );
-
-  test.todo(
-    'S-32 (D-2): an attachment over 10 MB is rejected. PENDING: no attachment endpoint exists ' +
-      'yet — later slice.',
   );
 });

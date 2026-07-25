@@ -8,11 +8,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 export DATABASE_URL="postgresql://bamform:test_ephemeral_not_a_real_secret@localhost:15432/bamform_test?schema=public"
 export REDIS_URL="redis://localhost:16379"
+export MINIO_ENDPOINT="localhost:19000"
+export MINIO_ROOT_USER="bamform"
+export MINIO_BUCKET="bamform-attachments"
 
 echo "==> generating dev secrets (JWT signing key, blind index key) if missing"
 bash "$(dirname "${BASH_SOURCE[0]}")/generate-dev-secrets.sh"
 
-echo "==> starting test Postgres + Redis (docker-compose.test.yml)"
+echo "==> starting test Postgres + Redis + MinIO (docker-compose.test.yml)"
 docker compose -f docker-compose.test.yml up -d --wait
 
 echo "==> applying migrations"
@@ -24,5 +27,5 @@ docker cp api/prisma/grants.sql "$CID":/tmp/grants.sql
 docker exec -e PGPASSWORD=test_ephemeral_not_a_real_secret "$CID" \
   psql -U bamform -d bamform_test -v ON_ERROR_STOP=1 -f /tmp/grants.sql
 
-echo "==> running I-INV-01..11 / S-06..S-09 integration suite"
+echo "==> running I-INV-01..11 / S-06..S-09 / S-19 / S-30 / I-INV-19 integration suite"
 npm run test:integration --workspace=api

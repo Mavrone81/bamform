@@ -877,7 +877,11 @@ paths:
       tags: [Jobs]
       operationId: listJobs
       summary: List jobs
-      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        Area-scoped (PR-API-10). A MAINTAINER sees only jobs assigned to
+        them; TEAM_LEADER/ENGINEER/DOC_CONTROLLER/ADMIN/AUDITOR see every
+        job in their area scope (API_SPECIFICATION.md §4.1). `overdue` is
+        derived at read time (PR-043), never stored.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -921,13 +925,18 @@ paths:
       tags: [Jobs]
       operationId: getJob
       summary: Full job including the frozen template revision content
-      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        `templateRevision.items`/`.measurements` are the ACTIVE rows only
+        (DP-3/PR-049 — the revision bound at generation, frozen). 403
+        `out-of-scope` if the job's asset is outside the caller's area scope;
+        403 `forbidden` if a MAINTAINER requests a job not assigned to them.
       responses:
         '200':
           description: Job
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
+        '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
 
   /jobs/{jobId}/items/{templateItemId}:
@@ -943,7 +952,11 @@ paths:
       tags: [Jobs]
       operationId: recordItemResult
       summary: Record or update a checklist item result
-      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        `Idempotency-Key` is REQUIRED (reachable from the offline outbox,
+        PR-API-16). Upserts by `(jobId, templateItemId)`. Transitions the job
+        ASSIGNED -> IN_PROGRESS on the first result (PRD §5.1). `If-Match` is
+        checked against `draftVersion` when supplied.
       requestBody:
         required: true
         content:
@@ -975,7 +988,10 @@ paths:
       tags: [Jobs]
       operationId: recordMeasurementResult
       summary: Record or update a measurement reading
-      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        `judgement` is computed server-side from the frozen
+        `template_measurement`'s specification (PR-032) — the request never
+        supplies it. `Idempotency-Key` is REQUIRED (PR-API-16).
       requestBody:
         required: true
         content:
@@ -998,7 +1014,12 @@ paths:
       tags: [Jobs]
       operationId: uploadAttachment
       summary: Upload a photograph. Validated by magic bytes, not extension.
-      description: Slice 6 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+      description: |
+        Streamed through the api to MinIO (PR-011/ADR-007 — never presigned).
+        Content is sniffed by magic bytes, never trusted from the declared
+        MIME type or filename extension (S-30). Size-capped
+        (`ATTACHMENT_MAX_BYTES`, S-32) and per-job-capped
+        (`ATTACHMENT_MAX_PER_JOB`). `Idempotency-Key` is REQUIRED.
       requestBody:
         required: true
         content:
@@ -1015,6 +1036,60 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Attachment' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/attachments/{attachmentId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: attachmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Jobs]
+      operationId: getAttachment
+      summary: Fetch a stored attachment
+      description: |
+        Streamed through the api, NEVER a presigned URL (PR-011/ADR-007).
+        Authorisation is evaluated on EVERY fetch, not only at upload time
+        (UR-074, UR-099) — an unauthorised caller gets 403 and the object is
+        never read off MinIO (S-19/I-INV-19).
+      responses:
+        '200':
+          description: The stored image bytes
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}/parts:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Jobs]
+      operationId: recordPart
+      summary: Record a part consumed on this job
+      description: |
+        UR-034/PR-033. No `DELETE` counterpart — BUILD_HANDOFF non-negotiable
+        #7 (`bamform_app` holds no `DELETE` grant on any table, DBD §7.1);
+        this supersedes API_SPECIFICATION.md §10.5's documented
+        `DELETE /jobs/{id}/parts/{partId}` (see slice-6-report.md).
+        `Idempotency-Key` is honoured when supplied but not required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartUsedInput' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartUsed' }
+        '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
   /jobs/{jobId}/submit:
@@ -1035,6 +1110,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
+        '409':
+          description: Job is not IN_PROGRESS (PRD §5.1) - invalid-transition
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422':
           description: Mandatory items outstanding - the list is returned
           content:
@@ -1736,6 +1816,15 @@ components:
         recordedByName: { type: string }
         clientRecordedAt: { type: string, format: date-time }
         recordedAt: { type: string, format: date-time }
+
+    PartUsedInput:
+      type: object
+      required: [description, quantity]
+      properties:
+        partNo: { type: [string, 'null'] }
+        description: { type: string, minLength: 1 }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        remarks: { type: [string, 'null'] }
 
     PartUsed:
       type: object
