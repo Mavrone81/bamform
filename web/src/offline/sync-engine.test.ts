@@ -24,7 +24,13 @@ function makeJob(overrides: Partial<JobT> = {}): JobT {
     frequency: 'M3',
     dueOn: '2026-08-01',
     status: 'IN_PROGRESS',
-    templateRevision: { id: 'rev-1', formTemplateId: 'tpl-1', revisionCode: 'A', sequenceOrdinal: 1, status: 'CURRENT' },
+    templateRevision: {
+      id: 'rev-1',
+      formTemplateId: 'tpl-1',
+      revisionCode: 'A',
+      sequenceOrdinal: 1,
+      status: 'CURRENT',
+    },
     ...overrides,
   } as JobT;
 }
@@ -86,7 +92,19 @@ describe('bootstrap', () => {
 
   it('O-10: a job with pending local edits keeps its cached (frozen) template revision on a later bootstrap', async () => {
     const transport = new MockSyncTransport();
-    transport.seedBootstrap({ jobs: [makeJob({ templateRevision: { id: 'rev-1', formTemplateId: 'tpl-1', revisionCode: 'A', sequenceOrdinal: 1, status: 'CURRENT' } })] });
+    transport.seedBootstrap({
+      jobs: [
+        makeJob({
+          templateRevision: {
+            id: 'rev-1',
+            formTemplateId: 'tpl-1',
+            revisionCode: 'A',
+            sequenceOrdinal: 1,
+            status: 'CURRENT',
+          },
+        }),
+      ],
+    });
     await bootstrap(db, transport);
     await append(db, {
       jobId: 'job-1',
@@ -101,7 +119,17 @@ describe('bootstrap', () => {
     // offline with unsynced work — the (hypothetical, defensive) incoming
     // snapshot carries a different revision for the SAME job id.
     transport.seedBootstrap({
-      jobs: [makeJob({ templateRevision: { id: 'rev-2', formTemplateId: 'tpl-1', revisionCode: 'B', sequenceOrdinal: 2, status: 'CURRENT' } })],
+      jobs: [
+        makeJob({
+          templateRevision: {
+            id: 'rev-2',
+            formTemplateId: 'tpl-1',
+            revisionCode: 'B',
+            sequenceOrdinal: 2,
+            status: 'CURRENT',
+          },
+        }),
+      ],
     });
     const summary = await bootstrap(db, transport);
     expect(summary.jobsProtected).toBe(1);
@@ -299,7 +327,7 @@ describe('jobSyncState — the three technician-facing labels (PR-066) plus conf
     expect(await jobSyncState(db, 'job-1')).toBe('held-on-device');
   });
 
-  it('still reports held-on-device once a mutation is queued AND then acknowledged, as long as submit was never called (the diagram\'s SYNCED state)', async () => {
+  it("still reports held-on-device once a mutation is queued AND then acknowledged, as long as submit was never called (the diagram's SYNCED state)", async () => {
     await append(db, {
       jobId: 'job-1',
       method: 'PUT',
@@ -425,7 +453,9 @@ describe('triggerDrainIfOnline', () => {
     const transport = new MockSyncTransport();
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
     const seen: number[] = [];
-    triggerDrainIfOnline(db, transport, (summaries) => seen.push(summaries.reduce((n, s) => n + s.acked, 0)));
+    triggerDrainIfOnline(db, transport, (summaries) =>
+      seen.push(summaries.reduce((n, s) => n + s.acked, 0)),
+    );
     await vi.waitFor(() => expect(seen).toEqual([1]));
     expect(await pendingCountForJob(db, 'job-1')).toBe(0);
   });
@@ -520,7 +550,7 @@ describe('appendJobMutation — predicted draftVersion avoids a self-inflicted c
     expect(summary.conflicted).toBe(0);
   });
 
-  it('does not clobber hasPendingOutbox=true (append()\'s own update) when writing the predicted version back (regression, found by O-10 E2E)', async () => {
+  it("does not clobber hasPendingOutbox=true (append()'s own update) when writing the predicted version back (regression, found by O-10 E2E)", async () => {
     const result = await appendJobMutation(db, {
       jobId: 'job-1',
       method: 'PUT',

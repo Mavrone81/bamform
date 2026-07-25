@@ -12,7 +12,8 @@ import { defineConfig, devices } from '@playwright/test';
  * here. Locally, `webServer` builds and previews the app on its own.
  */
 const isCI = Boolean(process.env.CI);
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? (isCI ? 'http://127.0.0.1:8080' : 'http://localhost:4173');
+const baseURL =
+  process.env.PLAYWRIGHT_BASE_URL ?? (isCI ? 'http://127.0.0.1:8080' : 'http://localhost:4173');
 
 export default defineConfig({
   testDir: './e2e',

@@ -83,7 +83,9 @@ test('O-13: two devices editing the same job — the second device to sync gets 
  * O-14: a job reassigned server-side while cached on the original device —
  * that device is informed on its next sync and cannot submit.
  */
-test('O-14: a job reassigned server-side is flagged on the original device and blocks submit', async ({ page }) => {
+test('O-14: a job reassigned server-side is flagged on the original device and blocks submit', async ({
+  page,
+}) => {
   const server = new FakeServer();
   server.seedJob(JOB);
   await server.install(page);

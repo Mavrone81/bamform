@@ -8,7 +8,9 @@ import { FakeServer } from '../support/fake-server';
  * IndexedDB; this proves the same fault is actually surfaced to the
  * technician in the real UI, through a real browser clock.
  */
-test('O-09: a device clock 2 hours fast is flagged to the technician after bootstrap', async ({ page }) => {
+test('O-09: a device clock 2 hours fast is flagged to the technician after bootstrap', async ({
+  page,
+}) => {
   const server = new FakeServer();
   server.seedJob({
     id: 'job-1',
@@ -33,5 +35,7 @@ test('O-09: a device clock 2 hours fast is flagged to the technician after boots
   await page.getByLabel('Password').fill('correct-horse-battery-staple');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
-  await expect(page.getByText(/clock is about 2h ahead of the server/i)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/clock is about 2h ahead of the server/i)).toBeVisible({
+    timeout: 10_000,
+  });
 });

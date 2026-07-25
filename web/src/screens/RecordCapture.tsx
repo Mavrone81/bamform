@@ -46,7 +46,8 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         setItemResults(results);
         const readingValues: Record<string, string> = {};
         for (const m of job.job.measurementResults ?? []) {
-          if (m.readingNumeric != null) readingValues[m.templateMeasurementId] = String(m.readingNumeric);
+          if (m.readingNumeric != null)
+            readingValues[m.templateMeasurementId] = String(m.readingNumeric);
         }
         setReadings(readingValues);
       }
@@ -117,9 +118,13 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       if (result.reason === 'pending-mutations') {
         setSubmitBanner('Still sending earlier entries — try again once they finish.');
       } else if (result.reason === 'server-removed') {
-        setSubmitBanner('This job was reassigned on the server. It cannot be submitted from this device.');
+        setSubmitBanner(
+          'This job was reassigned on the server. It cannot be submitted from this device.',
+        );
       } else {
-        setSubmitBanner('The server rejected this submission. Check that every mandatory item has a result.');
+        setSubmitBanner(
+          'The server rejected this submission. Check that every mandatory item has a result.',
+        );
       }
     } finally {
       setSubmitting(false);
@@ -131,7 +136,9 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   if (cached === undefined) {
     return (
       <main className="app-shell">
-        <p role="alert">This job is not cached on this device. Reconnect and sync from the job list first.</p>
+        <p role="alert">
+          This job is not cached on this device. Reconnect and sync from the job list first.
+        </p>
       </main>
     );
   }
@@ -160,14 +167,14 @@ export function RecordCapture({ jobId }: { jobId: string }) {
 
       {quotaBanner && (
         <p className="banner" data-tone="bad" role="alert">
-          <span aria-hidden="true">⚠</span> Device storage is full. This entry was NOT saved — free up
-          space (Settings → Storage) and try again before continuing.
+          <span aria-hidden="true">⚠</span> Device storage is full. This entry was NOT saved — free
+          up space (Settings → Storage) and try again before continuing.
         </p>
       )}
       {cached.serverRemoved && (
         <p className="banner" data-tone="bad" role="alert">
-          <span aria-hidden="true">⚠</span> This job was reassigned or removed on the server. Your local
-          entries are kept, but this record cannot be submitted from this device.
+          <span aria-hidden="true">⚠</span> This job was reassigned or removed on the server. Your
+          local entries are kept, but this record cannot be submitted from this device.
         </p>
       )}
       {submitBanner && (
@@ -219,7 +226,11 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         disabled={!canSubmit || submitting}
         onClick={() => void handleSubmit()}
       >
-        {submitting ? 'Submitting…' : pendingCount > 0 ? `Sending ${pendingCount} entr${pendingCount === 1 ? 'y' : 'ies'}…` : 'Submit'}
+        {submitting
+          ? 'Submitting…'
+          : pendingCount > 0
+            ? `Sending ${pendingCount} entr${pendingCount === 1 ? 'y' : 'ies'}…`
+            : 'Submit'}
       </button>
     </main>
   );

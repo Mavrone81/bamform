@@ -9,7 +9,11 @@ import type {
   SyncBootstrap,
 } from './transport';
 
-async function authorizedFetch(path: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
+async function authorizedFetch(
+  path: string,
+  init: RequestInit = {},
+  attempt = 0,
+): Promise<Response> {
   const token = getAccessToken() ?? (await ensureFreshToken());
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);

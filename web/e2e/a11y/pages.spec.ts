@@ -14,24 +14,32 @@ test('A-01: SignIn has zero axe violations', async ({ page, server }) => {
   void server; // routes installed (incl. a clean 401 on /auth/refresh) so the page never hits a real, unmocked network call
   await page.goto('/sign-in');
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
-  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
   expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
 });
 
 test('A-01: JobList has zero axe violations', async ({ signedInPage: page }) => {
-  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
   expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
 });
 
 test('A-01: RecordCapture has zero axe violations', async ({ signedInPage: page }) => {
   await page.getByText('PM-2026-000431').click();
   await expect(page.getByRole('heading', { name: 'PM-2026-000431' })).toBeVisible();
-  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
   expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
 });
 
 /** A-02: keyboard-only completion of a full record. */
-test('A-02: a full item can be recorded using only the keyboard', async ({ signedInPage: page }) => {
+test('A-02: a full item can be recorded using only the keyboard', async ({
+  signedInPage: page,
+}) => {
   await page.getByText('PM-2026-000431').click();
   await expect(page.getByRole('heading', { name: 'PM-2026-000431' })).toBeVisible();
 

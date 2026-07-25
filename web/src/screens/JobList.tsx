@@ -27,8 +27,8 @@ function ClockSkewBanner({ skew }: { skew: ClockSkewRecord }) {
   const direction = skew.clockSkewMs > 0 ? 'ahead of' : 'behind';
   return (
     <p className="banner" data-tone="attention" role="alert">
-      <span aria-hidden="true">⚠</span> This device's clock is about {hours}h {direction} the server.
-      Entries record both times so this is not lost, but times shown on this device may be
+      <span aria-hidden="true">⚠</span> This device's clock is about {hours}h {direction} the
+      server. Entries record both times so this is not lost, but times shown on this device may be
       misleading until the clock is corrected.
     </p>
   );
@@ -63,10 +63,17 @@ export function JobList() {
     bootstrap(db, transport)
       .then((summary) => {
         if (cancelled) return;
-        if (summary.skewDetected) setClockSkew({ clockSkewMs: summary.clockSkewMs, skewDetected: true, serverTime: summary.serverTime, localTime: summary.localTimeAtBootstrap });
+        if (summary.skewDetected)
+          setClockSkew({
+            clockSkewMs: summary.clockSkewMs,
+            skewDetected: true,
+            serverTime: summary.serverTime,
+            localTime: summary.localTimeAtBootstrap,
+          });
       })
       .catch(() => {
-        if (!cancelled) setBootstrapError('Could not reach the server. Showing jobs already on this device.');
+        if (!cancelled)
+          setBootstrapError('Could not reach the server. Showing jobs already on this device.');
       })
       .finally(() => {
         if (!cancelled) void refresh();
@@ -113,7 +120,16 @@ export function JobList() {
       {rows === null && <p>Loading…</p>}
       {rows !== null && rows.length === 0 && <p>No jobs assigned yet.</p>}
 
-      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      <ul
+        style={{
+          listStyle: 'none',
+          margin: 0,
+          padding: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 'var(--space-3)',
+        }}
+      >
         {rows?.map(({ job, syncState }) => (
           <li key={job.id}>
             <button

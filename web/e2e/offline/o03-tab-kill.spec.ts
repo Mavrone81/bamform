@@ -23,7 +23,10 @@ import { FakeServer } from '../support/fake-server';
  * `db.ts`'s `recoverStuckSendingRows` (wired into `BamFormDB`'s `ready`
  * event, so it runs before the first drain of any new session) exists for.
  */
-test('O-03: outbox survives the tab being killed mid-drain and resumes on reopen', async ({ context, page }) => {
+test('O-03: outbox survives the tab being killed mid-drain and resumes on reopen', async ({
+  context,
+  page,
+}) => {
   const server = new FakeServer();
   server.seedJob({
     id: 'job-1',
@@ -73,7 +76,9 @@ test('O-03: outbox survives the tab being killed mid-drain and resumes on reopen
   const retryRequest = page2.waitForRequest('**/api/v1/sync/outbox');
   await page2.evaluate(() => window.dispatchEvent(new Event('online')));
   const retry = await retryRequest;
-  expect((retry.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id).toBe(mutationId);
+  expect((retry.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id).toBe(
+    mutationId,
+  );
 
   await expect(page2.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
   expect(server.appliedCount.get(mutationId)).toBe(1); // still exactly once

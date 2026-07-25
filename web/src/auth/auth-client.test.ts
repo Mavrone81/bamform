@@ -21,7 +21,11 @@ afterEach(() => {
 
 describe('login', () => {
   it('stores the returned access token in memory (token-store) and returns the AuthResult', async () => {
-    const authResult = { accessToken: 'tok-1', expiresIn: 900, user: { id: 'u1', fullName: 'A', roles: [] } };
+    const authResult = {
+      accessToken: 'tok-1',
+      expiresIn: 900,
+      user: { id: 'u1', fullName: 'A', roles: [] },
+    };
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(authResult));
 
     const result = await login('tech@bevorasg.com', 'password12345');
@@ -42,7 +46,11 @@ describe('login', () => {
 
 describe('refresh', () => {
   it('relies on the HttpOnly cookie (no body sent) and stores the new access token', async () => {
-    const authResult = { accessToken: 'tok-2', expiresIn: 900, user: { id: 'u1', fullName: 'A', roles: [] } };
+    const authResult = {
+      accessToken: 'tok-2',
+      expiresIn: 900,
+      user: { id: 'u1', fullName: 'A', roles: [] },
+    };
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(authResult));
 
     const result = await refresh();
@@ -65,7 +73,10 @@ describe('logout', () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, true, 204));
     await logout();
     expect(getAccessToken()).toBeNull();
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining('/auth/logout'), expect.anything());
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.stringContaining('/auth/logout'),
+      expect.anything(),
+    );
   });
 
   it('still clears the local token even if the network call fails outright', async () => {
@@ -77,7 +88,11 @@ describe('logout', () => {
 
 describe('ensureFreshToken', () => {
   it('returns the current token without a network call when it is not stale', async () => {
-    const authResult = { accessToken: 'tok-3', expiresIn: 900, user: { id: 'u1', fullName: 'A', roles: [] } };
+    const authResult = {
+      accessToken: 'tok-3',
+      expiresIn: 900,
+      user: { id: 'u1', fullName: 'A', roles: [] },
+    };
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(authResult));
     await login('tech@bevorasg.com', 'password12345');
     vi.mocked(fetch).mockClear();
@@ -88,7 +103,11 @@ describe('ensureFreshToken', () => {
   });
 
   it('refreshes when there is no token yet', async () => {
-    const authResult = { accessToken: 'tok-4', expiresIn: 900, user: { id: 'u1', fullName: 'A', roles: [] } };
+    const authResult = {
+      accessToken: 'tok-4',
+      expiresIn: 900,
+      user: { id: 'u1', fullName: 'A', roles: [] },
+    };
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(authResult));
     const token = await ensureFreshToken();
     expect(token).toBe('tok-4');

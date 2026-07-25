@@ -7,7 +7,10 @@ import type { JobSyncState } from '../offline/sync-engine';
  * greyscale/low-contrast viewing conditions (a circle outline, an arrows
  * loop, a triangle, a check), independent of the tone colour.
  */
-const LABELS: Record<JobSyncState, { text: string; icon: string; tone: 'neutral' | 'attention' | 'good' | 'bad' }> = {
+const LABELS: Record<
+  JobSyncState,
+  { text: string; icon: string; tone: 'neutral' | 'attention' | 'good' | 'bad' }
+> = {
   'held-on-device': { text: 'Held on device', icon: '◯', tone: 'neutral' }, // ◯
   sending: { text: 'Sending…', icon: '↻', tone: 'attention' }, // ↻
   conflict: { text: 'Conflict — needs your input', icon: '⚠', tone: 'bad' }, // ⚠

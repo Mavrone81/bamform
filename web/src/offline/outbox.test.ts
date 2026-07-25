@@ -19,7 +19,15 @@ let dbCounter = 0;
 
 beforeEach(async () => {
   db = createTestDB(`test-outbox-${dbCounter++}-${Math.random()}`);
-  await db.jobs.put({ id: 'job-1', job: {} as never, cachedAt: new Date().toISOString(), hasPendingOutbox: false, submitState: 'none', serverRemoved: false, predictedDraftVersion: 1 });
+  await db.jobs.put({
+    id: 'job-1',
+    job: {} as never,
+    cachedAt: new Date().toISOString(),
+    hasPendingOutbox: false,
+    submitState: 'none',
+    serverRemoved: false,
+    predictedDraftVersion: 1,
+  });
 });
 
 afterEach(async () => {
@@ -171,7 +179,12 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     // transmission, not a safe idempotent retry of the SAME send.
     const entries = [];
     for (let i = 0; i < 5; i++) {
-      entries.push((await append(db, input({ path: `/jobs/job-1/items/item-${i}` }))) as { ok: true; entry: { id: string } });
+      entries.push(
+        (await append(db, input({ path: `/jobs/job-1/items/item-${i}` }))) as {
+          ok: true;
+          entry: { id: string };
+        },
+      );
     }
     const transport = new MockSyncTransport();
 
@@ -195,8 +208,24 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     // transmission — e.g. a retried HTTP request whose first attempt DID
     // arrive, and a naive client resent it anyway.
     const mutations = [
-      { id: a.entry.id, sequence: 1, method: 'PUT' as const, path: 'x', body: {}, clientRecordedAt: '', ifMatch: null },
-      { id: b.entry.id, sequence: 2, method: 'PUT' as const, path: 'x', body: {}, clientRecordedAt: '', ifMatch: null },
+      {
+        id: a.entry.id,
+        sequence: 1,
+        method: 'PUT' as const,
+        path: 'x',
+        body: {},
+        clientRecordedAt: '',
+        ifMatch: null,
+      },
+      {
+        id: b.entry.id,
+        sequence: 2,
+        method: 'PUT' as const,
+        path: 'x',
+        body: {},
+        clientRecordedAt: '',
+        ifMatch: null,
+      },
     ];
     await transport.drainOutbox(mutations);
     await transport.drainOutbox(mutations); // exact replay
@@ -321,7 +350,13 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
   it('draining an empty outbox is a safe no-op', async () => {
     const transport = new MockSyncTransport();
     const summary = await drain(db, transport);
-    expect(summary).toEqual({ attempted: 0, acked: 0, conflicted: 0, failed: 0, networkError: false });
+    expect(summary).toEqual({
+      attempted: 0,
+      acked: 0,
+      conflicted: 0,
+      failed: 0,
+      networkError: false,
+    });
   });
 
   it('records a non-Error thrown value (e.g. a raw string rejection) without crashing', async () => {
@@ -341,7 +376,9 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     const { entry } = (await append(db, input())) as { ok: true; entry: { id: string } };
     const transport = new MockSyncTransport();
     transport.drainOutbox = async (mutations) =>
-      Promise.resolve({ results: mutations.map((m) => ({ id: m.id, status: 409, applied: false })) });
+      Promise.resolve({
+        results: mutations.map((m) => ({ id: m.id, status: 409, applied: false })),
+      });
     const summary = await drain(db, transport);
     expect(summary.conflicted).toBe(1);
     const row = await db.outbox.get(entry.id);

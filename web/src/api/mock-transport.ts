@@ -137,8 +137,15 @@ export class MockSyncTransport implements SyncTransport {
     const existing = this.submitIdempotencyStore.get(idempotencyKey);
     if (existing) return existing;
 
-    this.submitAppliedCount.set(idempotencyKey, (this.submitAppliedCount.get(idempotencyKey) ?? 0) + 1);
-    const response: SubmitJobResponse = { status: 200, ok: true, body: { id: jobId, status: 'SUBMITTED' } };
+    this.submitAppliedCount.set(
+      idempotencyKey,
+      (this.submitAppliedCount.get(idempotencyKey) ?? 0) + 1,
+    );
+    const response: SubmitJobResponse = {
+      status: 200,
+      ok: true,
+      body: { id: jobId, status: 'SUBMITTED' },
+    };
     this.submitIdempotencyStore.set(idempotencyKey, response);
     return response;
   }

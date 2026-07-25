@@ -18,7 +18,12 @@ afterEach(() => {
 describe('HttpSyncTransport', () => {
   it('bootstrap sends the bearer token and returns the parsed payload', async () => {
     setAccessToken('tok', 900);
-    const payload = { serverTime: '2026-01-01T00:00:00Z', user: { id: 'u', fullName: 'A', roles: [] }, jobs: [], syncToken: 't' };
+    const payload = {
+      serverTime: '2026-01-01T00:00:00Z',
+      user: { id: 'u', fullName: 'A', roles: [] },
+      jobs: [],
+      syncToken: 't',
+    };
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(payload));
 
     const transport = new HttpSyncTransport();
@@ -32,7 +37,12 @@ describe('HttpSyncTransport', () => {
   it('bootstrap appends `since` as a query parameter', async () => {
     setAccessToken('tok', 900);
     vi.mocked(fetch).mockResolvedValueOnce(
-      jsonResponse({ serverTime: 't', user: { id: 'u', fullName: 'A', roles: [] }, jobs: [], syncToken: 't' }),
+      jsonResponse({
+        serverTime: 't',
+        user: { id: 'u', fullName: 'A', roles: [] },
+        jobs: [],
+        syncToken: 't',
+      }),
     );
     const transport = new HttpSyncTransport();
     await transport.bootstrap('2026-01-01T00:00:00Z');
@@ -110,9 +120,20 @@ describe('HttpSyncTransport', () => {
     setAccessToken('stale-tok', 900);
     vi.mocked(fetch)
       .mockResolvedValueOnce(jsonResponse({}, false, 401)) // first bootstrap attempt
-      .mockResolvedValueOnce(jsonResponse({ accessToken: 'fresh-tok', expiresIn: 900, user: { id: 'u', fullName: 'A', roles: [] } })) // /auth/refresh
       .mockResolvedValueOnce(
-        jsonResponse({ serverTime: 't', user: { id: 'u', fullName: 'A', roles: [] }, jobs: [], syncToken: 't' }),
+        jsonResponse({
+          accessToken: 'fresh-tok',
+          expiresIn: 900,
+          user: { id: 'u', fullName: 'A', roles: [] },
+        }),
+      ) // /auth/refresh
+      .mockResolvedValueOnce(
+        jsonResponse({
+          serverTime: 't',
+          user: { id: 'u', fullName: 'A', roles: [] },
+          jobs: [],
+          syncToken: 't',
+        }),
       ); // retried bootstrap
 
     const transport = new HttpSyncTransport();

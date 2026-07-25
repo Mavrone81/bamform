@@ -17,8 +17,7 @@ export interface AppendInput {
 }
 
 export type AppendResult =
-  | { ok: true; entry: OutboxEntry }
-  | { ok: false; reason: 'quota-exceeded'; error: unknown };
+  { ok: true; entry: OutboxEntry } | { ok: false; reason: 'quota-exceeded'; error: unknown };
 
 export function isQuotaExceeded(err: unknown): boolean {
   if (err instanceof DOMException) {
@@ -97,10 +96,7 @@ export async function append(db: BamFormDB, input: AppendInput): Promise<AppendR
  * rows, which are retained but require an explicit technician decision
  * (PR-064) before they can be resent. */
 export async function listDrainable(db: BamFormDB, limit = MAX_BATCH_SIZE): Promise<OutboxEntry[]> {
-  const rows = await db.outbox
-    .where('status')
-    .anyOf('pending', 'failed')
-    .sortBy('sequence');
+  const rows = await db.outbox.where('status').anyOf('pending', 'failed').sortBy('sequence');
   return rows.slice(0, limit);
 }
 

@@ -54,7 +54,9 @@ test('O-01: full record completed offline arrives complete and exactly once on r
  * is "N jobs, all completed while offline, all arrive" — tested here with
  * 3 jobs.
  */
-test('O-04: three jobs completed during an extended offline period all arrive on reconnect', async ({ page }) => {
+test('O-04: three jobs completed during an extended offline period all arrive on reconnect', async ({
+  page,
+}) => {
   const server = new FakeServer();
   const jobs: SeedJob[] = [1, 2, 3].map((n) => ({
     id: `job-${n}`,

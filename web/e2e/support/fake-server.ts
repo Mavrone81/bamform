@@ -228,9 +228,15 @@ export class FakeServer {
     }
 
     if (body.mutations.length > 200) {
-      await route.fulfill({ status: 400, contentType: 'application/problem+json', body: JSON.stringify({
-        type: 'about:blank', title: 'batch too large', status: 400,
-      }) });
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({
+          type: 'about:blank',
+          title: 'batch too large',
+          status: 400,
+        }),
+      });
       return;
     }
 
@@ -273,7 +279,9 @@ export class FakeServer {
             type: 'https://form.bevorasg.com/errors/draft-conflict',
             title: 'Draft version conflict',
             status: 409,
-            detail: isStale ? `Job is at draftVersion ${currentVersion}, mutation based on ${m.ifMatch}` : undefined,
+            detail: isStale
+              ? `Job is at draftVersion ${currentVersion}, mutation based on ${m.ifMatch}`
+              : undefined,
           },
         };
       } else {
@@ -311,14 +319,24 @@ export class FakeServer {
     const key = await route.request().headerValue('idempotency-key');
     const dedupeKey = key ?? jobId;
     if (this.submitStore.has(dedupeKey)) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(this.submitStore.get(dedupeKey)) });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(this.submitStore.get(dedupeKey)),
+      });
       return;
     }
     this.submitCount.set(jobId, (this.submitCount.get(jobId) ?? 0) + 1);
     const job = this.jobs.get(jobId);
-    const body = job ? { ...this.toApiJob(job), status: 'SUBMITTED' } : { id: jobId, status: 'SUBMITTED' };
+    const body = job
+      ? { ...this.toApiJob(job), status: 'SUBMITTED' }
+      : { id: jobId, status: 'SUBMITTED' };
     this.submitStore.set(dedupeKey, body);
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    });
   }
 
   async install(page: Page): Promise<void> {
@@ -328,7 +346,10 @@ export class FakeServer {
     await page.route('**/api/v1/sync/bootstrap*', (route) => this.handleBootstrap(route));
     await page.route('**/api/v1/sync/outbox', (route) => this.handleOutbox(route));
     await page.route(/\/api\/v1\/jobs\/([^/]+)\/submit/, (route) => {
-      const match = route.request().url().match(/\/jobs\/([^/]+)\/submit/);
+      const match = route
+        .request()
+        .url()
+        .match(/\/jobs\/([^/]+)\/submit/);
       return this.handleSubmit(route, match ? match[1] : 'unknown');
     });
   }

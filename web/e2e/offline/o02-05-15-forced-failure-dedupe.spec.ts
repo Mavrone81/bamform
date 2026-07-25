@@ -56,7 +56,10 @@ test('O-15: a response lost after the server commits leaves the entry retained, 
   expect(allIds.size).toBe(1); // only the one item we touched
 });
 
-test('O-02: network killed mid-drain, then restored — no duplicate, no loss', async ({ signedInPage: page, server }) => {
+test('O-02: network killed mid-drain, then restored — no duplicate, no loss', async ({
+  signedInPage: page,
+  server,
+}) => {
   await page.getByText('PM-2026-000431').click();
 
   server.dropNextOutboxResponseOnce();
@@ -66,7 +69,9 @@ test('O-02: network killed mid-drain, then restored — no duplicate, no loss', 
   const mutationId = (request.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id;
   await expect.poll(() => server.appliedCount.get(mutationId)).toBe(1);
 
-  const retryAttempt = page.waitForRequest((req) => req.url().includes('/sync/outbox') && req !== request);
+  const retryAttempt = page.waitForRequest(
+    (req) => req.url().includes('/sync/outbox') && req !== request,
+  );
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await retryAttempt;
 

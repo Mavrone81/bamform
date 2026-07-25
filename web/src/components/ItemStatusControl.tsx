@@ -2,7 +2,12 @@ import type { components } from '../api/generated/openapi-types';
 
 type ItemStatus = components['schemas']['ItemStatus'];
 
-const OPTIONS: Array<{ value: ItemStatus; text: string; icon: string; tone: 'good' | 'bad' | 'neutral' }> = [
+const OPTIONS: Array<{
+  value: ItemStatus;
+  text: string;
+  icon: string;
+  tone: 'good' | 'bad' | 'neutral';
+}> = [
   { value: 'DONE', text: 'Done', icon: '✓', tone: 'good' },
   { value: 'NOT_DONE', text: 'Not done', icon: '✕', tone: 'bad' },
   { value: 'NOT_APPLICABLE', text: 'N/A', icon: '—', tone: 'neutral' },

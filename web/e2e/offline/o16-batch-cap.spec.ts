@@ -16,7 +16,9 @@ import { FakeServer, type SeedJob } from '../support/fake-server';
  */
 test.setTimeout(60_000);
 
-test('O-16: a queue of 205 mutations drains in batches capped at 200, never exceeding it', async ({ page }) => {
+test('O-16: a queue of 205 mutations drains in batches capped at 200, never exceeding it', async ({
+  page,
+}) => {
   const items: SeedJob['items'] = Array.from({ length: 205 }, (_, i) => ({
     id: `item-${i}`,
     itemNo: i + 1,

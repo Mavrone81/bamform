@@ -1,7 +1,13 @@
 import type { BamFormDB, CachedJob, OutboxMethod } from './db';
 import { META_KEYS } from './db';
 import type { SyncTransport, SyncBootstrap } from '../api/transport';
-import { append, drainAll, pendingCountForJob, type AppendResult, type DrainSummary } from './outbox';
+import {
+  append,
+  drainAll,
+  pendingCountForJob,
+  type AppendResult,
+  type DrainSummary,
+} from './outbox';
 import { uuidv7 } from '../lib/uuidv7';
 import type { components } from '../api/generated/openapi-types';
 
@@ -105,7 +111,12 @@ export async function bootstrap(
   await db.meta.put({ key: META_KEYS.lastBootstrapAt, value: localTimeAtBootstrap });
   await db.meta.put({
     key: META_KEYS.clockSkewMs,
-    value: { clockSkewMs, skewDetected, serverTime: response.serverTime, localTime: localTimeAtBootstrap },
+    value: {
+      clockSkewMs,
+      skewDetected,
+      serverTime: response.serverTime,
+      localTime: localTimeAtBootstrap,
+    },
   });
 
   return {
@@ -149,7 +160,13 @@ export async function getClockSkew(db: BamFormDB): Promise<ClockSkewRecord | nul
  */
 export async function appendJobMutation(
   db: BamFormDB,
-  input: { jobId: string; method: OutboxMethod; path: string; body: unknown; clientRecordedAt: string },
+  input: {
+    jobId: string;
+    method: OutboxMethod;
+    path: string;
+    body: unknown;
+    clientRecordedAt: string;
+  },
 ): Promise<AppendResult> {
   const job = await db.jobs.get(input.jobId);
   const ifMatch = job?.predictedDraftVersion ?? job?.job.draftVersion ?? null;
@@ -180,7 +197,11 @@ export type SubmitGuardError =
   | { ok: false; reason: 'server-rejected'; status: number; problem?: unknown };
 export type SubmitResult = { ok: true; status: number } | SubmitGuardError;
 
-export async function submitJob(db: BamFormDB, transport: SyncTransport, jobId: string): Promise<SubmitResult> {
+export async function submitJob(
+  db: BamFormDB,
+  transport: SyncTransport,
+  jobId: string,
+): Promise<SubmitResult> {
   const job = await db.jobs.get(jobId);
   if (job?.serverRemoved) {
     return { ok: false, reason: 'server-removed' };
@@ -204,7 +225,12 @@ export async function submitJob(db: BamFormDB, transport: SyncTransport, jobId: 
     return { ok: true, status: response.status };
   }
   if (job) await db.jobs.put({ ...job, submitState: 'none' });
-  return { ok: false, reason: 'server-rejected', status: response.status, problem: response.problem };
+  return {
+    ok: false,
+    reason: 'server-rejected',
+    status: response.status,
+    problem: response.problem,
+  };
 }
 
 /** The three technician-facing labels from PR-066/PR-WFD-04, plus an
