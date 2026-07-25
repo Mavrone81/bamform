@@ -32,13 +32,14 @@ function toLocalDatetimeInputValue(d: Date): string {
 
 test('E-04: a delegated approver covers an absence and acts on behalf of the delegator', async ({
   browser,
-}) => {
+}, testInfo) => {
   const server = new FakeServer();
   server.seedJob(JOB);
+  const viewport = testInfo.project.use.viewport ?? { width: 375, height: 812 };
 
   // The absent TEAM_LEADER grants delegated authority to a colleague, for
   // a window that safely covers "now", through the real Delegations UI.
-  const leaderContext = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const leaderContext = await browser.newContext({ viewport });
   const leaderPage = await leaderContext.newPage();
   await server.install(leaderPage);
   await signInAs(leaderPage, E2E_USERS.teamLeader.email);
@@ -62,7 +63,7 @@ test('E-04: a delegated approver covers an absence and acts on behalf of the del
 
   // The delegate — who holds no TEAM_LEADER/ENGINEER role of their own —
   // now sees the leader's queue entry, marked as acting on their behalf.
-  const delegateContext = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const delegateContext = await browser.newContext({ viewport });
   const delegatePage = await delegateContext.newPage();
   await server.install(delegatePage);
   await signInAs(delegatePage, E2E_USERS.delegate.email);

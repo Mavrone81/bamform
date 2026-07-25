@@ -26,11 +26,12 @@ const RETURN_REASON = 'Torque reading is out of tolerance — please recheck and
 
 test('E-03: verifier returns with a reason → technician corrects and resubmits → sequence visible', async ({
   browser,
-}) => {
+}, testInfo) => {
   const server = new FakeServer();
   server.seedJob(JOB);
+  const viewport = testInfo.project.use.viewport ?? { width: 375, height: 812 };
 
-  const techContext = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const techContext = await browser.newContext({ viewport });
   const techPage = await techContext.newPage();
   await server.install(techPage);
   await signInAs(techPage, E2E_USERS.technician.email);
@@ -42,7 +43,7 @@ test('E-03: verifier returns with a reason → technician corrects and resubmits
   await expect(techPage.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
   // 2. A TEAM_LEADER, in a separate context, returns it with a reason.
-  const leaderContext = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const leaderContext = await browser.newContext({ viewport });
   const leaderPage = await leaderContext.newPage();
   await server.install(leaderPage);
   await signInAs(leaderPage, E2E_USERS.teamLeader.email);
@@ -70,7 +71,7 @@ test('E-03: verifier returns with a reason → technician corrects and resubmits
   await techContext.close();
 
   // 4. Back with a verifier: the full sequence is visible on the record.
-  const reviewContext = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const reviewContext = await browser.newContext({ viewport });
   const reviewPage = await reviewContext.newPage();
   await server.install(reviewPage);
   await signInAs(reviewPage, E2E_USERS.teamLeader.email);
