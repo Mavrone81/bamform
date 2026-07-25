@@ -51,6 +51,13 @@ module.exports = {
     '<rootDir>/test/integration/attachments-security.spec.ts', // S-19, S-30, I-INV-19
     '<rootDir>/test/integration/jobs-attachments.spec.ts', // S-32 (oversized attachment rejected)
 
+    // -- slice 7 — approval workflow ------------------------------------
+    '<rootDir>/src/jobs/drawn-signature.spec.ts', // S-30-equivalent for the drawn-signature field (unit)
+    '<rootDir>/test/integration/approval-verify.spec.ts', // S-22 (live HTTP self-approval), I-INV-13, drawn-signature encryption
+    '<rootDir>/test/integration/approval-auditor-readonly.spec.ts', // S-24 (AUDITOR rejected on every new write)
+    '<rootDir>/test/integration/approval-delegation.spec.ts', // S-25 (expired/revoked/absent delegation rejected)
+    '<rootDir>/test/integration/records-integrity.spec.ts', // S-10 (tampered content_hash detected)
+
     // -- honestly-tracked gaps: pending cases only, never faked ----------
     '<rootDir>/test/security/pending-cases.spec.ts',
   ],

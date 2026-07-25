@@ -1,0 +1,43 @@
+# oasdiff --err-ignore baseline (C-04 gate, scripts/ci/oasdiff-check.sh).
+#
+# NOT a structured YAML document despite the extension (oasdiff keeps
+# convention with its other config flags) -- oasdiff's ignore-file parser
+# treats this as PLAIN TEXT, one entry per line. A change is suppressed
+# only when a line in this file (lower-cased) contains BOTH "OPERATION
+# PATH" and the change's own uncolorized message text -- i.e. each entry
+# below is copy-pasted verbatim from `oasdiff breaking ... -f singleline`
+# output (minus the leading "error at <file>," prefix, which would
+# otherwise be mis-parsed as the entry's path). Comment lines (this
+# header) are inert: they contain no "OPERATION /path" token so they can
+# never match a real change.
+#
+# Every entry here is an INTENTIONAL, code-reviewed correction of the
+# openapi contract to match actual server behaviour (slice 7 review
+# finding C -- see .superpowers/sdd/slice-7-report.md, "Fix C"), not a
+# suppressed regression:
+#
+#  - VerifyJobRequest.drawnSignature is now `required`, matching the Zod
+#    DTO the server actually validates against (shared/src/job.ts
+#    verifyJobRequestSchema) -- it always 422'd without it; the contract
+#    was simply wrong.
+#  - ApprovalStep.actorName is now optional, matching
+#    api/src/jobs/mappers.ts#toApprovalStep, which has never populated it
+#    (same established convention as ItemResult.recordedByName /
+#    Attachment.uploadedByName / MeasurementResult.recordedByName /
+#    TemplateRevision.authoredByName / TemplateRevision.approvedByName).
+#    This ripples across every endpoint whose response embeds
+#    ApprovalStep (GET /jobs/{jobId}, POST /jobs/{jobId}/submit,
+#    /return, /verify, and GET /sync/bootstrap) -- all five entries below
+#    are that ONE correction, not five unrelated ones.
+#
+# If a genuinely new breaking change shows up in this list in a future
+# slice, do NOT copy-paste it in reflexively -- that defeats the gate.
+# Fix the regression, or if it's another deliberate, reviewed contract
+# correction, add a new dated comment explaining why.
+
+in API GET /jobs/{jobId} the response property `allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
+in API POST /jobs/{jobId}/return the response property `allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
+in API POST /jobs/{jobId}/submit the response property `allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
+in API POST /jobs/{jobId}/verify added the new required request property `drawnSignature` [new-required-request-property].
+in API POST /jobs/{jobId}/verify the response property `allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
+in API GET /sync/bootstrap the response property `jobs/items/allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].

@@ -712,6 +712,14 @@ model ApprovalStep {
   signature         Bytes
   signingKeyId      String          @map("signing_key_id")
   stepUpVerifiedAt  DateTime?       @map("step_up_verified_at") @db.Timestamptz(6)
+  // Slice 7 (additive, see 20260725000000_approval_step_drawn_signature_and_two_stage_route):
+  // the on-system DRAWN signature (stylus/mouse-captured PNG), field-encrypted
+  // (PR-106 approach, extended beyond app_user for this one additional column
+  // — see field-encryption.ts's header). Null for actions other than
+  // `verified` (return/recall/void carry a content-bound signature but never
+  // capture a drawn signature).
+  drawnSignatureCt         Bytes? @map("drawn_signature_ct")
+  drawnSignatureDekVersion Int?   @map("drawn_signature_dek_version") @db.SmallInt
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 

@@ -143,6 +143,39 @@ export const attachmentSchema = z.object({
 });
 export type Attachment = z.infer<typeof attachmentSchema>;
 
+// -------------------------------------------------------------- approval_step
+
+/**
+ * PR-035/PR-041..046/PR-070..077/PR-093/PR-094 — mirrors `api/openapi.yaml`'s
+ * `ApprovalStep`. The drawn signature (base64 PNG data-URL) is never returned
+ * here — it is captured on `POST /jobs/{id}/verify` (`VerifyJobRequest`
+ * below) and stored encrypted; rendering it back is the verifier-queue UI's
+ * concern (slice 11), not this response shape.
+ */
+export const approvalActionSchema = z.enum([
+  'SUBMITTED',
+  'VERIFIED',
+  'RETURNED',
+  'RECALLED',
+  'VOIDED',
+]);
+export type ApprovalAction = z.infer<typeof approvalActionSchema>;
+
+export const approvalStepSchema = z.object({
+  id: z.string().uuid(),
+  stageOrdinal: z.number().int(),
+  stageLabel: z.string().optional(),
+  action: approvalActionSchema,
+  actorId: z.string().uuid().optional(),
+  actorName: z.string().optional(),
+  actorRoleCode: z.string().optional(),
+  onBehalfOfName: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
+  actedAt: z.string(),
+  signingKeyId: z.string().optional(),
+});
+export type ApprovalStep = z.infer<typeof approvalStepSchema>;
+
 // ------------------------------------------------------------------------- job
 
 export const jobSchema = jobSummarySchema.extend({
@@ -152,8 +185,62 @@ export const jobSchema = jobSummarySchema.extend({
   measurementResults: z.array(measurementResultSchema).optional(),
   partsUsed: z.array(partUsedSchema).optional(),
   attachments: z.array(attachmentSchema).optional(),
+  approvalSteps: z.array(approvalStepSchema).optional(),
 });
 export type Job = z.infer<typeof jobSchema>;
+
+// ------------------------------------------------ approval transition bodies
+
+/**
+ * `POST /jobs/{id}/verify` request body (PR-093/094, SAMUEL'S CONFIRMED
+ * DECISIONS in slice-7-brief.md). `drawnSignature` is a base64 PNG data-URL
+ * (`data:image/png;base64,...` or bare base64 — the server strips a data-URL
+ * prefix if present) captured by the on-system signature pad (slice 11 builds
+ * the pad UI; this slice validates + stores what it sends). `onBehalfOf` is
+ * the delegator's user id when the actor is standing in under an active
+ * delegation (PR-076) — omitted/absent when acting on their own authority.
+ */
+export const verifyJobRequestSchema = z.object({
+  drawnSignature: z.string().min(1, 'drawnSignature is required (base64 PNG data-URL).'),
+  onBehalfOf: z.string().uuid().nullable().optional(),
+  comment: z.string().nullable().optional(),
+});
+export type VerifyJobRequest = z.infer<typeof verifyJobRequestSchema>;
+
+/** `POST /jobs/{id}/return` request body — PR-074/INV-13, reason mandatory, >= 10 chars. */
+export const returnJobRequestSchema = z.object({
+  reason: z.string().trim().min(10, 'reason must be at least 10 characters (INV-13, PR-074).'),
+});
+export type ReturnJobRequest = z.infer<typeof returnJobRequestSchema>;
+
+/** `POST /jobs/{id}/void` request body — PR-046/INV-12, reason mandatory, >= 10 chars. */
+export const voidJobRequestSchema = z.object({
+  reason: z.string().trim().min(10, 'reason must be at least 10 characters (INV-12, PR-046).'),
+});
+export type VoidJobRequest = z.infer<typeof voidJobRequestSchema>;
+
+// --------------------------------------------------------------- integrity
+
+/** `GET /records/{id}/integrity` response — PR-095/AC-11. Mirrors `api/openapi.yaml`'s `IntegrityResult`. */
+export const integrityResultSchema = z.object({
+  recordId: z.string().uuid(),
+  intact: z.boolean(),
+  checkedAt: z.string(),
+  signatures: z
+    .array(
+      z.object({
+        approvalStepId: z.string().uuid(),
+        signerName: z.string().optional(),
+        actedAt: z.string(),
+        signingKeyId: z.string(),
+        hashMatches: z.boolean(),
+        signatureValid: z.boolean(),
+      }),
+    )
+    .optional(),
+  mismatchDetail: z.string().nullable().optional(),
+});
+export type IntegrityResult = z.infer<typeof integrityResultSchema>;
 
 // ------------------------------------------------------- GET /jobs query params
 

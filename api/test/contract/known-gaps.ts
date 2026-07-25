@@ -34,7 +34,6 @@ export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
   { method: 'GET', path: '/health' },
   { method: 'GET', path: '/health/ready' },
   { method: 'GET', path: '/audit-events/chain-status' },
-  { method: 'GET', path: '/records/{recordId}/integrity' },
   // Slice 6 — jobs, results, parts, attachments, submission gate — DONE.
   // GET /jobs, GET /jobs/{jobId}, PUT items/measurements, POST attachments,
   // POST submit moved out of this allowlist (implemented, contract-enforced
@@ -42,9 +41,14 @@ export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
   // POST /jobs/{jobId}/parts are new paths added to openapi.yaml alongside
   // the implementation, not documented-then-implemented, so they never
   // needed an allowlist entry.
-  // Slice 7 — approval: verify/return/recall/void, signatures, archive
-  { method: 'POST', path: '/jobs/{jobId}/verify' },
-  { method: 'POST', path: '/jobs/{jobId}/return' },
+  // Slice 7 — approval — DONE. POST verify/return/recall/void and
+  // GET /records/{recordId}/integrity moved out of this allowlist
+  // (implemented, contract-enforced below; recall/void are new paths added
+  // to openapi.yaml alongside their implementation, same as slice 6's note
+  // above, so they never needed an allowlist entry either). GET /queue (the
+  // verifier-queue UI's read endpoint) is explicitly OUT of slice 7's scope
+  // (slice-7-brief.md Constraints: "Do NOT build the verifier-queue UI
+  // (slice 11)") — stays allowlisted for slice 11.
   { method: 'GET', path: '/queue' },
   // Slice 9 — sync API: bootstrap, outbox, idempotency store
   { method: 'GET', path: '/sync/bootstrap' },

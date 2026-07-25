@@ -1,10 +1,12 @@
 import type {
+  ApprovalStep as ApprovalStepRow,
   Attachment as AttachmentRow,
   ItemResult as ItemResultRow,
   MeasurementResult as MeasurementResultRow,
   PartUsed as PartUsedRow,
 } from '@prisma/client';
 import type {
+  ApprovalStep,
   Attachment,
   AttachmentContentType,
   ItemResult,
@@ -14,7 +16,12 @@ import type {
   PartUsed,
 } from '@bamform/shared';
 import { toTemplateItem, toTemplateMeasurement, toTemplateRevision } from '../templates/mappers';
-import { ITEM_STATUS_FROM_DB, JOB_STATUS_FROM_DB, JUDGEMENT_FROM_DB } from './job-enums';
+import {
+  approvalActionFromDb,
+  ITEM_STATUS_FROM_DB,
+  JOB_STATUS_FROM_DB,
+  JUDGEMENT_FROM_DB,
+} from './job-enums';
 import type { JobFullRow, JobSummaryRow } from './job-include';
 import { isOverdue } from './overdue';
 
@@ -58,6 +65,7 @@ export function toJob(row: JobFullRow, today: Date = new Date()): Job {
     measurementResults: row.measurementResults.map(toMeasurementResult),
     partsUsed: row.partsUsed.map(toPartUsed),
     attachments: row.attachments.map(toAttachment),
+    approvalSteps: row.approvalSteps.map(toApprovalStep),
   };
 }
 
@@ -92,6 +100,25 @@ export function toPartUsed(row: PartUsedRow): PartUsed {
     description: row.description,
     quantity: row.quantity.toNumber(),
     remarks: row.remarks,
+  };
+}
+
+/**
+ * PR-093/PR-094/PR-035 — never maps `drawnSignatureCt`/`drawnSignatureDekVersion`
+ * (the encrypted personal-data drawn signature): `openapi.yaml`'s `ApprovalStep`
+ * schema has no drawn-signature field, and rendering it back is the
+ * verifier-queue UI's concern (slice 11), not this read path.
+ */
+export function toApprovalStep(row: ApprovalStepRow): ApprovalStep {
+  return {
+    id: row.id,
+    stageOrdinal: row.stageOrdinal,
+    action: approvalActionFromDb(row.action),
+    actorId: row.actorId,
+    actorRoleCode: row.actorRoleCode,
+    reason: row.reason,
+    actedAt: row.actedAt.toISOString(),
+    signingKeyId: row.signingKeyId,
   };
 }
 

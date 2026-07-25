@@ -261,6 +261,29 @@ export async function createJob(opts: JobOpts): Promise<string> {
   return result.rows[0].id as string;
 }
 
+export interface DelegationOpts {
+  validFrom: Date;
+  validTo: Date;
+  revokedAt?: Date | null;
+}
+
+/** PR-076 — a `delegation` row from `delegatorId` to `delegateId`. */
+export async function createDelegation(
+  delegatorId: string,
+  delegateId: string,
+  createdBy: string,
+  opts: DelegationOpts,
+): Promise<string> {
+  const result = await adminPool.query(
+    `INSERT INTO "delegation"
+       ("delegator_id", "delegate_id", "valid_from", "valid_to", "created_by", "revoked_at")
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
+    [delegatorId, delegateId, opts.validFrom, opts.validTo, createdBy, opts.revokedAt ?? null],
+  );
+  return result.rows[0].id as string;
+}
+
 /** Builds one job (and everything it depends on) in a single call. */
 export async function createJobFixture(
   jobNumber: string,

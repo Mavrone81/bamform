@@ -1,5 +1,5 @@
-import { ItemStatusT, JobStatusT, JudgementT } from '@prisma/client';
-import type { ItemStatus, JobStatus, Judgement } from '@bamform/shared';
+import { ApprovalActionT, ItemStatusT, JobStatusT, JudgementT } from '@prisma/client';
+import type { ApprovalAction, ItemStatus, JobStatus, Judgement } from '@bamform/shared';
 
 /** DBD §5 `job_status_t` <-> `api/openapi.yaml` `JobStatus`. */
 export const JOB_STATUS_FROM_DB: Record<JobStatusT, JobStatus> = {
@@ -53,3 +53,37 @@ export const JOB_WRITABLE_STATUSES: readonly JobStatusT[] = [
   JobStatusT.assigned,
   JobStatusT.in_progress,
 ];
+
+/**
+ * `approval_action_t` <-> `api/openapi.yaml` `ApprovalStep.action`. Only the
+ * 5 job-lifecycle actions (PR-035) are ever written to `approval_step`
+ * (`jobId` is NOT NULL on that table) — `revision_approved`/
+ * `revision_rejected` are enum members shared with the type but never
+ * actually inserted there (template-revision approval uses
+ * `audit_event.action` instead, see `templates/revisions.service.ts`), so
+ * this is intentionally a partial map with a defensive throw, not a total
+ * `Record`.
+ */
+const APPROVAL_ACTION_FROM_DB: Partial<Record<ApprovalActionT, ApprovalAction>> = {
+  [ApprovalActionT.submitted]: 'SUBMITTED',
+  [ApprovalActionT.verified]: 'VERIFIED',
+  [ApprovalActionT.returned]: 'RETURNED',
+  [ApprovalActionT.recalled]: 'RECALLED',
+  [ApprovalActionT.voidedAction]: 'VOIDED',
+};
+
+export function approvalActionFromDb(action: ApprovalActionT): ApprovalAction {
+  const mapped = APPROVAL_ACTION_FROM_DB[action];
+  if (!mapped) {
+    throw new Error(`Unexpected approval_step.action for a job approval step: ${action}`);
+  }
+  return mapped;
+}
+
+export const APPROVAL_ACTION_TO_DB: Record<ApprovalAction, ApprovalActionT> = {
+  SUBMITTED: ApprovalActionT.submitted,
+  VERIFIED: ApprovalActionT.verified,
+  RETURNED: ApprovalActionT.returned,
+  RECALLED: ApprovalActionT.recalled,
+  VOIDED: ApprovalActionT.voidedAction,
+};
