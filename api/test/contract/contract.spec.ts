@@ -197,9 +197,14 @@ describe('test:contract — response-schema conformance', () => {
     },
   ];
 
-  it('AuditChainStatus documents intact/checkedAt/eventCount as required, firstBreakSequence as optional', () => {
+  it('AuditChainStatus documents all four keys as required (firstBreakSequence is nullable, not optional — the controller always emits the key)', () => {
     const schema = getSchema('AuditChainStatus') as { required?: string[] };
-    expect((schema.required ?? []).sort()).toEqual(['checkedAt', 'eventCount', 'intact']);
+    expect((schema.required ?? []).sort()).toEqual([
+      'checkedAt',
+      'eventCount',
+      'firstBreakSequence',
+      'intact',
+    ]);
   });
 
   it.each(RESPONSE_SCHEMAS_WITH_KNOWN_KEYS)(

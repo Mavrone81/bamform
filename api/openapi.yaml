@@ -1423,6 +1423,18 @@ paths:
         checks `prev_hash` linkage. Runs on demand (recompute), the same
         design as `GET /records/{recordId}/integrity`. `AUDITOR`/`ADMIN`
         only (SECURITY_ARCHITECTURE.md §4.2 P2, PR-097/PR-099).
+
+        CAVEAT — cannot detect tail-truncation: this check detects mutated
+        fields, broken hash links, and deletion of a row from the middle or
+        head of the chain (the next surviving row's `prev_hash` stops
+        matching). It CANNOT detect deletion of the most-recent events — a
+        truncated tail leaves the remaining chain fully self-consistent, so
+        `intact: true` does not rule that out. The application database role
+        is denied `DELETE` on `audit_event`, so this is not exploitable via a
+        compromised API (in-scope threat E-8 is already blocked); truncation
+        by a database-owner/superuser is only detectable with an external
+        (off-box) anchor for the chain head, which is tracked as future work
+        and not implemented by this endpoint.
       responses:
         '200':
           description: Chain verification result
@@ -2097,22 +2109,31 @@ components:
 
     AuditChainStatus:
       type: object
-      required: [intact, checkedAt, eventCount]
+      required: [intact, checkedAt, eventCount, firstBreakSequence]
       properties:
         intact: { type: boolean }
         checkedAt: { type: string, format: date-time }
         eventCount: { type: integer }
         firstBreakSequence:
           type: [integer, 'null']
-          description: Set only when `intact` is false - the first sequence number whose hash link failed to verify.
-      # `firstBreakSequence` omitted here (not set to a literal `null`) —
-      # a literal-`null` example value on a `type: [integer, 'null']`
-      # property crashes spectral-cli 6.16.2's example-validation codegen
-      # (nimma) with "Cannot read properties of null (reading 'enum')";
-      # reproduced in isolation with a two-line minimal schema. The field is
-      # still fully documented above (type + semantics); this only affects
-      # which value the illustrative example shows.
-      example: { intact: true, checkedAt: '2026-07-24T02:00:00Z', eventCount: 418322 }
+          description: Key is always present. `null` unless `intact` is false, in which case it's the first sequence number whose hash link failed to verify.
+      # `firstBreakSequence` is now `required` (it's always present in the
+      # real response), so the example must include it. It is deliberately
+      # NOT given a literal `null` here — a literal-`null` example value on a
+      # `type: [integer, 'null']` property crashes spectral-cli 6.16.2's
+      # example-validation codegen (nimma) with "Cannot read properties of
+      # null (reading 'enum')" (reproduced in isolation with a two-line
+      # minimal schema). Instead this example depicts the OTHER valid shape —
+      # a detected break (`intact: false` + a real sequence number) — which
+      # is both a real, non-null value and arguably a more useful
+      # illustrative example than the all-clear case anyway.
+      example:
+        {
+          intact: false,
+          checkedAt: '2026-07-24T02:00:00Z',
+          eventCount: 418322,
+          firstBreakSequence: 418299,
+        }
 
     MeasurementTrend:
       type: object
