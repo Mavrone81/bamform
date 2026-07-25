@@ -27,6 +27,16 @@ function isStepUpRequired(problem: { type?: string } | undefined): boolean {
  */
 export function RecordReview({ jobId }: { jobId: string }) {
   const { navigate } = useRouter();
+  // PR-076: when this record was reached from a delegated queue entry
+  // (VerifierQueue passes it through as a query param — the hand-rolled
+  // router only tracks `pathname`, not `search`), every signing action on
+  // this screen acts on behalf of that delegator rather than the caller's
+  // own authority. Read once at mount: this screen is never navigated to
+  // itself with a different `onBehalfOf` without a full re-mount (the
+  // jobId path param changes too).
+  const [onBehalfOf] = useState(() =>
+    new URLSearchParams(window.location.search).get('onBehalfOf'),
+  );
   const [job, setJob] = useState<Job | null | undefined>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mode, setMode] = useState<'view' | 'sign' | 'return'>('view');
@@ -61,7 +71,10 @@ export function RecordReview({ jobId }: { jobId: string }) {
     setActionError(null);
     try {
       const { transport } = getServices();
-      const result = await transport.verifyJob(jobId, { drawnSignature });
+      const result = await transport.verifyJob(jobId, {
+        drawnSignature,
+        ...(onBehalfOf ? { onBehalfOf } : {}),
+      });
       if (result.ok) {
         setMode('view');
         pendingSignatureRef.current = null;
@@ -162,6 +175,12 @@ export function RecordReview({ jobId }: { jobId: string }) {
         <p aria-label="Approval progress">
           Stage {Math.min(stage, 2)} of 2 — needs{' '}
           <strong>{STAGE_LABELS[Math.min(stage, 2)]}</strong>
+        </p>
+      )}
+
+      {onBehalfOf && (
+        <p className="status-chip" data-tone="neutral" style={{ width: 'fit-content' }}>
+          <span aria-hidden="true">◈</span> Acting on behalf of the delegator
         </p>
       )}
 

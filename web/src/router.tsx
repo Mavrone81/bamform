@@ -26,7 +26,12 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 
   const navigate = (to: string) => {
     window.history.pushState(null, '', to);
-    setPath(to);
+    // `path` tracks the PATHNAME only (matching the initial state above and
+    // every `matchPath` caller's expectation) even when `to` carries a query
+    // string (slice 11b: VerifierQueue -> RecordReview passes `onBehalfOf`
+    // that way) — the browser URL still gets the full `to`, a screen just
+    // reads `window.location.search` itself if it needs the query part.
+    setPath(window.location.pathname);
   };
 
   return <RouterContext.Provider value={{ path, navigate }}>{children}</RouterContext.Provider>;

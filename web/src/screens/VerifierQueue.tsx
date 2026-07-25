@@ -76,7 +76,13 @@ export function VerifierQueue() {
               type="button"
               className="card"
               style={{ width: '100%', textAlign: 'left', alignItems: 'stretch' }}
-              onClick={() => navigate(`/jobs/${entry.id}/review`)}
+              onClick={() =>
+                navigate(
+                  entry.onBehalfOf
+                    ? `/jobs/${entry.id}/review?onBehalfOf=${encodeURIComponent(entry.onBehalfOf)}`
+                    : `/jobs/${entry.id}/review`,
+                )
+              }
             >
               <div className="card-row">
                 <span className="job-code">{entry.jobNumber}</span>

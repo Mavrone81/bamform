@@ -70,7 +70,7 @@ export const E2E_USERS: {
   technician: E2EUser;
   teamLeader: E2EUser;
   engineer: E2EUser;
-  delegateLeader: E2EUser;
+  delegate: E2EUser;
 } = {
   technician: {
     id: 'user-1',
@@ -90,11 +90,15 @@ export const E2E_USERS: {
     fullName: 'Test Engineer',
     roles: ['ENGINEER'],
   },
-  delegateLeader: {
+  // Deliberately NOT a TEAM_LEADER/ENGINEER of their own — the only way
+  // this user can appear in a stage's queue is via an active delegation
+  // (E-04), so the journey genuinely proves the delegation path rather
+  // than a role this user would have had access through anyway.
+  delegate: {
     id: 'user-4',
     email: 'delegate@bevorasg.com',
-    fullName: 'Test Delegate Leader',
-    roles: ['TEAM_LEADER'],
+    fullName: 'Test Delegate',
+    roles: ['MAINTAINER'],
   },
 };
 
