@@ -1,6 +1,6 @@
 import { test, expect, type Page, type Browser } from '@playwright/test';
 import { FakeServer, E2E_USERS, E2E_PASSWORD, type SeedJob } from '../support/fake-server';
-import { signInAs } from '../support/fixtures';
+import { signInAs, drawSignature } from '../support/fixtures';
 
 /**
  * E-02: a verifier opens the queue, reviews a submitted record, signs on
@@ -26,23 +26,6 @@ const JOB: SeedJob = {
   submittedAt: new Date(Date.now() - 3_600_000).toISOString(),
   currentStageOrdinal: 1,
 };
-
-/** Draws a short, unmistakably non-blank stroke across the signature pad
- * using real mouse-driven pointer events (Chromium dispatches genuine
- * pointerdown/pointermove/pointerup for mouse input, exercising the SAME
- * code path a stylus would) — this is a real signature captured by the
- * real canvas, not a stub. */
-async function drawSignature(page: Page): Promise<void> {
-  const canvas = page.locator('.signature-pad-canvas');
-  await expect(canvas).toBeVisible();
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error('signature pad canvas has no bounding box');
-  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.5);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.25, { steps: 5 });
-  await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.6, { steps: 5 });
-  await page.mouse.up();
-}
 
 async function verifyWithStepUp(
   page: Page,

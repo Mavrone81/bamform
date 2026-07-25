@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { FakeServer, E2E_USERS, E2E_PASSWORD, type SeedJob } from '../support/fake-server';
-import { signInAs } from '../support/fixtures';
+import { signInAs, drawSignature } from '../support/fixtures';
 
 /**
  * E-04: a delegated approver covers an absence — the TEAM_LEADER grants a
@@ -76,13 +76,7 @@ test('E-04: a delegated approver covers an absence and acts on behalf of the del
   await expect(delegatePage.getByRole('heading', { name: JOB.jobNumber })).toBeVisible();
 
   await delegatePage.getByRole('button', { name: 'Verify' }).click();
-  const canvas = delegatePage.locator('.signature-pad-canvas');
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error('signature pad canvas has no bounding box');
-  await delegatePage.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.5);
-  await delegatePage.mouse.down();
-  await delegatePage.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.4, { steps: 5 });
-  await delegatePage.mouse.up();
+  await drawSignature(delegatePage);
   await delegatePage.getByRole('button', { name: 'Done' }).click();
 
   await expect(
