@@ -14,6 +14,9 @@ import { SchedulingModule } from './scheduling/scheduling.module';
 import { MinioModule } from './storage/minio.module';
 import { JobsModule } from './jobs/jobs.module';
 import { SyncModule } from './sync/sync.module';
+import { DelegationsModule } from './delegations/delegations.module';
+import { QueueModule } from './queue/queue.module';
+import { NotificationQueueModule } from './notifications/notification-queue.module';
 
 @Module({
   imports: [
@@ -32,6 +35,14 @@ import { SyncModule } from './sync/sync.module';
     TemplatesModule,
     SchedulingModule,
     MinioModule,
+    // Slice 11a — `NotificationQueueModule` (@Global, PRODUCER only: `api`
+    // schedules/enqueues, never sends — PR-150/151) must be imported before
+    // any module that injects `NotificationQueueService` at construction
+    // time; listed here explicitly (Nest resolves by graph, not by array
+    // order, but this keeps the "who provides what" story readable).
+    NotificationQueueModule,
+    DelegationsModule,
+    QueueModule,
     JobsModule,
     SyncModule,
   ],

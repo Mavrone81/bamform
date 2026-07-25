@@ -65,6 +65,32 @@ export class ApprovalRepository {
   }
 
   /**
+   * PR-077's escalation config for one stage. `escalationHours: null` is a
+   * distinct, deliberate "no escalation for this stage" state — NOT "use a
+   * system default" — per the seed migration's own comment
+   * (`20260723180100_seed_reference_data`: "No escalation is configured by
+   * this seed... NULL escalation_hours [is] the 'no escalation' state").
+   * Callers (`SubmissionService`/`VerificationService`) must not schedule an
+   * escalation job when this returns `escalationHours: null`.
+   */
+  async getStageEscalationConfig(
+    approvalRouteId: string,
+    stageOrdinal: number,
+  ): Promise<{ escalationHours: number | null; escalateToRoleCode: string | null } | null> {
+    const stage = await this.prisma.approvalStage.findUnique({
+      where: { approvalRouteId_stageOrdinal: { approvalRouteId, stageOrdinal } },
+      include: { escalateToRole: true },
+    });
+    if (!stage) {
+      return null;
+    }
+    return {
+      escalationHours: stage.escalationHours,
+      escalateToRoleCode: stage.escalateToRole?.code ?? null,
+    };
+  }
+
+  /**
    * PR-076: a non-revoked delegation from `delegatorId` to `delegateId` whose
    * window (`valid_from`..`valid_to`) contains `now`. Returns `null` (not
    * found/expired/revoked) when acting under delegation is NOT currently

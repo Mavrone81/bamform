@@ -195,6 +195,27 @@ describe('test:contract — response-schema conformance', () => {
       schemaName: 'AuditChainStatus',
       knownKeys: ['intact', 'checkedAt', 'eventCount', 'firstBreakSequence'],
     },
+    {
+      // Slice 11a — `delegations.mapper.ts#toDelegation` always populates
+      // every one of these keys (unlike `QueueEntry`/`Job`, which are `allOf`
+      // compositions this check cannot introspect — `getSchema` returns the
+      // raw node, which has no top-level `.properties` for an `allOf` schema,
+      // so those are deliberately excluded here the same way `Job` already is).
+      schemaName: 'Delegation',
+      knownKeys: [
+        'id',
+        'delegatorId',
+        'delegatorName',
+        'delegateId',
+        'delegateName',
+        'validFrom',
+        'validTo',
+        'reason',
+        'createdBy',
+        'revokedAt',
+        'createdAt',
+      ],
+    },
   ];
 
   it('AuditChainStatus documents all four keys as required (firstBreakSequence is nullable, not optional — the controller always emits the key)', () => {

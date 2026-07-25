@@ -8,3 +8,5 @@ export * from './schedule';
 export * from './job';
 export * from './audit';
 export * from './sync';
+export * from './queue';
+export * from './delegation';

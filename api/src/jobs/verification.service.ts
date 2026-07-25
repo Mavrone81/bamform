@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ApprovalActionT, AuditActionT, JobStatusT } from '@prisma/client';
 import type { Job, VerifyJobRequest } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
@@ -14,6 +14,7 @@ import { FIELD_ENCRYPTION_SERVICE, RECORD_SIGNING_SERVICE } from '../crypto/cryp
 import type { FieldEncryptionService } from '../crypto/field-encryption';
 import { computeContentHash } from '../crypto/content-hash';
 import type { RecordSigningService } from '../crypto/record-signer';
+import { NotificationQueueService } from '../notifications/notification-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApprovalRepository } from './approval.repository';
 import { buildCanonicalJobRecord } from './canonical-job-record';
@@ -34,6 +35,8 @@ import { toJob } from './mappers';
  */
 @Injectable()
 export class VerificationService {
+  private readonly logger = new Logger(VerificationService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobs: JobsService,
@@ -42,6 +45,7 @@ export class VerificationService {
     private readonly idempotency: IdempotencyService,
     @Inject(RECORD_SIGNING_SERVICE) private readonly recordSigner: RecordSigningService,
     @Inject(FIELD_ENCRYPTION_SERVICE) private readonly fieldEncryption: FieldEncryptionService,
+    private readonly notificationQueue: NotificationQueueService,
   ) {}
 
   async verify(
@@ -103,152 +107,170 @@ export class VerificationService {
     const approvalStepId = randomUUID();
     const now = new Date();
 
-    return this.prisma.$transaction(async (tx) => {
-      // Conditional guard — INV-13/PR-042's "same transaction" promise also
-      // means a concurrent verifier for the SAME stage must not both
-      // succeed; this WHERE re-asserts the preconditions atomically.
-      const guarded = await tx.job.updateMany({
-        where: { id: jobId, status: JobStatusT.submitted, currentStageOrdinal: stageOrdinal },
-        data: isFinalStage
-          ? {
-              status: JobStatusT.archived,
-              verifiedAt: now,
-              archivedAt: now,
-              currentStageOrdinal: null,
-            }
-          : { currentStageOrdinal: stageOrdinal + 1 },
-      });
-      if (guarded.count === 0) {
-        throw invalidTransitionProblem(
-          'This record was already advanced by another verifier — reload and retry.',
-        );
-      }
+    return this.prisma
+      .$transaction(async (tx) => {
+        // Conditional guard — INV-13/PR-042's "same transaction" promise also
+        // means a concurrent verifier for the SAME stage must not both
+        // succeed; this WHERE re-asserts the preconditions atomically.
+        const guarded = await tx.job.updateMany({
+          where: { id: jobId, status: JobStatusT.submitted, currentStageOrdinal: stageOrdinal },
+          data: isFinalStage
+            ? {
+                status: JobStatusT.archived,
+                verifiedAt: now,
+                archivedAt: now,
+                currentStageOrdinal: null,
+              }
+            : { currentStageOrdinal: stageOrdinal + 1 },
+        });
+        if (guarded.count === 0) {
+          throw invalidTransitionProblem(
+            'This record was already advanced by another verifier — reload and retry.',
+          );
+        }
 
-      const priorSteps = await this.approvalRepo.listApprovalSteps(jobId, tx);
+        const priorSteps = await this.approvalRepo.listApprovalSteps(jobId, tx);
 
-      const canonicalRecord = buildCanonicalJobRecord({
-        job: {
-          id: job.id,
-          jobNumber: job.jobNumber,
-          assetId: job.assetId,
-          templateRevisionId: job.templateRevisionId,
-          frequency: job.frequency,
-          status: JOB_STATUS_FROM_DB[isFinalStage ? JobStatusT.archived : JobStatusT.submitted],
-        },
-        templateRevision: {
-          id: job.templateRevision.id,
-          formTemplateId: job.templateRevision.formTemplateId,
-          revisionCode: job.templateRevision.revisionCode,
-          sequenceOrdinal: job.templateRevision.sequenceOrdinal,
-        },
-        submitter: { userId: job.submittedBy, submittedAt: job.submittedAt },
-        itemResults: job.itemResults.map((r) => ({
-          id: r.id,
-          templateItemId: r.templateItemId,
-          status: r.status,
-          remark: r.remark,
-        })),
-        measurementResults: job.measurementResults.map((r) => ({
-          id: r.id,
-          templateMeasurementId: r.templateMeasurementId,
-          readingNumeric: r.readingNumeric ? r.readingNumeric.toString() : null,
-          readingText: r.readingText,
-          judgement: JUDGEMENT_FROM_DB[r.judgement],
-        })),
-        partsUsed: job.partsUsed.map((p) => ({
-          id: p.id,
-          partNo: p.partNo,
-          description: p.description,
-          quantity: p.quantity.toString(),
-        })),
-        attachments: job.attachments.map((a) => ({
-          id: a.id,
-          sha256Hex: Buffer.from(a.sha256).toString('hex'),
-        })),
-        approvalSteps: [
-          ...priorSteps.map((s) => ({
-            id: s.id,
-            stageOrdinal: s.stageOrdinal,
-            action: s.action,
-            actorId: s.actorId,
-            onBehalfOfId: s.onBehalfOfId,
-            reason: s.reason,
-            actedAt: s.actedAt,
+        const canonicalRecord = buildCanonicalJobRecord({
+          job: {
+            id: job.id,
+            jobNumber: job.jobNumber,
+            assetId: job.assetId,
+            templateRevisionId: job.templateRevisionId,
+            frequency: job.frequency,
+            status: JOB_STATUS_FROM_DB[isFinalStage ? JobStatusT.archived : JobStatusT.submitted],
+          },
+          templateRevision: {
+            id: job.templateRevision.id,
+            formTemplateId: job.templateRevision.formTemplateId,
+            revisionCode: job.templateRevision.revisionCode,
+            sequenceOrdinal: job.templateRevision.sequenceOrdinal,
+          },
+          submitter: { userId: job.submittedBy, submittedAt: job.submittedAt },
+          itemResults: job.itemResults.map((r) => ({
+            id: r.id,
+            templateItemId: r.templateItemId,
+            status: r.status,
+            remark: r.remark,
           })),
-          {
-            id: approvalStepId,
-            stageOrdinal,
-            action: ApprovalActionT.verified,
-            actorId: actor.actorId,
-            onBehalfOfId,
-            reason: dto.comment ?? null,
-            actedAt: now,
-          },
-        ],
+          measurementResults: job.measurementResults.map((r) => ({
+            id: r.id,
+            templateMeasurementId: r.templateMeasurementId,
+            readingNumeric: r.readingNumeric ? r.readingNumeric.toString() : null,
+            readingText: r.readingText,
+            judgement: JUDGEMENT_FROM_DB[r.judgement],
+          })),
+          partsUsed: job.partsUsed.map((p) => ({
+            id: p.id,
+            partNo: p.partNo,
+            description: p.description,
+            quantity: p.quantity.toString(),
+          })),
+          attachments: job.attachments.map((a) => ({
+            id: a.id,
+            sha256Hex: Buffer.from(a.sha256).toString('hex'),
+          })),
+          approvalSteps: [
+            ...priorSteps.map((s) => ({
+              id: s.id,
+              stageOrdinal: s.stageOrdinal,
+              action: s.action,
+              actorId: s.actorId,
+              onBehalfOfId: s.onBehalfOfId,
+              reason: s.reason,
+              actedAt: s.actedAt,
+            })),
+            {
+              id: approvalStepId,
+              stageOrdinal,
+              action: ApprovalActionT.verified,
+              actorId: actor.actorId,
+              onBehalfOfId,
+              reason: dto.comment ?? null,
+              actedAt: now,
+            },
+          ],
+        });
+        const contentHash = computeContentHash(canonicalRecord);
+        const signature = this.recordSigner.sign(contentHash);
+
+        const encryptedDrawn = this.fieldEncryption.encrypt(drawnPng.toString('base64'), {
+          table: 'approval_step',
+          column: 'drawn_signature_ct',
+          rowId: approvalStepId,
+        });
+
+        await this.approvalRepo.createApprovalStep(tx, {
+          id: approvalStepId,
+          jobId,
+          stageOrdinal,
+          action: ApprovalActionT.verified,
+          actorId: actor.actorId,
+          onBehalfOfId,
+          actorRoleCode: matchedRoleCode,
+          reason: dto.comment ?? null,
+          actedAt: now,
+          sourceIp: actor.sourceIp,
+          contentHash,
+          signature,
+          signingKeyId: this.recordSigner.kid,
+          stepUpVerifiedAt,
+          drawnSignatureCt: encryptedDrawn.ciphertext,
+          drawnSignatureDekVersion: encryptedDrawn.dekVersion,
+        });
+
+        await this.audit.record(tx, {
+          actorId: actor.actorId,
+          onBehalfOfId: onBehalfOfId ?? undefined,
+          action: AuditActionT.approve,
+          entityType: 'job',
+          entityId: jobId,
+          before: { status: 'SUBMITTED', stageOrdinal },
+          after: isFinalStage
+            ? { status: 'ARCHIVED', stageOrdinal }
+            : { status: 'SUBMITTED', stageOrdinal: stageOrdinal + 1 },
+          sourceIp: actor.sourceIp,
+          requestId: actor.requestId,
+        });
+
+        const full = await tx.job.findUniqueOrThrow({
+          where: { id: jobId },
+          include: JOB_FULL_INCLUDE,
+        });
+        const dtoOut = toJob(full);
+
+        if (idempotencyKey && fingerprint) {
+          await this.idempotency.recordWithin(
+            tx,
+            {
+              key: idempotencyKey,
+              userId: actor.actorId,
+              endpoint: 'POST /jobs/{jobId}/verify',
+              fingerprint,
+            },
+            { status: 200, body: dtoOut },
+          );
+        }
+
+        return dtoOut;
+      })
+      .then(async (dtoOut) => {
+        // PR-077 "cancelled on verification" — outside the transaction (`api`
+        // schedules/cancels, it never sends, PR-150/151); best-effort, never
+        // fails a verify that already committed. Safe no-op if this stage had
+        // no escalation configured (`ApprovalRepository
+        // #getStageEscalationConfig`'s `escalationHours: null` — nothing was
+        // ever scheduled, so `cancelEscalation` finds nothing to remove).
+        try {
+          await this.notificationQueue.cancelEscalation(jobId, stageOrdinal);
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `escalation cancel failed for job ${jobId} stage ${stageOrdinal}: ${err.message}`,
+          );
+        }
+        return dtoOut;
       });
-      const contentHash = computeContentHash(canonicalRecord);
-      const signature = this.recordSigner.sign(contentHash);
-
-      const encryptedDrawn = this.fieldEncryption.encrypt(drawnPng.toString('base64'), {
-        table: 'approval_step',
-        column: 'drawn_signature_ct',
-        rowId: approvalStepId,
-      });
-
-      await this.approvalRepo.createApprovalStep(tx, {
-        id: approvalStepId,
-        jobId,
-        stageOrdinal,
-        action: ApprovalActionT.verified,
-        actorId: actor.actorId,
-        onBehalfOfId,
-        actorRoleCode: matchedRoleCode,
-        reason: dto.comment ?? null,
-        actedAt: now,
-        sourceIp: actor.sourceIp,
-        contentHash,
-        signature,
-        signingKeyId: this.recordSigner.kid,
-        stepUpVerifiedAt,
-        drawnSignatureCt: encryptedDrawn.ciphertext,
-        drawnSignatureDekVersion: encryptedDrawn.dekVersion,
-      });
-
-      await this.audit.record(tx, {
-        actorId: actor.actorId,
-        onBehalfOfId: onBehalfOfId ?? undefined,
-        action: AuditActionT.approve,
-        entityType: 'job',
-        entityId: jobId,
-        before: { status: 'SUBMITTED', stageOrdinal },
-        after: isFinalStage
-          ? { status: 'ARCHIVED', stageOrdinal }
-          : { status: 'SUBMITTED', stageOrdinal: stageOrdinal + 1 },
-        sourceIp: actor.sourceIp,
-        requestId: actor.requestId,
-      });
-
-      const full = await tx.job.findUniqueOrThrow({
-        where: { id: jobId },
-        include: JOB_FULL_INCLUDE,
-      });
-      const dtoOut = toJob(full);
-
-      if (idempotencyKey && fingerprint) {
-        await this.idempotency.recordWithin(
-          tx,
-          {
-            key: idempotencyKey,
-            userId: actor.actorId,
-            endpoint: 'POST /jobs/{jobId}/verify',
-            fingerprint,
-          },
-          { status: 200, body: dtoOut },
-        );
-      }
-
-      return dtoOut;
-    });
   }
 
   /**
