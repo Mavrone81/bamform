@@ -288,6 +288,10 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          # Named, reviewed CVE exceptions (puppeteer-transitive tar-fs, dead
+          # code under PUPPETEER_SKIP_DOWNLOAD — see the file's header). Trivy
+          # still fails on any unlisted HIGH/CRITICAL.
+          trivyignores: .trivyignore
       - name: Apply migrations (test:security runs S-06..S-09/S-18/S-22/S-23/S-26/S-29 against real Postgres)
         run: npx prisma migrate deploy --schema=api/prisma/schema.prisma
         env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
