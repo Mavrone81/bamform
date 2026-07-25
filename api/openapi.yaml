@@ -1752,6 +1752,139 @@ paths:
               schema: { $ref: '#/components/schemas/AuditChainStatus' }
         '403': { $ref: '#/components/responses/Problem' }
 
+  /users:
+    get:
+      tags: [Admin]
+      operationId: listUsers
+      summary: List users
+      description: ADMIN only (API_SPECIFICATION.md §10.9, UR-072).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: roleCode
+          in: query
+          schema: { $ref: '#/components/schemas/RoleCode' }
+        - name: active
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Paginated users
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin]
+      operationId: createUser
+      summary: Create a user
+      description: |
+        ADMIN only. `fullName`/`email`/`employeeId` are encrypted + blind-
+        indexed (PR-106/107/108) — same real crypto path as `/auth/login`.
+        `password` is admin-set (this slice's documented minimal mechanism —
+        no invite/temp-password email flow exists yet). Rejects a duplicate
+        `email` (blind-index uniqueness) with 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Duplicate email
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Admin]
+      operationId: getUser
+      summary: Get a user
+      description: ADMIN only.
+      responses:
+        '200':
+          description: User
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin]
+      operationId: updateUser
+      summary: Update a user. Deactivation only, never deletion.
+      description: |
+        ADMIN only (UR-075). `active: false` is the only removal mechanism.
+        `roleCodes`, when present, REPLACES the role set (produces a
+        `permission_change` audit event, distinct from `update`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Duplicate email
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /roles:
+    get:
+      tags: [Admin]
+      operationId: listRoles
+      summary: List the role catalogue
+      description: UR-073. Any authenticated user — seeded reference data, not ADMIN-restricted.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Paginated roles
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Role' }
+        '401': { $ref: '#/components/responses/Problem' }
+
 components:
 
   securitySchemes:
@@ -1926,12 +2059,22 @@ components:
         scheduleAnchorDate: { type: string, format: date }
         status: { $ref: '#/components/schemas/AssetStatus' }
         active: { type: boolean }
+        codeProvisional:
+          type: boolean
+          description: |
+            Slice 13a / B-09: `true` when `code` was auto-generated (the
+            admin did not supply one) and not yet confirmed — the UI renders
+            this "RED". Cleared the moment an admin changes `code`.
 
     AssetCreate:
       type: object
-      required: [code, assetTypeId, scheduleAnchorDate]
+      required: [assetTypeId, scheduleAnchorDate]
       properties:
-        code: { type: string, minLength: 1, maxLength: 50 }
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Optional — omit to have the server auto-generate a provisional/"RED" code (B-09).
         assetTypeId: { type: string, format: uuid }
         description: { type: string }
         manufacturer: { type: string }
@@ -1945,6 +2088,11 @@ components:
     AssetUpdate:
       type: object
       properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Changing this confirms an auto-generated code — clears `codeProvisional`.
         description: { type: string }
         manufacturer: { type: string }
         model: { type: string }
@@ -1952,6 +2100,67 @@ components:
         locationDetail: { type: string }
         status: { $ref: '#/components/schemas/AssetStatus' }
         active: { type: boolean }
+
+    RoleCode:
+      type: string
+      description: The closed set `role.code` holds — seeded by migration, not created through the API (UR-073).
+      enum: [MAINTAINER, TEAM_LEADER, ENGINEER, DOC_CONTROLLER, ADMIN, AUDITOR]
+
+    Role:
+      type: object
+      required: [id, code, name]
+      properties:
+        id: { type: string, format: uuid }
+        code: { $ref: '#/components/schemas/RoleCode' }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+
+    UserStatus:
+      type: string
+      enum: [ACTIVE, SUSPENDED, DEACTIVATED]
+
+    User:
+      type: object
+      required: [id, fullName, email, status, active, roles, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        employeeId: { type: [string, 'null'] }
+        fullName: { type: string }
+        email: { type: string, format: email }
+        status: { $ref: '#/components/schemas/UserStatus' }
+        active: { type: boolean }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/RoleCode' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    UserCreate:
+      type: object
+      required: [fullName, email, password, roleCodes]
+      properties:
+        fullName: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email }
+        employeeId: { type: string, minLength: 1, maxLength: 50 }
+        password:
+          type: string
+          minLength: 12
+          description: Admin-set initial password (this slice's documented minimal mechanism). Never returned by any endpoint.
+        roleCodes:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RoleCode' }
+
+    UserUpdate:
+      type: object
+      properties:
+        fullName: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email }
+        active: { type: boolean }
+        roleCodes:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RoleCode' }
 
     ScheduleRule:
       type: object

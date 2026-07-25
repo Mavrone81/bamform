@@ -22,7 +22,10 @@ export async function buildCurrentUser(
   const user = await prisma.appUser.findUniqueOrThrow({
     where: { id: userId },
     include: {
-      userRoles: { include: { role: true } },
+      // Slice 13a: `active: false` is how `PATCH /users/{id}` revokes a
+      // role without a `DELETE` (INV-16) — excluded so `/auth/me` and the
+      // sync bootstrap never report a revoked role as held.
+      userRoles: { where: { active: true }, include: { role: true } },
       userAreaScopes: true,
     },
   });

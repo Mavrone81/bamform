@@ -1,0 +1,19 @@
+-- BamForm — slice 13a (admin backend: user/role administration, UR-072/073).
+-- Forward-only, additive; does not edit any prior migration.
+--
+-- Reversal:
+--   ALTER TABLE "user_role" DROP COLUMN "active";
+--
+-- ============================================================ Why
+--
+-- `PATCH /users/{userId}` lets an ADMIN replace a user's role set
+-- (`users.service.ts#update`). `bamform_app` has NO `DELETE` grant on any
+-- table (INV-16, `api/prisma/grants.sql`: "REVOKE DELETE ON ALL TABLES...
+-- FROM bamform_app"), so a revoked `user_role` row cannot be deleted — this
+-- additive `active` boolean (default `true`, matching every existing row's
+-- semantics: it was granted and never revoked) is the soft-revoke flag,
+-- same convention as `delegation.revoked_at` / `template_item.active`. A
+-- re-grant of a previously-revoked role flips this back to `true` (upsert),
+-- never inserts a second `(user_id, role_id)` row. Single boolean column, no
+-- index, no `CONCURRENTLY` needed (M-06 is about indexes on large tables).
+ALTER TABLE "user_role" ADD COLUMN IF NOT EXISTS "active" BOOLEAN NOT NULL DEFAULT true;
