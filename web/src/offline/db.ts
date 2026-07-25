@@ -94,6 +94,32 @@ export const META_KEYS = {
   quotaWarning: 'quotaWarning',
 } as const;
 
+/**
+ * A row can only be `sending` while a `drain()` call has claimed it and is
+ * waiting on the network — see outbox.ts's atomic claim-then-send
+ * transaction. If the browser/tab dies in that exact window (claim
+ * committed, `fetch` never settles — no thrown error, no response, nothing
+ * for `drain()`'s own catch block to ever run), the row is left `sending`
+ * FOREVER: `listDrainable` deliberately excludes `sending` rows (it is the
+ * concurrency lock — see outbox.ts's `drain()` doc), and nothing else ever
+ * moves it back to `pending`. That is a real record-stranding hole in the
+ * RK-01 guarantee, worse than O-03 (which waits for the network-error catch
+ * to fire first, so the row does reach `pending` before the tab dies).
+ *
+ * A `sending` row still present when a `BamFormDB` is newly opened can only
+ * mean the PREVIOUS session that claimed it is gone — nothing in the
+ * current session has claimed anything yet. It is always safe to hand it
+ * back to `pending`: its id is still the same client-generated UUIDv7
+ * (ADR-008), so if that previous session's request actually reached and
+ * was applied by the server before dying, the replay is a safe no-op
+ * (PR-062's idempotency store) — never a double-apply (O-05).
+ */
+export async function recoverStuckSendingRows(db: BamFormDB): Promise<void> {
+  const stuck = await db.outbox.where('status').equals('sending').toArray();
+  if (stuck.length === 0) return;
+  await db.outbox.bulkPut(stuck.map((row) => ({ ...row, status: 'pending' as const })));
+}
+
 export class BamFormDB extends Dexie {
   outbox!: Table<OutboxEntry, string>;
   jobs!: Table<CachedJob, string>;
@@ -112,6 +138,14 @@ export class BamFormDB extends Dexie {
       jobs: 'id, submitState',
       meta: 'key',
     });
+
+    // Dexie queues every other operation issued against this instance
+    // until its `ready` handler's returned promise resolves — so this
+    // recovery is guaranteed to run and complete before the first
+    // `drain()` (or anything else) touches the outbox table, no matter
+    // which code path triggers that first drain (app-startup bootstrap,
+    // the `online` listener, or a manual sync tap racing it).
+    this.on('ready', () => recoverStuckSendingRows(this));
   }
 }
 
