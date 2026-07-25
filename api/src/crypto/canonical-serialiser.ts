@@ -74,6 +74,26 @@
  *      above) — chosen because it is auditable (a human or a third-party verifier
  *      can read `GET /records/{id}/integrity`'s echoed serialisation) and requires
  *      no bespoke parser.
+ *   9. (Added slice 7, PR-093/the slice-3 HARD GATE.) `CanonicalDecimal` — an
+ *      explicit wrapper around a decimal DIGIT STRING (e.g. read straight off a
+ *      Postgres `NUMERIC` column, never round-tripped through a JS `number`) — is
+ *      accepted alongside plain `number`. This is a NEW, ADDITIVE branch: it does
+ *      not change how `number`/`bigint`/anything else already serialises, so it
+ *      cannot affect the committed golden hash (U-SIG-01), whose fixture uses only
+ *      plain `number` readings. It exists because `measurement_result
+ *      .reading_numeric` is `NUMERIC(18,6)` — up to 18 significant digits, which
+ *      exceeds `Number`'s exact-integer range (2^53, ~15-16 digits). Converting such
+ *      a value to a JS `number` before signing would silently round it, so two
+ *      DIFFERENT readings could sign identically (or a genuine reading could fail
+ *      to reproduce its own signature) — the exact failure U-SIG-01's header warns
+ *      about. `CanonicalDecimal` instead normalises the DIGIT STRING itself
+ *      (strips leading zeros, trims trailing fractional zeros, collapses `-0` to
+ *      `0` — the same visible rules `canonicalNumber` applies to a `number`) and
+ *      emits it as a bare JSON number literal, so a reading that DOES fit exactly
+ *      in a `number` serialises identically either way (`1.50` and
+ *      `new CanonicalDecimal('1.50')` both emit `1.5`) — only the >15-significant-
+ *      digit case, which `number` could never have represented correctly anyway,
+ *      differs, and it now differs by being CORRECT instead of silently wrong.
  */
 
 export type CanonicalValue =
@@ -84,8 +104,36 @@ export type CanonicalValue =
   | null
   | undefined
   | Date
+  | CanonicalDecimal
   | CanonicalValue[]
   | { [key: string]: CanonicalValue };
+
+/**
+ * Wraps an exact decimal digit string (see rule 9 above) so it serialises as a
+ * lossless canonical JSON number literal — never routed through JS `number`
+ * arithmetic or parsing. Construct with the raw text a driver returns for a
+ * `NUMERIC` column (e.g. Prisma's `Decimal#toString()`), NOT a JS number.
+ */
+export class CanonicalDecimal {
+  /** Already fully normalised — see the constructor. */
+  readonly canonical: string;
+
+  constructor(raw: string) {
+    const match = /^(-)?(\d+)(?:\.(\d+))?$/.exec(raw);
+    if (!match) {
+      throw new Error(
+        `CanonicalDecimal requires a plain, non-exponential decimal digit string ` +
+          `(e.g. straight from a Postgres NUMERIC column) — got: ${JSON.stringify(raw)}`,
+      );
+    }
+    const [, sign, intDigits, fracDigitsRaw = ''] = match;
+    const intPart = intDigits.replace(/^0+(?=\d)/, '');
+    const fracPart = fracDigitsRaw.replace(/0+$/, '');
+    const isZero = intPart === '0' && fracPart === '';
+    const body = fracPart ? `${intPart}.${fracPart}` : intPart;
+    this.canonical = (sign && !isZero ? '-' : '') + body;
+  }
+}
 
 /** Serialises `value` to its canonical UTF-8 byte form. */
 export function canonicalSerialise(value: CanonicalValue): Buffer {
@@ -121,6 +169,9 @@ function canonicalise(value: CanonicalValue): string {
   }
   if (value instanceof Date) {
     return canonicalString(canonicalTimestamp(value));
+  }
+  if (value instanceof CanonicalDecimal) {
+    return value.canonical;
   }
   if (Array.isArray(value)) {
     return canonicalArray(value);

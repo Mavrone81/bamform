@@ -1,4 +1,4 @@
-import { canonicalSerialiseToString } from './canonical-serialiser';
+import { CanonicalDecimal, canonicalSerialiseToString } from './canonical-serialiser';
 import { computeContentHash } from './content-hash';
 import { buildGoldenRecordFixture } from './canonical-record.fixture';
 
@@ -84,6 +84,80 @@ describe('canonical serialisation (PR-SEC-13, SEC §8.1)', () => {
     };
     fixtureB.attachments.push({ id: 'extra-attachment', sha256: 'a'.repeat(64) });
     expect(computeContentHash(fixtureA).equals(computeContentHash(fixtureB))).toBe(false);
+  });
+
+  describe('U-SIG-11..16: CanonicalDecimal — lossless high-precision decimal determinism (slice-3 HARD GATE, PR-093)', () => {
+    it('U-SIG-11: does not disturb the U-SIG-01 golden hash — the fixture uses plain numbers only', () => {
+      // Re-assert the exact frozen constant here too, so a reviewer sees this
+      // gate's own test file re-proves the golden hash is untouched, not just
+      // "trust the other describe block above".
+      const hash = computeContentHash(buildGoldenRecordFixture());
+      expect(hash.toString('hex')).toBe(
+        'af050612cb1a0dc0f4b55cf5a815010bce77367fd9bfb96231fc48dc690a688a',
+      );
+    });
+
+    it('U-SIG-12: a value that fits exactly in a JS number serialises IDENTICALLY via CanonicalDecimal or number', () => {
+      const asNumber = canonicalSerialiseToString({ reading: 24.75 });
+      const asDecimal = canonicalSerialiseToString({ reading: new CanonicalDecimal('24.750000') });
+      expect(asDecimal).toBe(asNumber);
+      expect(asDecimal).toBe('{"reading":24.75}');
+    });
+
+    it('U-SIG-13: trailing/leading zero variants of the same value hash identically (fixed decimal representation)', () => {
+      const variants = ['1.5', '1.50', '1.500000', '01.5', '+1.5'.replace('+', '')];
+      const hashes = variants.map((v) =>
+        computeContentHash({ reading: new CanonicalDecimal(v) }).toString('hex'),
+      );
+      expect(new Set(hashes).size).toBe(1);
+      expect(canonicalSerialiseToString({ reading: new CanonicalDecimal('1.500000') })).toBe(
+        '{"reading":1.5}',
+      );
+    });
+
+    it('U-SIG-14: a NUMERIC(18,6) reading with 17 significant digits is preserved EXACTLY — this is the failure number-conversion would produce', () => {
+      // 18 significant digits: 12 integer + 6 fractional, the exact ceiling
+      // measurement_result.reading_numeric NUMERIC(18,6) allows.
+      const highPrecision = '123456789012.123456';
+      // Proof this genuinely exceeds safe JS number precision — the whole
+      // reason this gate exists:
+      expect(Number(highPrecision).toString()).not.toBe(highPrecision);
+
+      const serialised = canonicalSerialiseToString({
+        reading: new CanonicalDecimal(highPrecision),
+      });
+      expect(serialised).toBe(`{"reading":${highPrecision}}`);
+    });
+
+    it('U-SIG-15: two distinct high-precision readings that a lossy float conversion WOULD collide on still hash differently', () => {
+      const rawA = '123456789012.123456';
+      const rawB = '123456789012.123457';
+      // Proof, not assumption: naive `Number(...)` conversion collapses these
+      // two genuinely different readings to the identical IEEE-754 double —
+      // exactly the silent-corruption scenario CanonicalDecimal exists to avoid.
+      expect(Number(rawA)).toBe(Number(rawB));
+
+      const a = new CanonicalDecimal(rawA);
+      const b = new CanonicalDecimal(rawB);
+      expect(computeContentHash({ reading: a }).equals(computeContentHash({ reading: b }))).toBe(
+        false,
+      );
+    });
+
+    it("U-SIG-16: negative decimals, and -0 normalises to 0, matching canonicalNumber's own -0 rule", () => {
+      expect(canonicalSerialiseToString({ n: new CanonicalDecimal('-1.230') })).toBe('{"n":-1.23}');
+      expect(canonicalSerialiseToString({ n: new CanonicalDecimal('-0') })).toBe('{"n":0}');
+      expect(canonicalSerialiseToString({ n: new CanonicalDecimal('-0.000') })).toBe('{"n":0}');
+      expect(canonicalSerialiseToString({ n: new CanonicalDecimal('0') })).toBe('{"n":0}');
+    });
+
+    it('rejects exponential notation and non-decimal-digit-string input', () => {
+      expect(() => new CanonicalDecimal('1.5e10')).toThrow();
+      expect(() => new CanonicalDecimal('NaN')).toThrow();
+      expect(() => new CanonicalDecimal('abc')).toThrow();
+      expect(() => new CanonicalDecimal('')).toThrow();
+      expect(() => new CanonicalDecimal('.5')).toThrow();
+    });
   });
 
   describe('serialisation edge cases SEC §8.1 leaves open (documented in canonical-serialiser.ts)', () => {
