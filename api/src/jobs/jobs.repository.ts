@@ -133,8 +133,15 @@ function buildDueOnFilter(dueFrom?: string, dueTo?: string): Prisma.DateTimeFilt
   };
 }
 
-/** PR-043: `due_on < today AND status NOT IN (VERIFIED, ARCHIVED, VOIDED)` — mirrors `overdue.ts#isOverdue`. */
-function overdueWhere(today: Date): Prisma.JobWhereInput {
+/**
+ * PR-043: `due_on < today AND status NOT IN (VERIFIED, ARCHIVED, VOIDED)` —
+ * mirrors `overdue.ts#isOverdue`. Exported (slice 12) so
+ * `reports.repository.ts#/reports/overdue` reuses the EXACT SAME
+ * derivation rather than a second, potentially-drifting copy of "what
+ * counts as overdue" (PR-043/BUILD_HANDOFF non-negotiable #12: "Overdue is
+ * derived, never stored").
+ */
+export function overdueWhere(today: Date): Prisma.JobWhereInput {
   const dateOnly = new Date(
     Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
   );
