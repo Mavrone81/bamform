@@ -240,6 +240,7 @@ A compromised session-token key must not confer the ability to forge historical 
 | `SCHEDULER_ENABLED` | bool | `true` | Y | N | **`false` in every environment except production and staging** — prevents CI generating jobs |
 | `SCHEDULER_CRON` | cron | `0 * * * *` | N | N | Hourly sweep (PR-050) |
 | `SCHEDULER_LOCK_TTL_SECONDS` | int | `300` | N | N | PR-051 |
+| `AUDIT_CHAIN_VERIFY_CRON` | cron | `0 2 * * *` | N | N | Daily audit hash-chain verification (PR-099); gated by `SCHEDULER_ENABLED` like the job-generation sweep (slice 8) |
 | `DEFAULT_LEAD_TIME_DAYS` | int | `30` | N | N | PR-057; overridable per asset type |
 | `DUE_SOON_WARNING_DAYS` | int | `7` | N | N | UR-062 |
 | `VERIFICATION_ESCALATION_HOURS` | int | `72` | N | N | UR-050; overridable per approval stage |

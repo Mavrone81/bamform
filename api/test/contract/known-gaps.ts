@@ -27,13 +27,13 @@ export interface MethodPath {
  * slices land, per the standing CI rule in `.superpowers/sdd/progress.md`.
  */
 export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
-  // Slice 8 — audit chain / richer liveness+readiness (health.controller.ts:
-  // "the full dist/healthcheck.js is built out with the rest of the runtime
-  // in later slices"). `/healthz` (the ACTUAL slice-1 probe) is documented
-  // separately and is not in this list.
+  // Slice 8 — richer liveness+readiness (health.controller.ts: "the full
+  // dist/healthcheck.js is built out with the rest of the runtime in later
+  // slices"). `/healthz` (the ACTUAL slice-1 probe) is documented separately
+  // and is not in this list. `GET /audit-events/chain-status` moved OUT of
+  // this allowlist — slice 8 implements it (AuditEventsController).
   { method: 'GET', path: '/health' },
   { method: 'GET', path: '/health/ready' },
-  { method: 'GET', path: '/audit-events/chain-status' },
   // Slice 6 — jobs, results, parts, attachments, submission gate — DONE.
   // GET /jobs, GET /jobs/{jobId}, PUT items/measurements, POST attachments,
   // POST submit moved out of this allowlist (implemented, contract-enforced

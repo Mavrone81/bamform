@@ -135,6 +135,7 @@ enum AuditActionT {
   permission_change
   key_rotation
   exportAction @map("export")
+  chain_break_detected // slice 8 (PR-099) — daily verification job's break signal
 
   @@map("audit_action_t")
 }

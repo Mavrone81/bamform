@@ -4,15 +4,15 @@
  * — each is a `test.todo(...)`, which Jest reports as "todo" and which can
  * never silently pass: there is no function body to fake a pass with.
  *
- * A case appears here only when slices 1-4/6 genuinely do not yet implement
+ * A case appears here only when slices 1-4/6-7 genuinely do not yet implement
  * the feature/endpoint the case exercises (verified by searching api/src
  * for the relevant module — records/notifications/PDF/delegation-acting/
  * security-headers-middleware/AUDITOR-role enforcement/a chain-verification
  * routine none of these exist yet; attachments now DO, slice 6 — S-19/S-30/
- * S-32 moved out of this file). As each later slice lands, replace the
- * corresponding line below with a real spec file added to
- * jest.security.config.js's testMatch — never with a stub that asserts
- * nothing.
+ * S-32 moved out of this file; slice 8 adds the chain-verification routine —
+ * S-11 moved out too). As each later slice lands, replace the corresponding
+ * line below with a real spec file added to jest.security.config.js's
+ * testMatch — never with a stub that asserts nothing.
  *
  * Full S-01..S-34 status (see jest.security.config.js's testMatch comments
  * and .superpowers/sdd/ci-C-report.md for the complete file-by-file map):
@@ -39,22 +39,17 @@
  *                 addition to the pre-existing DB-trigger-level triggers.spec.ts coverage)
  *     S-24        api/test/integration/approval-auditor-readonly.spec.ts (slice 7 — AUDITOR rejected 403 on verify/return/recall/void)
  *     S-25        api/test/integration/approval-delegation.spec.ts (slice 7 — expired/revoked/absent delegation's onBehalfOf claim rejected)
+ *     S-11        api/test/integration/audit-chain-status.spec.ts (slice 8 — audit_event hash altered directly in DB, chain break
+ *                 detected at the right sequence via GET /audit-events/chain-status; also AUDITOR/ADMIN role gate)
  *   HANDLED BY A DIFFERENT JOB-6 STEP (not test:security):
  *     S-15        npm run test:log-redaction (this same job, next step)
  *     S-28        bash scripts/ci/assert-csp-safe.sh (this same job)
  *     S-33        npm audit / CodeQL / Trivy (this same job, earlier steps)
  *     S-34        gitleaks-action (job 2 · Secret scan)
- *   PENDING — feature not yet built in slices 1-4/6-7 (test.todo below):
- *     S-11, S-12, S-14, S-16, S-17, S-20, S-27, S-31
+ *   PENDING — feature not yet built in slices 1-4/6-8 (test.todo below):
+ *     S-12, S-14, S-16, S-17, S-20, S-27, S-31
  */
 describe('S-01..S-34 pending cases (later slices) — tracked, never faked', () => {
-  test.todo(
-    'S-11 (T-2): alter an audit_event hash, run chain verification — break detected at the ' +
-      'right sequence. PENDING: audit_event hash-chain construction is proven correct at write ' +
-      'time (api/test/integration/audit-transaction.spec.ts), but no post-hoc chain-verification ' +
-      'routine/endpoint exists yet to walk the chain and report where a tamper broke it.',
-  );
-
   test.todo(
     'S-12 (T-4): a malformed body bypassing client-side validation is rejected by the server. ' +
       'PENDING: ZodValidationPipe (api/src/common/zod-validation.pipe.ts) is wired on every ' +

@@ -1,0 +1,21 @@
+-- BamForm — slice 8 (PR-099): additive `audit_action_t` enum value for the
+-- daily chain-verification job's break signal.
+--
+-- Reversal: Postgres cannot drop a single enum value in place. To reverse,
+-- first ensure no `audit_event` row uses `chain_break_detected` (it is
+-- INSERT/SELECT-only via bamform_app, so the daily job is the only writer —
+-- see AuditChainDailyVerificationService), then recreate `audit_action_t`
+-- without it: `CREATE TYPE audit_action_t_new AS ENUM (...the other values...);
+-- ALTER TABLE audit_event ALTER COLUMN action TYPE audit_action_t_new USING
+-- action::text::audit_action_t_new; DROP TYPE audit_action_t; ALTER TYPE
+-- audit_action_t_new RENAME TO audit_action_t;` — not scripted here per M-04
+-- (documented, not automated, since it requires confirming no row depends on
+-- the value first).
+--
+-- Additive/forward-only (M-04): only ADDS a value, touches no existing rows
+-- or columns. `IF NOT EXISTS` makes it idempotent on re-run. This is its own
+-- single-statement migration (not folded into a later one that USEs the new
+-- value) because Postgres forbids using a freshly-added enum value within
+-- the same transaction/statement batch that added it — app code (a
+-- separate connection, a later transaction) is unaffected.
+ALTER TYPE "audit_action_t" ADD VALUE IF NOT EXISTS 'chain_break_detected';
