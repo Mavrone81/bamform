@@ -1,0 +1,89 @@
+/*
+ * Design tokens — BamForm PWA.
+ *
+ * Direction: an instrument panel / controlled-document register, not a SaaS
+ * dashboard. The domain is a printed calibration form being digitised, so a
+ * warm paper-white surface with near-black ink and a hazard-amber accent
+ * reads as native to a workshop rather than borrowed from an office app.
+ * A monospace face carries every number, job code and status word — a
+ * technician glancing at a reading under bad light benefits from tabular
+ * figures and unambiguous glyph shapes far more than from personality in
+ * the type. All faces below are locally-available system stacks (the CSP
+ * here is `style-src 'self'` with no font-src exception, so nothing is
+ * fetched from a font CDN).
+ *
+ * This is a foundation pass: the tokens exist so contrast, spacing and tap
+ * targets are correct and consistent now, with room for a dedicated visual
+ * pass later without restructuring markup.
+ */
+
+:root {
+  /* ---- Type ---- */
+  --font-display: ui-serif, 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+
+  /* ---- Spacing (8px grid) ---- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* Minimum interactive target — E-RSP-02 / WCAG 2.5.5 */
+  --tap-min: 44px;
+  --radius: 3px;
+  --border-width: 1.5px;
+
+  /* ---- Light theme: paper ---- */
+  --color-surface: #f4efe4;
+  --color-surface-raised: #fbf8f1;
+  --color-ink: #201c16;
+  --color-ink-soft: #55503f;
+  --color-border: #cabf9e;
+  --color-accent: #b8791a;
+  --color-accent-ink: #1a1204;
+  --color-focus: #0b57a4;
+  --color-signal-good: #276b3c;
+  --color-signal-bad: #a02020;
+  --color-signal-attention: #9a5b00;
+  --color-chip-bg: #ffffff;
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --color-surface: #17140f;
+  --color-surface-raised: #241f17;
+  --color-ink: #f1ead9;
+  --color-ink-soft: #c9bfa4;
+  --color-border: #4a4230;
+  --color-accent: #e0a545;
+  --color-accent-ink: #17140f;
+  --color-focus: #7cb8ff;
+  --color-signal-good: #6fcf8e;
+  --color-signal-bad: #ff8a80;
+  --color-signal-attention: #ffc266;
+  --color-chip-bg: #241f17;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-surface: #17140f;
+    --color-surface-raised: #241f17;
+    --color-ink: #f1ead9;
+    --color-ink-soft: #c9bfa4;
+    --color-border: #4a4230;
+    --color-accent: #e0a545;
+    --color-accent-ink: #17140f;
+    --color-focus: #7cb8ff;
+    --color-signal-good: #6fcf8e;
+    --color-signal-bad: #ff8a80;
+    --color-signal-attention: #ffc266;
+    --color-chip-bg: #241f17;
+    color-scheme: dark;
+  }
+}

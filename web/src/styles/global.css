@@ -1,0 +1,247 @@
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  /* Prevents a stray wide element from ever producing page-level horizontal
+   * scroll (E-RSP-01) — inner regions that must scroll opt in explicitly
+   * with their own `overflow-x: auto` container. */
+  overflow-x: hidden;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.5;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0 0 var(--space-3);
+}
+
+.app-shell {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--space-4);
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Every interactive element gets a visible, high-contrast focus ring
+ * (A-06). Never removed, only restyled per-component. */
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+button {
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  cursor: pointer;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  padding: var(--space-2) var(--space-4);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  border-color: var(--color-accent);
+  font-weight: 600;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.field label {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.field input {
+  min-height: var(--tap-min);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.field-error {
+  color: var(--color-signal-bad);
+  font-size: 0.875rem;
+}
+
+.job-code,
+.numeric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Status chip: text + icon, never colour alone (A-05) ---- */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-chip-bg);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-chip[data-tone='good'] {
+  border-color: var(--color-signal-good);
+  color: var(--color-signal-good);
+}
+.status-chip[data-tone='attention'] {
+  border-color: var(--color-signal-attention);
+  color: var(--color-signal-attention);
+}
+.status-chip[data-tone='bad'] {
+  border-color: var(--color-signal-bad);
+  color: var(--color-signal-bad);
+}
+.status-chip[data-tone='neutral'] {
+  color: var(--color-ink-soft);
+}
+
+/* ---- Segmented one-tap status control (checklist items) ---- */
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+.segmented button {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.segmented button[aria-pressed='true'][data-tone='good'] {
+  background: var(--color-signal-good);
+  border-color: var(--color-signal-good);
+  color: var(--color-surface-raised);
+}
+.segmented button[aria-pressed='true'][data-tone='bad'] {
+  background: var(--color-signal-bad);
+  border-color: var(--color-signal-bad);
+  color: var(--color-surface-raised);
+}
+.segmented button[aria-pressed='true'][data-tone='neutral'] {
+  background: var(--color-ink-soft);
+  border-color: var(--color-ink-soft);
+  color: var(--color-surface-raised);
+}
+
+/* ---- Cards (job list rows become cards below md — E-RSP-05) ---- */
+.card {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.card-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.checklist-item {
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding: var(--space-4) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.checklist-item:last-child {
+  border-bottom: none;
+}
+
+.banner {
+  border: var(--border-width) solid var(--color-signal-attention);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  color: var(--color-signal-attention);
+  padding: var(--space-3) var(--space-4);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.banner[data-tone='bad'] {
+  border-color: var(--color-signal-bad);
+  color: var(--color-signal-bad);
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  padding: var(--space-2) var(--space-4);
+  z-index: 100;
+}
+
+.skip-link:focus {
+  left: var(--space-2);
+  top: var(--space-2);
+}
