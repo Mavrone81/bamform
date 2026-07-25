@@ -117,6 +117,7 @@ services:
       - record_signing_key
       - postgres_password
       - redis_password
+      - minio_root_password
       - minio_sse_key
     depends_on:
       bamform-postgres: { condition: service_healthy }
