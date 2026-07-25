@@ -6,6 +6,11 @@ api/prisma/migrations
 .superpowers
 package-lock.json
 
+# Plain-text oasdiff --err-ignore baseline — has a .yaml extension by
+# oasdiff convention but is NOT structured YAML (see the file's header),
+# so Prettier's YAML parser errors on it. Not code we format.
+scripts/ci/oasdiff-ignore.yaml
+
 # Pre-existing scaffolding this slice does not own (BUILD_HANDOFF §2 /
 # slice-1-brief.md constraints) — left in its original formatting.
 docs/
