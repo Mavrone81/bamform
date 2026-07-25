@@ -54,9 +54,13 @@ export const FUTURE_SLICE_OPENAPI_PATHS: readonly MethodPath[] = [
   // Slice 9 — sync API: bootstrap, outbox, idempotency store — DONE.
   // GET /sync/bootstrap and POST /sync/outbox moved OUT of this allowlist
   // (implemented, contract-enforced below).
-  // Slice 12 — PDF render, archive search/export, reports/trending
-  { method: 'GET', path: '/records/{recordId}/pdf' },
-  { method: 'GET', path: '/reports/measurements' },
+  // Slice 12 — PDF render, archive search/export, reports/trending — DONE.
+  // GET /records/{recordId}/pdf and GET /reports/measurements moved OUT of
+  // this allowlist (implemented, contract-enforced below). GET /records,
+  // GET /records/{recordId}, POST /records/export, GET /exports/{exportId},
+  // GET /exports/{exportId}/download, GET /reports/compliance|overdue|pending
+  // are new paths added to openapi.yaml alongside their implementation
+  // (same convention as slice 6/7/9/11a's new paths — never allowlisted).
 ];
 
 /**
@@ -136,6 +140,14 @@ export const COLLECTION_ENDPOINTS: readonly CollectionEndpointClassification[] =
     reason:
       'job (DBD §6.15) has no areaId column of its own, but job.asset.areaId does — PR-API-10 requires filtering by user_area_scope through that relation. (A role-driven "own jobs only" restriction also applies for MAINTAINER — see src/jobs/job-access.ts — but that is a role rule, not the area-scope mechanism this check verifies.)',
     sourceFile: 'src/jobs/jobs.repository.ts',
+  },
+  {
+    method: 'GET',
+    path: '/api/v1/records',
+    areaScoped: true,
+    reason:
+      'Slice 12 — an archived record IS a job row (status=ARCHIVED); same area-scope mechanism as GET /jobs, applied through job.asset.areaId. (MAINTAINER is additionally restricted to their own records — records.service.ts#hasBroadArchiveVisibility — a role rule, not the area-scope mechanism this check verifies.)',
+    sourceFile: 'src/records/records.repository.ts',
   },
   {
     method: 'GET',
