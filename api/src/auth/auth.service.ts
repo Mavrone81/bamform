@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AuthResult, LoginRequest } from '@bamform/shared';
-import type { Prisma } from '@prisma/client';
+import { UserStatusT, type Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { toBytes } from '../common/prisma-bytes';
 import type { FieldEncryptionService } from '../crypto/field-encryption';
@@ -124,7 +124,17 @@ export class AuthService {
       ? await this.passwordService.verify(user.passwordHash, dto.password)
       : false;
 
-    if (!passwordValid) {
+    // Slice 13a/UR-075: `PATCH /users/{id}` deactivates via `status`, never a
+    // hard delete — so a deactivated (or suspended) account must be denied
+    // here too, not just cosmetically flagged. Folded into the SAME branch
+    // `!passwordValid` already uses (same failure-handling transaction, same
+    // `invalidCredentialsProblem()`/lockout response) rather than a separate
+    // early-return, so the Argon2id verify above still always runs first and
+    // a deactivated account is not distinguishable from a wrong password by
+    // response shape or timing (no new user-enumeration oracle).
+    const accountActive = user.status === UserStatusT.active;
+
+    if (!passwordValid || !accountActive) {
       const newCount = user.failedLoginCount + 1;
       const locked = newCount >= this.maxAttempts;
       // Exponential backoff (PR-092): each lockout beyond the threshold
@@ -211,6 +221,20 @@ export class AuthService {
     }
     if (outcome.status === 'reuse_detected') {
       throw refreshReuseDetectedError();
+    }
+
+    // Slice 13a/UR-075: `status` is re-checked HERE (not just at login) —
+    // `PATCH /users/{id}` can deactivate a user any time after they logged
+    // in, and a long-lived refresh token must not go on minting fresh
+    // ≤15min access tokens for an account that's since been deactivated.
+    // Same opaque `invalidRefreshTokenError()` as any other invalid/expired
+    // refresh token — deactivation is not surfaced as a distinct reason.
+    const currentAccount = await this.prisma.appUser.findUnique({
+      where: { id: outcome.userId },
+      select: { status: true },
+    });
+    if (!currentAccount || currentAccount.status !== UserStatusT.active) {
+      throw invalidRefreshTokenError();
     }
 
     const roles = await this.rolesFor(this.prisma, outcome.userId);
