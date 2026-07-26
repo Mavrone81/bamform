@@ -68,6 +68,10 @@ const RESETTABLE_TABLES = [
   'asset',
   'asset_type',
   'refresh_token',
+  // Slice 13-MFA — listed BEFORE `app_user` (it has an ON DELETE RESTRICT FK
+  // to it); TRUNCATE ... CASCADE would cope either way, but the list is kept
+  // child-first by convention.
+  'mfa_recovery_code',
   'delegation',
   'user_area_scope',
   'user_role',

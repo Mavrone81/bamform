@@ -1,6 +1,6 @@
 import { enumerateRoutes } from './route-inventory';
 import { findPublicDrift } from './contract-checks';
-import { PUBLIC_ROUTES } from './known-gaps';
+import { MFA_CHALLENGE_ROUTES, PUBLIC_ROUTES } from './known-gaps';
 
 /**
  * C-07 (threat E-6) — "Every route authenticated unless allowlisted" (job 5,
@@ -41,6 +41,59 @@ describe('test:route-coverage (C-07) — every route requires auth unless named-
     for (const route of shouldBeAuthenticated) {
       expect(route.isPublic).toBe(false);
     }
+  });
+
+  /**
+   * C-07b (review finding M-6) — the SECOND authentication class,
+   * `@MfaChallengeAuth()`, gets the same both-directions allowlist policing
+   * `@Public()` gets. Without this, a future slice could put the decorator on
+   * a records or approvals endpoint and every CI gate would stay green while
+   * that endpoint became reachable on a token that carries no roles and
+   * bypasses the forced-password-change gate.
+   */
+  describe('C-07b — @MfaChallengeAuth is allowlisted, in both directions', () => {
+    const challengeRoutes = routes.filter((route) => route.mfaChallengeMode !== undefined);
+
+    it('no route carries @MfaChallengeAuth without a named allowlist entry', () => {
+      const undeclared = challengeRoutes.filter(
+        (route) =>
+          !MFA_CHALLENGE_ROUTES.some(
+            (entry) => entry.method === route.method && entry.path === route.path,
+          ),
+      );
+      expect(undeclared.map((r) => `${r.method} ${r.path}`)).toEqual([]);
+    });
+
+    it('every allowlisted entry is a real route that really carries the decorator, in the declared mode', () => {
+      for (const entry of MFA_CHALLENGE_ROUTES) {
+        const match = routes.find(
+          (route) => route.method === entry.method && route.path === entry.path,
+        );
+        expect(`${entry.method} ${entry.path}`).toBe(
+          match ? `${entry.method} ${entry.path}` : 'MISSING ROUTE',
+        );
+        expect(match?.mfaChallengeMode).toBe(entry.mode);
+      }
+    });
+
+    it('a challenge-auth route is never also @Public() — it is a different credential, not no credential', () => {
+      for (const route of challengeRoutes) {
+        expect(route.isPublic).toBe(false);
+      }
+    });
+
+    it('a challenge-auth route never carries @Roles() — a challenge token has no roles claim, so RolesGuard would always 403', () => {
+      for (const route of challengeRoutes) {
+        expect(route.roles).toBeUndefined();
+      }
+    });
+
+    it('the decorator has not spread beyond /auth/mfa (sanity on the allowlist itself)', () => {
+      for (const entry of MFA_CHALLENGE_ROUTES) {
+        expect(entry.path.startsWith('/api/v1/auth/mfa/')).toBe(true);
+      }
+      expect(challengeRoutes).toHaveLength(MFA_CHALLENGE_ROUTES.length);
+    });
   });
 
   // ---- Proof this genuinely catches a violation ----

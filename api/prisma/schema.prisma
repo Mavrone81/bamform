@@ -136,6 +136,14 @@ enum AuditActionT {
   key_rotation
   exportAction @map("export")
   chain_break_detected // slice 8 (PR-099) — daily verification job's break signal
+  // Slice 13-MFA §8. `mfa_enrolled`/`mfa_reset`/`mfa_recovery_code_used` and
+  // `password_changed` are credential-lifecycle events with no existing
+  // value that carries their meaning (`login`/`login_failed` are attempt
+  // outcomes; `permission_change` is about roles).
+  mfa_enrolled
+  mfa_reset
+  mfa_recovery_code_used
+  password_changed
 
   @@map("audit_action_t")
 }
@@ -193,6 +201,25 @@ model AppUser {
   deactivatedAt         DateTime?    @map("deactivated_at") @db.Timestamptz(6)
   dekVersion            Int          @map("dek_version") @db.SmallInt
 
+  // Slice 13-MFA. `mfa_enrolled` is named in docs/PRD.md:414 and was never
+  // built; the rest is the TOTP design the slice brief supplies (SEC §5.1's
+  // "MFA | Not in Release 1" row is withdrawn — BUILD_HANDOFF §5).
+  // `mfa_secret_ct` is field-encrypted through the SAME AES-256-GCM path as
+  // the other `app_user` personal columns (ADR-004), with its own
+  // `mfa_secret_dek_version` rather than reusing `dek_version`: the secret is
+  // written and rotated independently of full_name/email/employee_id, and
+  // sharing one version column would force re-encrypting all four together.
+  mfaEnrolled           Boolean      @default(false) @map("mfa_enrolled")
+  mfaSecretCt           Bytes?       @map("mfa_secret_ct")
+  mfaSecretDekVersion   Int?         @map("mfa_secret_dek_version") @db.SmallInt
+  mfaEnrolledAt         DateTime?    @map("mfa_enrolled_at") @db.Timestamptz(6)
+  /// RFC 6238 §5.2 replay guard — the highest TOTP time step already accepted.
+  mfaLastUsedStep       BigInt?      @map("mfa_last_used_step")
+  /// Slice 13-MFA §7: set by `POST /users` so an admin-chosen password cannot
+  /// stay in force. Defaults false, so no existing row (including the live
+  /// production admin) is retroactively locked out.
+  mustChangePassword    Boolean      @default(false) @map("must_change_password")
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -219,8 +246,37 @@ model AppUser {
   notifications      Notification[]
   idempotencyKeys    IdempotencyKey[]
   recordExports      RecordExport[]
+  mfaRecoveryCodes   MfaRecoveryCode[]
 
   @@map("app_user")
+}
+
+/**
+ * Slice 13-MFA §3 — the ten single-use recovery codes issued once at
+ * enrolment (D-3).
+ *
+ * `code_bidx` is the keyed HMAC-SHA-256 blind index of the normalised code
+ * (`auth/crypto/blind-index.ts#computeRecoveryCodeBlindIndex` — see that
+ * function for why a keyed digest and not Argon2id). The plaintext code is
+ * returned exactly once, in the enrol/confirm response, and is never stored
+ * or recoverable.
+ *
+ * `used_at` is the single-use marker: INV-07/INV-16 forbid DELETE on record
+ * tables and `bamform_app` has no DELETE grant at all, so a spent or
+ * admin-invalidated code is MARKED, never removed. The FK is
+ * `onDelete: Restrict` for the same reason.
+ */
+model MfaRecoveryCode {
+  id        String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  codeBidx  Bytes     @unique @map("code_bidx")
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("mfa_recovery_code")
 }
 
 // ------------------------------------------------------- §6.3 role/user_role

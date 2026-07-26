@@ -82,7 +82,7 @@ Departures from the master build prompt, each with a stated reason:
 - [ ] Field-level encryption confined to personal data — ADR-004, SEC RS-1
 - [ ] Postgres RLS and JWE not implemented — ADR-005, PRD §12.4
 - [ ] Content-bound electronic signatures added beyond the specification — ADR-010
-- [ ] No MFA in Release 1; step-up authentication instead — SEC RS-3
+- [ ] MFA is TOTP at login for privileged roles only; `MAINTAINER` logs in with a password alone, and step-up before signing stays password-only — SEC RS-3 (withdrawn as written, surviving as the MAINTAINER exemption), BUILD_HANDOFF §5
 - [ ] No automatic rollback on failed deploy — ADR-012
 - [ ] Indicative effort of 34 engineer-weeks accepted as a planning basis — PRD §14.2
 

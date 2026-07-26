@@ -6,6 +6,7 @@ import { AuditEventService } from '../audit/audit-event.service';
 import { BLIND_INDEX_KEY } from '../auth/auth.tokens';
 import { computeEmailBlindIndex, computeEmployeeIdBlindIndex } from '../auth/crypto/blind-index';
 import { decodeIdentityField, encodeIdentityField } from '../auth/crypto/identity-codec';
+import { PasswordPolicyConfig } from '../auth/password/password-policy.config';
 import { PasswordService } from '../auth/password/password.service';
 import type { ActorMeta } from '../common/actor-meta';
 import {
@@ -45,6 +46,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly passwordService: PasswordService,
+    private readonly passwordPolicy: PasswordPolicyConfig,
     private readonly audit: AuditEventService,
     @Inject(BLIND_INDEX_KEY) private readonly blindIndexKey: Buffer,
     @Inject(FIELD_ENCRYPTION_SERVICE) private readonly fieldEncryption: FieldEncryptionService,
@@ -84,14 +86,23 @@ export class UsersService {
   }
 
   /**
-   * Admin-created-user password mechanism (documented choice, see
-   * slice-13a-report.md "concerns"): ADMIN-SET, not a generated
-   * temp-password/invite-email flow — there is no SMTP wiring until slice
-   * 11's credentials land and no forced "must change on next login" gate
-   * exists in `/auth/login` yet. `dto.password` is required, hashed with the
-   * same `PasswordService`/Argon2id as a normal login password, and NEVER
-   * echoed back in the response (`User` — `shared/src/user.ts` — has no
-   * password field at all).
+   * Admin-created-user password mechanism: ADMIN-SET, not a generated
+   * temp-password/invite-email flow (there is still no SMTP wiring).
+   * `dto.password` is required, hashed with the same
+   * `PasswordService`/Argon2id as a normal login password, and NEVER echoed
+   * back in the response (`User` — `shared/src/user.ts` — has no password
+   * field at all).
+   *
+   * Slice 13-MFA §7 closes the gap slice 13a's report flagged as a concern:
+   * the created user gets `must_change_password = true`, so the admin-known
+   * credential is only good for the one round trip that replaces it
+   * (`POST /auth/password`).
+   *
+   * ...but only when `FORCE_PASSWORD_CHANGE_ENABLED` is on, and it defaults
+   * OFF (review finding I-3, `PasswordPolicyConfig`). The password-change
+   * SCREEN ships in slice 13-UI, so forcing the change before then would give
+   * the first user created after deploy a 403 on every page and no way to
+   * clear it. Same hazard, same mitigation, same default as `MFA_ENABLED`.
    */
   async create(dto: UserCreate, actor: ActorMeta): Promise<User> {
     const roles = await this.rolesByCode(dto.roleCodes);
@@ -131,6 +142,19 @@ export class UsersService {
             employeeIdCt: employeeId ? toBytes(employeeId.ciphertext) : undefined,
             employeeIdBidx: employeeIdBidx ? toBytes(employeeIdBidx) : undefined,
             passwordHash,
+            // Slice 13-MFA §7 — the admin chose this password, so the admin
+            // knows it. The user is authenticated normally but blocked from
+            // every endpoint except /auth/me, /auth/password and
+            // /auth/logout until they change it
+            // (`PasswordChangeRequiredGuard`). Only ever set for users
+            // created FROM NOW ON: the column defaults to false and no
+            // migration back-fills it, so existing accounts — including the
+            // live production admin — are untouched.
+            //
+            // Gated on FORCE_PASSWORD_CHANGE_ENABLED (default false) until
+            // slice 13-UI ships a password-change screen — see the method
+            // comment and `PasswordPolicyConfig`.
+            mustChangePassword: this.passwordPolicy.forceChangeOnAdminCreatedUsers,
             dekVersion: fullName.dekVersion,
             status: UserStatusT.active,
           },

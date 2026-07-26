@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { RequestMethod } from '@nestjs/common';
 import { MODULE_METADATA, PATH_METADATA, METHOD_METADATA } from '@nestjs/common/constants';
 import { AppModule } from '../../src/app.module';
+import { MFA_CHALLENGE_AUTH_KEY } from '../../src/auth/decorators/mfa-challenge-auth.decorator';
 import { IS_PUBLIC_KEY } from '../../src/auth/decorators/public.decorator';
 import { ROLES_KEY } from '../../src/auth/decorators/roles.decorator';
 
@@ -38,6 +39,17 @@ export interface RouteInfo {
   handlerName: string;
   isPublic: boolean;
   roles: string[] | undefined;
+  /**
+   * `@MfaChallengeAuth(mode)` — a SECOND authentication class introduced by
+   * slice 13-MFA (review finding M-6). Such a route is not `@Public()`, so
+   * C-07 reported it as "authenticated" and said nothing more; but it is
+   * entered on an MFA challenge token, which leaves `request.user` unset and
+   * carries no `roles` claim. Enumerating it here is what lets
+   * `route-coverage.spec.ts` police it against a named allowlist the same way
+   * it polices `@Public()`, so non-negotiable #6's "new endpoints are
+   * auto-covered" premise holds for this decorator too.
+   */
+  mfaChallengeMode: string | undefined;
 }
 
 /** Matches `main.ts`'s `app.setGlobalPrefix('api/v1')`. */
@@ -119,6 +131,11 @@ export function enumerateRoutes(): RouteInfo[] {
       const handlerRoles = Reflect.getMetadata(ROLES_KEY, handler) as string[] | undefined;
       const roles = handlerRoles ?? classRoles;
 
+      const mfaChallengeMode =
+        ((Reflect.getMetadata(MFA_CHALLENGE_AUTH_KEY, handler) ??
+          Reflect.getMetadata(MFA_CHALLENGE_AUTH_KEY, Controller)) as string | undefined) ??
+        undefined;
+
       routes.push({
         method: RequestMethod[methodMeta] ?? 'GET',
         path: fullPath,
@@ -127,6 +144,7 @@ export function enumerateRoutes(): RouteInfo[] {
         handlerName: propertyKey,
         isPublic,
         roles,
+        mfaChallengeMode,
       });
     }
   }

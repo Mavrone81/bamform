@@ -2,20 +2,26 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res } from '@ne
 import type { Request, Response } from 'express';
 import {
   loginRequestSchema,
+  passwordChangeRequestSchema,
   stepUpRequestSchema,
   type LoginRequest,
+  type PasswordChangeRequest,
   type StepUpRequest,
 } from '@bamform/shared';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import {
+  applyRetryAfter,
+  REFRESH_COOKIE_NAME,
+  REFRESH_COOKIE_PATH,
+  setRefreshCookie,
+} from './auth.cookies';
 import { AuthService } from './auth.service';
+import { AllowPasswordChangeRequired } from './decorators/allow-password-change-required.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import type { AccessTokenClaims } from './jwt/access-token.types';
-import { RateLimitedException } from './problems';
-import type { IssuedRefreshToken, RequestMeta } from './refresh/refresh-token.service';
-
-const REFRESH_COOKIE_NAME = 'bf_refresh';
-const REFRESH_COOKIE_PATH = '/api/v1/auth';
+import { PasswordChangeService } from './password/password-change.service';
+import type { RequestMeta } from './refresh/refresh-token.service';
 
 function requestMeta(req: Request): RequestMeta {
   const userAgent = req.headers['user-agent'];
@@ -27,21 +33,25 @@ function requestMeta(req: Request): RequestMeta {
   };
 }
 
-/** SEC §10.3: `bf_refresh` — `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth` (PR-085). */
-function setRefreshCookie(res: Response, issued: IssuedRefreshToken): void {
-  res.cookie(REFRESH_COOKIE_NAME, issued.token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'strict',
-    path: REFRESH_COOKIE_PATH,
-    expires: issued.expiresAt,
-  });
+function presentedRefreshToken(req: Request): string | undefined {
+  return (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE_NAME];
 }
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly passwordChange: PasswordChangeService,
+  ) {}
 
+  /**
+   * With `MFA_ENABLED=false` (the default, and the only value in committed
+   * config) this returns `AuthResult` and sets the refresh cookie, exactly as
+   * it always has. With the flag on AND the account holding an
+   * `MFA_REQUIRED_ROLES` role it instead returns an `MfaChallenge` and sets
+   * NO cookie — hence the conditional below rather than an unconditional
+   * `setRefreshCookie` (brief §4.2).
+   */
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -52,7 +62,9 @@ export class AuthController {
   ) {
     try {
       const { result, refreshToken } = await this.authService.login(dto, requestMeta(req));
-      setRefreshCookie(res, refreshToken);
+      if (refreshToken) {
+        setRefreshCookie(res, refreshToken);
+      }
       return result;
     } catch (error) {
       applyRetryAfter(res, error);
@@ -64,24 +76,26 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const presented = (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE_NAME];
-    const { result, refreshToken } = await this.authService.refresh(presented, requestMeta(req));
+    const { result, refreshToken } = await this.authService.refresh(
+      presentedRefreshToken(req),
+      requestMeta(req),
+    );
     setRefreshCookie(res, refreshToken);
     return result;
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @AllowPasswordChangeRequired()
   async logout(
     @CurrentUser() user: AccessTokenClaims,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    const presented = (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE_NAME];
     await this.authService.logout({
       jti: user.jti,
       accessTokenExpiresAt: user.exp,
-      presentedRefreshToken: presented,
+      presentedRefreshToken: presentedRefreshToken(req),
     });
     res.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
   }
@@ -102,14 +116,34 @@ export class AuthController {
     }
   }
 
-  @Get('me')
-  async me(@CurrentUser() user: AccessTokenClaims) {
-    return this.authService.me(user.sub);
+  /**
+   * Slice 13-MFA §7 — self-service password change, own account only.
+   * `@AllowPasswordChangeRequired()` because this is the one endpoint a
+   * forced-change user MUST be able to reach.
+   */
+  @Post('password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @AllowPasswordChangeRequired()
+  async changePassword(
+    @Body(new ZodValidationPipe(passwordChangeRequestSchema)) dto: PasswordChangeRequest,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    try {
+      await this.passwordChange.changeOwnPassword(user.sub, dto.currentPassword, dto.newPassword, {
+        ...requestMeta(req),
+        currentRefreshToken: presentedRefreshToken(req),
+      });
+    } catch (error) {
+      applyRetryAfter(res, error);
+      throw error;
+    }
   }
-}
 
-function applyRetryAfter(res: Response, error: unknown): void {
-  if (error instanceof RateLimitedException) {
-    res.setHeader('Retry-After', String(error.retryAfterSeconds));
+  @Get('me')
+  @AllowPasswordChangeRequired()
+  me(@CurrentUser() user: AccessTokenClaims) {
+    return this.authService.me(user.sub);
   }
 }

@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { AuthResult, LoginRequest } from '@bamform/shared';
-import { UserStatusT, type Prisma } from '@prisma/client';
+import type { LoginRequest, LoginResponse } from '@bamform/shared';
+import { UserStatusT } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { toBytes } from '../common/prisma-bytes';
 import type { FieldEncryptionService } from '../crypto/field-encryption';
@@ -11,20 +11,33 @@ import { ACCESS_TOKEN_SERVICE, BLIND_INDEX_KEY } from './auth.tokens';
 import { computeEmailBlindIndex } from './crypto/blind-index';
 import { buildCurrentUser } from './current-user.builder';
 import type { AccessTokenService } from './jwt/access-token.service';
+import { AccountLockoutService } from './lockout/account-lockout.service';
+import { MfaConfig } from './mfa/mfa.config';
+import { MFA_CHALLENGE_TOKEN_SERVICE } from './mfa/mfa.tokens';
+import type { MfaChallengeTokenService } from './mfa/mfa-challenge-token.service';
 import { PasswordService } from './password/password.service';
 import { invalidCredentialsProblem, RateLimitedException } from './problems';
 import { RateLimiterService } from './redis/rate-limiter.service';
 import { TokenDenylistService } from './redis/token-denylist.service';
-import type { IssuedRefreshToken, RequestMeta } from './refresh/refresh-token.service';
+import type { RequestMeta } from './refresh/refresh-token.service';
 import { RefreshTokenService } from './refresh/refresh-token.service';
 import {
   invalidRefreshTokenError,
   refreshReuseDetectedError,
 } from './refresh/refresh-token.errors';
+import { rolesFor, SessionIssuerService, type AuthOutcome } from './session/session-issuer.service';
 
-export interface AuthOutcome {
-  result: AuthResult;
-  refreshToken: IssuedRefreshToken;
+export type { AuthOutcome } from './session/session-issuer.service';
+
+/**
+ * `POST /auth/login`'s outcome. `refreshToken` is `undefined` in exactly one
+ * case: an MFA challenge was issued instead of a session, so there is no
+ * cookie to set (brief §4.2 — "issue **no access token and no refresh
+ * cookie**").
+ */
+export interface LoginOutcome {
+  result: LoginResponse;
+  refreshToken?: AuthOutcome['refreshToken'];
 }
 
 const DECOY_PASSWORD_FOR_TIMING = 'decoy-password-not-a-real-account-000000';
@@ -41,18 +54,15 @@ export class AuthService {
     private readonly securityAudit: SecurityAuditService,
     private readonly rateLimiter: RateLimiterService,
     private readonly denylist: TokenDenylistService,
+    private readonly lockout: AccountLockoutService,
+    private readonly sessions: SessionIssuerService,
+    private readonly mfaConfig: MfaConfig,
     @Inject(BLIND_INDEX_KEY) private readonly blindIndexKey: Buffer,
     @Inject(ACCESS_TOKEN_SERVICE) private readonly accessTokens: AccessTokenService,
+    @Inject(MFA_CHALLENGE_TOKEN_SERVICE)
+    private readonly mfaChallengeTokens: MfaChallengeTokenService,
     @Inject(FIELD_ENCRYPTION_SERVICE) private readonly fieldEncryption: FieldEncryptionService,
   ) {}
-
-  private get maxAttempts(): number {
-    return Number(this.config.get('LOGIN_MAX_ATTEMPTS') ?? 5);
-  }
-
-  private get lockoutBaseSeconds(): number {
-    return Number(this.config.get('LOGIN_LOCKOUT_SECONDS') ?? 900);
-  }
 
   private get loginRateLimitPerMinute(): number {
     return Number(this.config.get('RATE_LIMIT_LOGIN_PER_MIN') ?? 10);
@@ -85,7 +95,7 @@ export class AuthService {
     return this.dummyHashPromise;
   }
 
-  async login(dto: LoginRequest, meta: RequestMeta): Promise<AuthOutcome> {
+  async login(dto: LoginRequest, meta: RequestMeta): Promise<LoginOutcome> {
     const rate = await this.rateLimiter.checkAndIncrement(
       'login',
       meta.sourceIp ?? 'unknown',
@@ -112,13 +122,7 @@ export class AuthService {
       throw invalidCredentialsProblem();
     }
 
-    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
-      const retryAfterSeconds = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000);
-      throw new RateLimitedException(
-        retryAfterSeconds,
-        'Account is temporarily locked after repeated failed attempts.',
-      );
-    }
+    this.lockout.assertNotLocked(user);
 
     const passwordValid = user.passwordHash
       ? await this.passwordService.verify(user.passwordHash, dto.password)
@@ -135,76 +139,39 @@ export class AuthService {
     const accountActive = user.status === UserStatusT.active;
 
     if (!passwordValid || !accountActive) {
-      const newCount = user.failedLoginCount + 1;
-      const locked = newCount >= this.maxAttempts;
-      // Exponential backoff (PR-092): each lockout beyond the threshold
-      // doubles the base window, derived purely from failedLoginCount so no
-      // extra schema column is needed.
-      const lockedUntil = locked
-        ? new Date(Date.now() + this.lockoutBaseSeconds * 1000 * 2 ** (newCount - this.maxAttempts))
-        : null;
-
-      await this.prisma.$transaction(async (tx) => {
-        await tx.appUser.update({
-          where: { id: user.id },
-          data: { failedLoginCount: newCount, lockedUntil },
-        });
-        await this.securityAudit.recordLoginFailure(tx, {
-          userId: user.id,
-          sourceIp: meta.sourceIp,
-          requestId: meta.requestId,
-          lockout: locked,
-        });
-      });
-
-      if (locked) {
-        // `lockedUntil` is non-null exactly when `locked` is true (both
-        // derive from the same `locked` condition above) — compute
-        // Retry-After from the actual, exponentially-backed-off timestamp
-        // just stored, not the un-multiplied base window, so the header
-        // agrees with `lockedUntil` on this same response instead of only
-        // self-correcting on the next request.
-        const retryAfterSeconds = Math.ceil((lockedUntil!.getTime() - Date.now()) / 1000);
-        throw new RateLimitedException(
-          retryAfterSeconds,
-          'Account locked after repeated failed attempts.',
-        );
-      }
-      throw invalidCredentialsProblem();
+      throw await this.lockout.recordFailure(this.prisma, user, meta);
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const now = new Date();
-      await tx.appUser.update({
-        where: { id: user.id },
-        data: {
-          failedLoginCount: 0,
-          lockedUntil: null,
-          lastLoginAt: now,
-          lastAuthenticatedAt: now,
-        },
-      });
-      await this.securityAudit.recordLoginSuccess(tx, {
-        userId: user.id,
-        sourceIp: meta.sourceIp,
-        requestId: meta.requestId,
-      });
+    // ------------------------------------------------------------ MFA gate
+    //
+    // ⚠️ `MfaConfig.isMfaRequiredForRoles` returns false whenever
+    // `MFA_ENABLED` is false — which is the DEFAULT and the only value in
+    // committed config. With the flag off this branch is never taken and the
+    // code below is byte-for-byte the pre-13-MFA login path (brief §2; the
+    // live sole ADMIN must keep logging in one step until slice 13-UI ships).
+    if (this.mfaConfig.enabled) {
+      const roles = await rolesFor(this.prisma, user.id);
+      if (this.mfaConfig.isMfaRequiredForRoles(roles)) {
+        const challenge = await this.mfaChallengeTokens.sign(user.id);
+        // Deliberately NO session side effects here: `failed_login_count` is
+        // NOT reset, `last_login_at`/`last_authenticated_at` are NOT stamped
+        // and no `login` audit event is written. The password is only half
+        // the credential — leaving the counter running is what makes the
+        // shared lockout in §4 actually bite (otherwise every fresh
+        // /auth/login would reset an attacker's MFA guess budget), and the
+        // audit trail should record "logged in" only when the user really is.
+        return {
+          result: {
+            mfaRequired: true,
+            mfaEnrolled: user.mfaEnrolled,
+            challengeToken: challenge.token,
+            expiresIn: challenge.expiresIn,
+          },
+        };
+      }
+    }
 
-      const refreshToken = await this.refreshTokens.issueNewFamily(tx, user.id, meta);
-      const roles = await this.rolesFor(tx, user.id);
-      const { token: accessToken } = await this.accessTokens.sign(user.id, roles);
-      const currentUser = await buildCurrentUser(
-        tx,
-        user.id,
-        this.stepUpWindowSeconds,
-        this.fieldEncryption,
-      );
-
-      return {
-        refreshToken,
-        result: { accessToken, expiresIn: this.accessTokenTtlSeconds, user: currentUser },
-      };
-    });
+    return this.prisma.$transaction((tx) => this.sessions.issue(tx, user.id, meta));
   }
 
   async refresh(presentedToken: string | undefined, meta: RequestMeta): Promise<AuthOutcome> {
@@ -237,7 +204,7 @@ export class AuthService {
       throw invalidRefreshTokenError();
     }
 
-    const roles = await this.rolesFor(this.prisma, outcome.userId);
+    const roles = await rolesFor(this.prisma, outcome.userId);
     const { token: accessToken } = await this.accessTokens.sign(outcome.userId, roles);
     const currentUser = await buildCurrentUser(
       this.prisma,
@@ -276,6 +243,10 @@ export class AuthService {
     // password verification. Without this, a stolen/valid access token lets
     // an attacker brute-force the account password via step-up with no
     // lockout in the way (login's account lockout never runs on this path).
+    //
+    // D-2: step-up stays PASSWORD-ONLY. TOTP is deliberately not added here —
+    // a cleanroom operator re-authenticating before every signature is
+    // exactly the usability cliff SEC RS-3/SO-3 warns about.
     const rate = await this.rateLimiter.checkAndIncrement(
       'step-up',
       userId,
@@ -321,16 +292,5 @@ export class AuthService {
 
   me(userId: string): ReturnType<typeof buildCurrentUser> {
     return buildCurrentUser(this.prisma, userId, this.stepUpWindowSeconds, this.fieldEncryption);
-  }
-
-  private async rolesFor(tx: Prisma.TransactionClient, userId: string): Promise<string[]> {
-    // Slice 13a: `active: false` is how `PATCH /users/{id}` revokes a role
-    // without a `DELETE` (INV-16) — excluded here so a revoked role never
-    // makes it into a freshly-minted access token.
-    const userRoles = await tx.userRole.findMany({
-      where: { userId, active: true },
-      include: { role: true },
-    });
-    return userRoles.map((userRole) => userRole.role.code);
   }
 }

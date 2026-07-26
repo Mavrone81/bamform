@@ -22,6 +22,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AccessTokenClaims } from '../auth/jwt/access-token.types';
+import { MfaService } from '../auth/mfa/mfa.service';
 import { requestMeta } from '../common/request-meta';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { UsersService } from './users.service';
@@ -36,7 +37,10 @@ import { UsersService } from './users.service';
 @UseGuards(RolesGuard)
 @Roles('ADMIN')
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly mfa: MfaService,
+  ) {}
 
   @Get()
   list(
@@ -61,6 +65,25 @@ export class UsersController {
     @Req() req: Request,
   ) {
     return this.users.create(dto, { actorId: user.sub, ...requestMeta(req) });
+  }
+
+  /**
+   * Slice 13-MFA §5 (D-3) — the ADMIN escape hatch when a user loses both
+   * their authenticator and their recovery codes. Clears the enrolment and
+   * invalidates every unused recovery code, forcing a fresh enrolment.
+   *
+   * An admin can RESET but can never READ: there is no endpoint that returns
+   * anyone's TOTP secret or recovery codes, and this one only writes.
+   * Audited with both actor and subject (`mfa_reset`).
+   */
+  @Post(':userId/mfa-reset')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resetMfa(
+    @Param('userId') userId: string,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+  ): Promise<void> {
+    await this.mfa.resetForUser(userId, { actorId: user.sub, ...requestMeta(req) });
   }
 
   @Patch(':userId')
