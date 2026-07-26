@@ -139,7 +139,22 @@ paths:
       tags: [Auth]
       operationId: login
       summary: Authenticate and receive an access token
-      description: Rate-limited (10/min per IP); account lockout after 5 failures.
+      description: |
+        Rate-limited (10/min per IP); account lockout after 5 failures.
+
+        Returns `AuthResult` — access token in the body, refresh token in the
+        `bf_refresh` cookie — in every case EXCEPT one: when `MFA_ENABLED` is
+        true AND the account holds a role in `MFA_REQUIRED_ROLES`
+        (`ADMIN`, `TEAM_LEADER`, `ENGINEER`, `DOC_CONTROLLER`, `AUDITOR` by
+        default; `MAINTAINER` is exempt - SEC RS-3/SO-3). In that case the
+        password was accepted but the login is not finished: the response is
+        an `MfaChallenge` with NO access token and NO refresh cookie, and the
+        client must call `/auth/mfa/verify` (or `/auth/mfa/recovery`, or
+        `/auth/mfa/enrol` + `/auth/mfa/enrol/confirm` when `mfaEnrolled` is
+        false) to complete it.
+
+        `MFA_ENABLED` defaults to **false**, in which case this endpoint
+        behaves exactly as it did before slice 13-MFA.
       security: []
       requestBody:
         required: true
@@ -154,6 +169,151 @@ paths:
             example: { email: tech@bevorasg.com, password: "••••••••••••" }
       responses:
         '200':
+          description: |
+            Authenticated (refresh token set as an HttpOnly cookie), or an MFA
+            challenge issued (no cookie set - see the endpoint description).
+          headers:
+            Set-Cookie:
+              description: bf_refresh - HttpOnly, Secure, SameSite=Strict. Absent on an MfaChallenge response.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AuthResult'
+                  - $ref: '#/components/schemas/MfaChallenge'
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/password:
+    post:
+      tags: [Auth]
+      operationId: changeOwnPassword
+      summary: Change your own password
+      description: |
+        Own account only - the subject comes from the access token, never the
+        body. Argon2id, minimum 12 characters, same policy as `/auth/login`
+        and `POST /users`. On success `password_changed_at` is stamped,
+        `must_change_password` is cleared, and every OTHER refresh-token
+        family for the user is revoked (the caller's own session survives).
+        Audited as `password_changed`. Rate-limited 10/min per user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordChangeRequest' }
+      responses:
+        '204': { description: Password changed }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/mfa/enrol:
+    post:
+      tags: [Auth]
+      operationId: enrolMfa
+      summary: Begin TOTP enrolment - issue a shared secret
+      description: |
+        Generates a 160-bit TOTP secret, stores it field-encrypted, and
+        returns it in base32 plus `otpauth://` URI form. `mfa_enrolled` stays
+        false until `/auth/mfa/enrol/confirm` succeeds; calling this endpoint
+        again before confirmation REPLACES the pending secret.
+
+        Authorised by EITHER a normal `Authorization: Bearer` access token (a
+        signed-in user enrolling voluntarily) OR the `challengeToken` from a
+        `/auth/login` MFA challenge (a user who must enrol before they can
+        finish logging in). It is never anonymous.
+
+        Returns 409 if the account is already enrolled - the only way out of
+        an enrolled state is `POST /users/{userId}/mfa-reset`.
+
+        The QR image is rendered client-side; the API has no QR dependency.
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaEnrolRequest' }
+      responses:
+        '200':
+          description: Pending secret issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MfaEnrolResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Already enrolled
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /auth/mfa/enrol/confirm:
+    post:
+      tags: [Auth]
+      operationId: confirmMfaEnrolment
+      summary: Confirm TOTP enrolment and receive the recovery codes
+      description: |
+        Verifies a code against the pending secret, sets `mfa_enrolled`, and
+        returns the ten single-use recovery codes. **They are returned exactly
+        once and are never retrievable again.**
+
+        If this call was authorised by a `challengeToken` (i.e. it happened
+        during a login challenge) it also completes the login: `auth` carries
+        the `AuthResult` and the refresh cookie is set. For a voluntary
+        enrolment by an already-signed-in user, `auth` is null.
+
+        Failures count toward the same account-lockout counter a wrong
+        password does. Rate-limited 10/min per user.
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaEnrolConfirmRequest' }
+      responses:
+        '200':
+          description: Enrolled. Recovery codes returned once.
+          headers:
+            Set-Cookie:
+              description: bf_refresh - set only when this call completed a login challenge.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MfaEnrolConfirmResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/mfa/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyMfa
+      summary: Complete login with a TOTP code
+      description: |
+        Second step of login. Consumes the `challengeToken` from
+        `/auth/login`; on success issues the access token and refresh cookie
+        exactly as a password-only login would.
+
+        RFC 6238: 6 digits, 30 s period, plus/minus one step of clock skew.
+        An accepted code's time step is recorded, so the same code cannot be
+        replayed inside its own 30-second window. A wrong code returns the
+        same opaque 401 as a wrong/expired challenge token, and counts toward
+        the account-lockout counter. The challenge token is single-use.
+        Rate-limited 10/min per user.
+      security:
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaVerifyRequest' }
+      responses:
+        '200':
           description: Authenticated. Refresh token is set as an HttpOnly cookie.
           headers:
             Set-Cookie:
@@ -163,6 +323,38 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AuthResult' }
         '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/mfa/recovery:
+    post:
+      tags: [Auth]
+      operationId: redeemMfaRecoveryCode
+      summary: Complete login with a single-use recovery code
+      description: |
+        Redeems one of the ten codes issued at enrolment. The code is marked
+        used and can never be redeemed again (it is never deleted - INV-07).
+        Audited as `mfa_recovery_code_used`. Failures count toward the
+        account-lockout counter. Rate-limited 5/min per user.
+      security:
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaRecoveryRequest' }
+      responses:
+        '200':
+          description: Authenticated. Refresh token is set as an HttpOnly cookie.
+          headers:
+            Set-Cookie:
+              description: bf_refresh - HttpOnly, Secure, SameSite=Strict
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
 
   /auth/refresh:
@@ -1861,6 +2053,29 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /users/{userId}/mfa-reset:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Admin]
+      operationId: resetUserMfa
+      summary: Reset a user's multi-factor enrolment
+      description: |
+        ADMIN only. Clears the user's TOTP enrolment and marks every unused
+        recovery code used, forcing a fresh enrolment on next login. Audited
+        as `mfa_reset` with both actor and subject.
+
+        An administrator can reset but can never READ - no endpoint discloses
+        anyone's TOTP secret or recovery codes.
+      responses:
+        '204': { description: MFA reset }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+
   /roles:
     get:
       tags: [Admin]
@@ -2017,6 +2232,94 @@ components:
         accessToken: { type: string }
         expiresIn: { type: integer, description: Seconds }
         user: { $ref: '#/components/schemas/CurrentUser' }
+
+    # ------------------------------------------------- slice 13-MFA (§§4-5, §7)
+    #
+    # Every schema below mirrors the Zod DTO in `shared/src/mfa.ts` exactly,
+    # required-vs-optional included (ADR-002, and the standing CI rule that
+    # openapi must match the DTO the server actually validates against - job 5
+    # checks structure, not live conformance, so this correspondence is
+    # maintained by hand and reviewed).
+
+    MfaChallenge:
+      type: object
+      description: |
+        The alternative 200 body of `POST /auth/login`. No access token and no
+        refresh cookie accompany it.
+
+        `challengeToken` is a TOKEN and BUILD_HANDOFF non-negotiable #10
+        applies to it in full: the client holds it in memory only and must
+        never write it to `localStorage`/`sessionStorage`. It is valid for 5
+        minutes, is single-use, authorises only `/auth/mfa/*`, and can never
+        be presented as an access token (distinct audience and `typ`).
+      required: [mfaRequired, mfaEnrolled, challengeToken, expiresIn]
+      properties:
+        mfaRequired: { type: boolean, const: true }
+        mfaEnrolled:
+          type: boolean
+          description: False means the client must run enrolment before it can complete the login.
+        challengeToken: { type: string }
+        expiresIn: { type: integer, description: Seconds }
+
+    MfaEnrolRequest:
+      type: object
+      properties:
+        challengeToken:
+          type: string
+          description: Present when enrolling mid-login; absent when an already-signed-in user enrols with a Bearer access token.
+
+    MfaEnrolResponse:
+      type: object
+      required: [secret, otpauthUri]
+      properties:
+        secret:
+          type: string
+          description: Base32 (RFC 4648, unpadded) shared secret, for manual entry.
+        otpauthUri:
+          type: string
+          description: "`otpauth://totp/...` - the same secret in the form a QR code encodes. HMAC-SHA1, 6 digits, 30 s period."
+
+    MfaEnrolConfirmRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, description: The 6-digit code from the authenticator app. }
+        challengeToken: { type: string }
+
+    MfaEnrolConfirmResponse:
+      type: object
+      required: [recoveryCodes, auth]
+      properties:
+        recoveryCodes:
+          type: array
+          description: Ten single-use codes, returned exactly once and never retrievable again.
+          items: { type: string }
+        auth:
+          description: Non-null only when this call completed a login challenge; null for a voluntary enrolment.
+          oneOf:
+            - $ref: '#/components/schemas/AuthResult'
+            - type: 'null'
+
+    MfaVerifyRequest:
+      type: object
+      required: [challengeToken, code]
+      properties:
+        challengeToken: { type: string }
+        code: { type: string, description: The 6-digit code from the authenticator app. }
+
+    MfaRecoveryRequest:
+      type: object
+      required: [challengeToken, code]
+      properties:
+        challengeToken: { type: string }
+        code: { type: string, description: One of the single-use recovery codes issued at enrolment. }
+
+    PasswordChangeRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password }
+        newPassword: { type: string, format: password, minLength: 12 }
 
     CurrentUser:
       type: object

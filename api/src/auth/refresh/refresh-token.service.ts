@@ -131,6 +131,45 @@ export class RefreshTokenService {
     return { status: 'rotated', userId: row.userId, refreshToken };
   }
 
+  /**
+   * Slice 13-MFA §7 — resolves which rotation family a presented refresh
+   * token belongs to, so `POST /auth/password` can revoke every OTHER family
+   * without logging the user out of the device they are standing at.
+   * Returns `undefined` for an unknown token.
+   */
+  async familyIdForToken(
+    tx: Prisma.TransactionClient,
+    presentedToken: string,
+  ): Promise<string | undefined> {
+    const row = await tx.refreshToken.findUnique({
+      where: { tokenHash: toBytes(this.hash(presentedToken)) },
+      select: { familyId: true },
+    });
+    return row?.familyId;
+  }
+
+  /**
+   * Slice 13-MFA §7 — a password change must not leave old sessions alive.
+   * Revokes every live refresh-token family for the user except
+   * `keepFamilyId` (the caller's own). Returns the number of token rows
+   * revoked, for the audit event.
+   */
+  async revokeOtherFamiliesForUser(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    keepFamilyId?: string,
+  ): Promise<number> {
+    const { count } = await tx.refreshToken.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        familyId: keepFamilyId ? { not: keepFamilyId } : undefined,
+      },
+      data: { revokedAt: new Date(), revokedReason: 'password_changed' },
+    });
+    return count;
+  }
+
   /** Revokes the whole family the presented token belongs to (logout). */
   async revokeFamilyByToken(tx: Prisma.TransactionClient, presentedToken: string): Promise<void> {
     const tokenHash = toBytes(this.hash(presentedToken));

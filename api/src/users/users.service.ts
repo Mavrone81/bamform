@@ -84,14 +84,17 @@ export class UsersService {
   }
 
   /**
-   * Admin-created-user password mechanism (documented choice, see
-   * slice-13a-report.md "concerns"): ADMIN-SET, not a generated
-   * temp-password/invite-email flow — there is no SMTP wiring until slice
-   * 11's credentials land and no forced "must change on next login" gate
-   * exists in `/auth/login` yet. `dto.password` is required, hashed with the
-   * same `PasswordService`/Argon2id as a normal login password, and NEVER
-   * echoed back in the response (`User` — `shared/src/user.ts` — has no
-   * password field at all).
+   * Admin-created-user password mechanism: ADMIN-SET, not a generated
+   * temp-password/invite-email flow (there is still no SMTP wiring).
+   * `dto.password` is required, hashed with the same
+   * `PasswordService`/Argon2id as a normal login password, and NEVER echoed
+   * back in the response (`User` — `shared/src/user.ts` — has no password
+   * field at all).
+   *
+   * Slice 13-MFA §7 closes the gap slice 13a's report flagged as a concern:
+   * the created user now gets `must_change_password = true`, so the
+   * admin-known credential is only good for the one round trip that replaces
+   * it (`POST /auth/password`).
    */
   async create(dto: UserCreate, actor: ActorMeta): Promise<User> {
     const roles = await this.rolesByCode(dto.roleCodes);
@@ -131,6 +134,15 @@ export class UsersService {
             employeeIdCt: employeeId ? toBytes(employeeId.ciphertext) : undefined,
             employeeIdBidx: employeeIdBidx ? toBytes(employeeIdBidx) : undefined,
             passwordHash,
+            // Slice 13-MFA §7 — the admin chose this password, so the admin
+            // knows it. The user is authenticated normally but blocked from
+            // every endpoint except /auth/me, /auth/password and
+            // /auth/logout until they change it
+            // (`PasswordChangeRequiredGuard`). Only ever set for users
+            // created FROM NOW ON: the column defaults to false and no
+            // migration back-fills it, so existing accounts — including the
+            // live production admin — are untouched.
+            mustChangePassword: true,
             dekVersion: fullName.dekVersion,
             status: UserStatusT.active,
           },

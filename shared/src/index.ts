@@ -12,3 +12,4 @@ export * from './queue';
 export * from './delegation';
 export * from './report';
 export * from './user';
+export * from './mfa';

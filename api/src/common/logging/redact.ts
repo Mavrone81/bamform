@@ -12,9 +12,20 @@
 
 const REDACTED = '[REDACTED]';
 
-/** Key names (case-insensitive, matched as a substring) treated as secret. */
+/**
+ * Key names (case-insensitive, matched as a substring) treated as secret.
+ *
+ * Slice 13-MFA adds `recoveryCode`/`backupCode`/`otpauth`/`totp`. The
+ * pre-existing `secret` and `token` alternatives already cover
+ * `mfaSecretCt`, `mfaSecret` and `challengeToken`, but a recovery code and an
+ * `otpauth://` URI (which embeds the shared secret in its query string) match
+ * nothing in the original set. A bare `code` is deliberately NOT listed —
+ * `roleCode`, `assetCode`, `areaCode`, `codeBidx` and the machine codes are
+ * all non-secret and redacting them would make failure logs unreadable for
+ * no security gain.
+ */
 const SENSITIVE_KEY_PATTERN =
-  /pass(?:word)?|secret|token|api[-_]?key|authorization|cookie|dek\b|private[-_]?key|signing[-_]?key|hmac|blind[-_]?index[-_]?key|client[-_]?secret/i;
+  /pass(?:word)?|secret|token|api[-_]?key|authorization|cookie|dek\b|private[-_]?key|signing[-_]?key|hmac|blind[-_]?index[-_]?key|client[-_]?secret|recovery[-_]?code|backup[-_]?code|otpauth|totp/i;
 
 /**
  * Matches `key: value` / `key=value` / `"key": "value"` in free-text where

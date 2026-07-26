@@ -1,10 +1,11 @@
 /** @type {import('jest').Config} */
-// CI job 6 step "Security test cases S-01 to S-34 (npm run test:security)".
+// CI job 6 step "Security test cases S-01 to S-45 (npm run test:security)".
 //
 // This wires the EXISTING S-01..S-09 / U-SIG-01..10 / U-ENC-01..09 test
 // files (built in slices 1-2 auth and slice 3 crypto) into one runnable
 // script for the security job — see docs/TEST_PLAN.md §5.3/§5.5/§9 and
-// .superpowers/sdd/ci-C-report.md for the full S-01..S-34 -> file mapping,
+// .superpowers/sdd/ci-C-report.md for the full S-01..S-34 -> file mapping
+// (slice 13-MFA extends it to S-45 -- see the block at the end of testMatch),
 // including which cases are genuinely not yet buildable (later slices) and
 // are tracked as `test.todo(...)` in test/security/pending-cases.spec.ts —
 // never faked as passing.
@@ -60,6 +61,26 @@ module.exports = {
 
     // -- slice 8 — audit hash-chain verification ------------------------
     '<rootDir>/test/integration/audit-chain-status.spec.ts', // S-11 (chain break detected via GET /audit-events/chain-status) + AUDITOR/ADMIN role gate
+
+    // -- slice 13-MFA — TOTP multi-factor auth + password self-service ---
+    // S-35 (challenge token is not an access token) is a pure-unit test over
+    // the two token services with throwaway keys, exactly like S-01..S-05.
+    // The rest are genuine end-to-end attacks with no unit-level equivalent:
+    // S-36 replay of a TOTP code inside its own window, S-37 MFA failures
+    // feeding the shared account lockout, S-38 the MFA_ENABLED=false
+    // no-regression guarantee (the property that keeps the live sole ADMIN
+    // able to log in), S-39 MAINTAINER exemption, S-40/S-41 recovery-code
+    // single-use and cross-user rejection, S-42 the ADMIN reset's role gate,
+    // S-45 challenge-token single use.
+    '<rootDir>/src/auth/mfa/mfa-challenge-token.service.spec.ts', // S-35
+    '<rootDir>/src/auth/mfa/totp.spec.ts', // U-MFA-02/03 — RFC 6238 vectors
+    '<rootDir>/src/auth/mfa/base32.spec.ts', // U-MFA-01 — RFC 4648 vectors
+    '<rootDir>/src/auth/mfa/recovery-codes.spec.ts', // U-MFA-05/06
+    '<rootDir>/src/auth/mfa/mfa.config.spec.ts', // U-MFA-07 — MFA_ENABLED defaults false
+    '<rootDir>/test/integration/mfa.spec.ts', // S-36..S-42, S-45
+    // S-43 (forced-change user blocked everywhere else), S-44 (password
+    // change revokes other sessions).
+    '<rootDir>/test/integration/password-change.spec.ts',
 
     // -- honestly-tracked gaps: pending cases only, never faked ----------
     '<rootDir>/test/security/pending-cases.spec.ts',

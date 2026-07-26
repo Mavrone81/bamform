@@ -87,10 +87,15 @@ Modelling it as `PATCH {status: "VERIFIED"}` would invite clients to treat it as
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /auth/login` | Body `{ email, password }`. Returns access token in body; refresh token in `HttpOnly; Secure; SameSite=Strict` cookie (PR-085). Rate-limited, lockout after 5 failures |
+| `POST /auth/login` | Body `{ email, password }`. Returns access token in body; refresh token in `HttpOnly; Secure; SameSite=Strict` cookie (PR-085). Rate-limited, lockout after 5 failures. **When MFA applies** (see §3.2) it returns an `MfaChallenge` instead, with no token and no cookie |
 | `POST /auth/refresh` | Reads the refresh cookie. Rotates: old token invalidated, new pair issued. **Reuse of a spent token revokes the entire family** and raises a security audit event (PR-084) |
 | `POST /auth/logout` | Revokes the refresh family; adds the current `jti` to the Redis denylist |
-| `POST /auth/step-up` | Body `{ password }`. Refreshes `last_authenticated_at`. **Required before signing** if the step-up window has lapsed (PR-091) |
+| `POST /auth/step-up` | Body `{ password }`. Refreshes `last_authenticated_at`. **Required before signing** if the step-up window has lapsed (PR-091). **Password-only** — TOTP is deliberately not required here (§3.2) |
+| `POST /auth/password` | Body `{ currentPassword, newPassword }`. Own account only. Clears `must_change_password`, stamps `password_changed_at`, revokes every OTHER refresh-token family. Audited `password_changed` |
+| `POST /auth/mfa/enrol` | Issues a TOTP secret (base32 + `otpauth://` URI). Authorised by an access token or an MFA `challengeToken`. 409 if already enrolled |
+| `POST /auth/mfa/enrol/confirm` | Body `{ code }`. Confirms enrolment and returns the ten recovery codes **once**. Completes the login when called with a `challengeToken` |
+| `POST /auth/mfa/verify` | Body `{ challengeToken, code }`. Second step of login; issues the access token and refresh cookie |
+| `POST /auth/mfa/recovery` | Body `{ challengeToken, code }`. Redeems a single-use recovery code. Audited `mfa_recovery_code_used` |
 | `GET /.well-known/jwks.json` | Public. Publishes Ed25519 verification keys with `kid` (PR-087) |
 
 **PR-API-06** Access tokens are held in memory by the client, never in `localStorage`. The
@@ -104,6 +109,51 @@ does not need a valid access token to *capture* a record, only to transmit one.
 `STEP_UP_WINDOW_SECONDS`. The client presents a password prompt, calls `/auth/step-up`, and
 retries. This is what makes a signature attributable to a person rather than to a browser left
 open on a shop-floor terminal.
+
+## 3.2 Multi-factor authentication at login
+
+**PR-API-07a** MFA is TOTP (RFC 6238, HMAC-SHA1, 6 digits, 30 s, plus/minus one step), challenged
+**at login** as a second step after the password — never as part of step-up-before-signing, which
+stays password-only. See BAMFORM-SEC-001 §5.1 for the cryptographic detail and §14 RS-3 for why
+`MAINTAINER` is exempt.
+
+It applies to a user holding **any** role in `MFA_REQUIRED_ROLES` (default `ADMIN`,
+`TEAM_LEADER`, `ENGINEER`, `DOC_CONTROLLER`, `AUDITOR`) and is gated by the master switch
+`MFA_ENABLED`, which **defaults to `false`**. With the switch off, `/auth/login` behaves exactly
+as §3 describes it without this section; the enrolment endpoints still work, so a user may enrol
+ahead of time.
+
+When it applies, `POST /auth/login` returns `200` with
+
+```json
+{ "mfaRequired": true, "mfaEnrolled": true, "challengeToken": "…", "expiresIn": 300 }
+```
+
+and **no access token and no refresh cookie**. The `challengeToken` is a 5-minute, single-use,
+EdDSA-signed JWT with its own audience (`bamform-mfa-challenge`) and `typ`
+(`mfa-challenge+jwt`). It authorises only `/auth/mfa/verify`, `/auth/mfa/recovery`,
+`/auth/mfa/enrol` and `/auth/mfa/enrol/confirm`, and can never be presented as an access token —
+`JwtAuthGuard`'s access-token path pins the API audience and rejects it.
+
+**PR-API-07b** The `challengeToken` is a token, so PR-API-06 applies to it in full: the client
+holds it in memory only and never in `localStorage`/`sessionStorage`.
+
+**PR-API-07c** A wrong code and a wrong/expired/replayed `challengeToken` both return the same
+opaque `401 /errors/unauthenticated` — the client is told nothing about which half failed. Failed
+MFA attempts increment the **same** `app_user.failed_login_count` a failed password does, so five
+bad codes lock the account exactly as five bad passwords do.
+
+**PR-API-07d** An accepted code's RFC 6238 time step is persisted, so the same code cannot be
+presented twice inside its own 30-second window (RFC 6238 §5.2).
+
+## 3.3 Forced password change
+
+**PR-API-07e** `POST /users` creates a user with an ADMIN-chosen password and
+`must_change_password = true`. While that flag is set the user authenticates normally but
+**every endpoint except `GET /auth/me`, `POST /auth/password` and `POST /auth/logout` returns
+`403` with `type: /errors/password-change-required`**. The gate is deny-by-default: a new
+endpoint is closed to a forced-change user unless it is explicitly allowlisted. Only the user's
+own `POST /auth/password` clears it.
 
 ---
 
@@ -169,6 +219,7 @@ not by callers, so a new endpoint cannot forget it.
 |---|---|---|
 | `/errors/unauthenticated` | 401 | No or invalid access token |
 | `/errors/step-up-required` | 403 | Re-authentication needed before signing (PR-API-07) |
+| `/errors/password-change-required` | 403 | An admin-set password is still in force; only `/auth/me`, `/auth/password` and `/auth/logout` are reachable (PR-API-07e) |
 | `/errors/forbidden` | 403 | Authenticated but not permitted |
 | `/errors/out-of-scope` | 403 | Entity exists but is outside the user's area scope |
 | `/errors/not-found` | 404 | |
@@ -176,6 +227,7 @@ not by callers, so a new endpoint cannot forget it.
 | `/errors/invalid-transition` | 409 | State machine rejects the transition |
 | `/errors/draft-conflict` | 409 | Client's base version is stale (PR-064) — body names the conflicting fields |
 | `/errors/record-immutable` | 409 | Attempt to modify an archived record (INV-09) |
+| `/errors/mfa-already-enrolled` | 409 | `POST /auth/mfa/enrol` on an account that already has an authenticator; only an ADMIN reset can clear it |
 | `/errors/idempotency-mismatch` | 422 | Same key, different request body (DBD §6.23) |
 | `/errors/validation-failed` | 422 | Field-level failures in `errors[]` |
 | `/errors/incomplete-record` | 422 | Mandatory items outstanding (PR-045) — `errors[]` lists them |
@@ -259,6 +311,10 @@ change — this makes the archive cheaply cacheable.
 |---|---|---|
 | `POST /auth/login` | 10/min per IP, plus account lockout after 5 failures | 429 + `Retry-After` |
 | `POST /auth/step-up` | 10/min per user | 429 |
+| `POST /auth/mfa/verify` | 10/min per user | 429 |
+| `POST /auth/mfa/enrol/confirm` | 10/min per user | 429 |
+| `POST /auth/mfa/recovery` | 5/min per user | 429 |
+| `POST /auth/password` | 10/min per user | 429 |
 | Authenticated general | 300/min per user | 429 |
 | `POST /sync/outbox` | 60/min per user | 429 |
 | `?includeTotal=true` | 10/min per user | 429 |
@@ -289,7 +345,12 @@ Full schemas in `api/openapi.yaml`. Summarised here by resource group.
 | `POST` | `/auth/login` | §3 |
 | `POST` | `/auth/refresh` | Rotation with reuse detection |
 | `POST` | `/auth/logout` | |
-| `POST` | `/auth/step-up` | PR-API-07 |
+| `POST` | `/auth/step-up` | PR-API-07 (password-only) |
+| `POST` | `/auth/password` | Self-service password change, own account only (PR-API-07e) |
+| `POST` | `/auth/mfa/enrol` | Begin TOTP enrolment (§3.2) |
+| `POST` | `/auth/mfa/enrol/confirm` | Confirm enrolment; returns the recovery codes once |
+| `POST` | `/auth/mfa/verify` | Complete login with a TOTP code |
+| `POST` | `/auth/mfa/recovery` | Complete login with a single-use recovery code |
 | `GET` | `/auth/me` | Current user, roles, area scope, active delegations |
 
 ## 10.3 Areas and assets
@@ -377,6 +438,7 @@ Full schemas in `api/openapi.yaml`. Summarised here by resource group.
 | `GET` | `/audit-events/chain-status` | Chain verification result (PR-097) |
 | `GET` `POST` | `/users` | ADMIN only |
 | `GET` `PATCH` | `/users/{id}` | Deactivation only, never deletion (UR-075) |
+| `POST` | `/users/{id}/mfa-reset` | ADMIN only. Clears MFA enrolment and invalidates unused recovery codes; audited `mfa_reset` (§3.2) |
 | `GET` | `/roles` | |
 | `PUT` | `/users/{id}/roles` | Produces a `permission_change` audit event |
 | `GET` `PUT` | `/asset-types/{id}/approval-route` | Exposes PR-070 route configuration |

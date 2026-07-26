@@ -1,7 +1,11 @@
 import { ConfigService } from '@nestjs/config';
 import { v7 as uuidv7 } from 'uuid';
-import { computeEmailBlindIndex } from '../../../src/auth/crypto/blind-index';
+import {
+  computeEmailBlindIndex,
+  computeRecoveryCodeBlindIndex,
+} from '../../../src/auth/crypto/blind-index';
 import { encodeIdentityField } from '../../../src/auth/crypto/identity-codec';
+import { base32Encode } from '../../../src/auth/mfa/base32';
 import { PasswordService } from '../../../src/auth/password/password.service';
 import { buildFieldEncryptionService } from '../../../src/crypto/crypto-bootstrap';
 import type { FieldEncryptionService } from '../../../src/crypto/field-encryption';
@@ -89,4 +93,49 @@ export async function createLoginableUser(opts: LoginableUserOpts): Promise<{ us
   }
 
   return { userId: insertedUserId };
+}
+
+/**
+ * Slice 13-MFA — seeds a completed TOTP enrolment directly, so a test can
+ * drive `/auth/mfa/verify` with a code it can compute itself. Uses the REAL
+ * field-encryption path (same AAD binding `MfaService` uses), not a stub, so
+ * a mismatch between fixture and service would fail loudly rather than
+ * quietly passing.
+ */
+export async function enrolMfaForUser(userId: string, secret: Buffer): Promise<void> {
+  const fieldEncryption = loadFieldEncryptionService();
+  const encrypted = fieldEncryption.encrypt(base32Encode(secret), {
+    table: 'app_user',
+    column: 'mfa_secret_ct',
+    rowId: userId,
+  });
+  await adminPool.query(
+    `UPDATE "app_user"
+        SET "mfa_enrolled" = true,
+            "mfa_secret_ct" = $2,
+            "mfa_secret_dek_version" = $3,
+            "mfa_enrolled_at" = now(),
+            "mfa_last_used_step" = NULL
+      WHERE "id" = $1`,
+    [userId, encrypted.ciphertext, encrypted.dekVersion],
+  );
+}
+
+/** Seeds recovery codes for a user the way `MfaService.confirmEnrolment` does. */
+export async function seedRecoveryCodes(userId: string, codes: readonly string[]): Promise<void> {
+  const key = loadBlindIndexKey();
+  for (const code of codes) {
+    await adminPool.query(
+      `INSERT INTO "mfa_recovery_code" ("user_id", "code_bidx") VALUES ($1, $2)`,
+      [userId, computeRecoveryCodeBlindIndex(code, key)],
+    );
+  }
+}
+
+/** Slice 13-MFA §7 — puts an existing user behind the forced-password-change gate. */
+export async function setMustChangePassword(userId: string, value: boolean): Promise<void> {
+  await adminPool.query(`UPDATE "app_user" SET "must_change_password" = $2 WHERE "id" = $1`, [
+    userId,
+    value,
+  ]);
 }

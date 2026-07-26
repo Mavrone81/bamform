@@ -250,8 +250,8 @@ that survives staff turnover.
 | Refresh token | Opaque 256-bit, SHA-256 stored, single-use rotation, reuse detection, `HttpOnly; Secure; SameSite=Strict` cookie |
 | Session idle timeout | 60 minutes |
 | Lockout | 5 failures, exponential backoff |
-| **Step-up** | **Required before any signing action if last authentication > 15 min** |
-| MFA | **Not in Release 1** — see §14 residual risk RS-3 |
+| **Step-up** | **Required before any signing action if last authentication > 15 min.** Password-only — TOTP is deliberately *not* required here, see MFA below |
+| **MFA** | **TOTP (RFC 6238), delivered in Release 1** — HMAC-SHA1, 6 digits, 30 s period, ±1 step of clock-skew tolerance, 160-bit CSPRNG secret stored field-encrypted (`app_user.mfa_secret_ct`, AES-256-GCM, AAD `app_user:mfa_secret_ct:<row id>`). Challenged at **login**, as a second step after the password. **Mandatory for `ADMIN`, `TEAM_LEADER`, `ENGINEER`, `DOC_CONTROLLER`, `AUDITOR`** (`MFA_REQUIRED_ROLES`); **`MAINTAINER` is exempt** — see RS-3 below. Recovery: 10 single-use codes issued once at enrolment (stored as a keyed HMAC-SHA-256 blind index, never recoverable) plus an ADMIN-only reset that forces re-enrolment; both audited. An accepted code's time step is persisted (`mfa_last_used_step`) so a code cannot be replayed inside its own 30 s window (RFC 6238 §5.2). Failed codes feed the same 5-failure account lockout a failed password does. Master switch `MFA_ENABLED`, **default `false`** |
 
 ## 5.2 Authorisation model
 
@@ -682,7 +682,7 @@ Risks knowingly accepted, with the reasoning. These require client acknowledgeme
 |---|---|---|---|
 | **RS-1** | Maintenance content (readings, instructions, asset codes) is not field-encrypted. A database compromise discloses it. | Field encryption would make UR-070 trending and UR-067 aggregation undeliverable (PR-109). Breach consequence is disclosure of internal equipment procedures, not personal data. Mitigated by storage encryption, no published host port, network isolation. | If the client classifies maintenance content as trade secret requiring cryptographic protection at rest, or if a multi-tenant model is adopted |
 | **RS-2** | Device-cached data is protected only by the device's own OS encryption. | BamForm cannot enforce device security. Scope is limited to the user's own jobs and 90 days of own history (PR-069). | If MDM is introduced, or if a device is lost with cached records |
-| **RS-3** | **No multi-factor authentication in Release 1.** | Step-up re-authentication addresses the realistic threat (unattended shop-floor session). Full MFA on gloved hands in a cleanroom is a usability problem that would push users back to paper — SO-3 outranks it. | If OI-01 resolves to 21 CFR Part 11, MFA becomes effectively mandatory |
+| ~~**RS-3**~~ | ~~**No multi-factor authentication in Release 1.**~~ **WITHDRAWN** — BAMFORM-BUILD-HANDOFF §5: "MFA moves into Release 1 (SEC RS-3 is withdrawn)", once ISO 13485 was confirmed. TOTP MFA is **delivered** (slice 13-MFA; see §5.1). | The *original* rationale survives in one specific place and must not be quietly dropped: "Full MFA on gloved hands in a cleanroom is a usability problem that would push users back to paper — SO-3 outranks it." That is precisely why **`MAINTAINER` is exempt** from the MFA requirement — MFA is scoped to privileged, desk-based roles (`ADMIN`, `TEAM_LEADER`, `ENGINEER`, `DOC_CONTROLLER`, `AUDITOR`) and a shop-floor technician's login is unchanged. Step-up before signing also remains password-only for the same reason. | The MAINTAINER exemption itself is the live residual risk now. Revisit if OI-01 resolves to 21 CFR Part 11 (which would make MFA effectively mandatory for every signatory), or if gloves/hardware change so a code can be entered without removing PPE |
 | **RS-4** | Shared host — a compromise of another application on `165` may reach BamForm. | Client constraint CN-01. Mitigated by container isolation, non-root users, no Docker socket, resource limits. | If a dedicated host becomes available |
 | **RS-5** | A compromised `api` can write *new* misleading audit events, though it cannot erase existing ones. | Append-only is achievable; preventing an authenticated application from writing at all is not. The chain makes insertion visible in sequence. | If write-once storage or external log shipping is funded |
 | **RS-6** | The server signs records on the user's behalf; there is no per-user private key. | Per-user key custody on shop-floor devices is impractical and would be worse — keys would be shared. Attribution rests on authentication plus step-up plus audit. | If a regulatory regime demands per-signatory keys |
@@ -691,6 +691,11 @@ Risks knowingly accepted, with the reasoning. These require client acknowledgeme
 **PR-SEC-30** RS-1, RS-3 and RS-6 require explicit client acknowledgement at sign-off. They are
 deliberate departures from a maximal security posture, each taken for a stated reason, and the
 client should agree with the reasoning rather than discover it later.
+
+For RS-3 the thing to be acknowledged has changed, and has narrowed: MFA is no longer absent — it
+is delivered and enforced for every privileged role. What remains to be acknowledged is the
+single carve-out, that **`MAINTAINER` logs in with a password alone**, traded for SO-3 adoption on
+the shop floor.
 
 ---
 

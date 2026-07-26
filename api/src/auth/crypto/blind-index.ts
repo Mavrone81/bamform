@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { normaliseRecoveryCode } from '../mfa/recovery-codes';
 
 /**
  * `app_user.email_bidx` / `app_user.employee_id_bidx` — HMAC-SHA-256 keyed by
@@ -37,4 +38,32 @@ export function computeEmailBlindIndex(email: string, blindIndexKey: Buffer): Bu
  */
 export function computeEmployeeIdBlindIndex(employeeId: string, blindIndexKey: Buffer): Buffer {
   return computeBlindIndex(employeeId.trim(), blindIndexKey);
+}
+
+/**
+ * Slice 13-MFA — `mfa_recovery_code.code_bidx`. Deliberately the SAME keyed
+ * HMAC-SHA-256 primitive as `email_bidx`, not Argon2id, and that choice is
+ * load-bearing rather than lazy:
+ *
+ *  - A recovery code is 160 bits of CSPRNG output (`mfa/recovery-codes.ts`).
+ *    Argon2id's entire value is defeating dictionary/brute-force attacks on
+ *    LOW-entropy secrets; against a 160-bit random string there is nothing
+ *    to dictionary-attack, so the memory-hard KDF buys no security here.
+ *  - It costs real availability: verifying an Argon2id hash requires trying
+ *    the presented code against every candidate ROW (up to 10 per user, and
+ *    with no index there is no way to narrow them), at 64 MiB and ~100 ms
+ *    each, on a login-adjacent, unauthenticated-adjacent endpoint. That is a
+ *    self-inflicted DoS vector. The keyed digest is an O(1) unique-index
+ *    lookup.
+ *  - The key is the file-mounted `BLIND_INDEX_KEY`, so a database-only
+ *    compromise still cannot enumerate codes offline — the property Argon2id
+ *    would otherwise be providing.
+ *
+ * `normalise` (uppercase / strip spaces+hyphens / NFC) lives with the code
+ * format in `mfa/recovery-codes.ts#normaliseRecoveryCode` and MUST be applied
+ * identically at issue and at redeem — it is applied here, once, so no call
+ * site can forget it.
+ */
+export function computeRecoveryCodeBlindIndex(code: string, blindIndexKey: Buffer): Buffer {
+  return computeBlindIndex(normaliseRecoveryCode(code), blindIndexKey);
 }

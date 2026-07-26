@@ -1,3 +1,14 @@
+import { z } from 'zod';
+import {
+  mfaChallengeResponseSchema,
+  mfaEnrolConfirmRequestSchema,
+  mfaEnrolConfirmResponseSchema,
+  mfaEnrolRequestSchema,
+  mfaEnrolResponseSchema,
+  mfaRecoveryRequestSchema,
+  mfaVerifyRequestSchema,
+  passwordChangeRequestSchema,
+} from '@bamform/shared';
 import { enumerateRoutes } from './route-inventory';
 import { listOpenapiOperations, getSchema, loadOpenapiDocument } from './openapi-loader';
 import { findUndocumentedRoutes, findUnimplementedOpenapiPaths } from './contract-checks';
@@ -258,4 +269,104 @@ describe('test:contract — response-schema conformance', () => {
       expect(documentedKeys.sort()).toEqual([...knownKeys].sort());
     },
   );
+});
+
+/**
+ * Slice 13-MFA — openapi vs the Zod DTO, mechanically, in BOTH directions
+ * (keys AND required-ness).
+ *
+ * The standing CI rule says the contract must match the DTOs "exactly,
+ * required vs optional", and job 5 has historically only been able to check
+ * structure — slice 7 shipped two contract lies it could not catch. Rather
+ * than restate the correspondence in a comment and hope, this derives the
+ * expected shape from the actual Zod schema the server validates against, so
+ * editing one side without the other fails here.
+ *
+ * `.optional()` in Zod is exactly "not in openapi `required`", and a Zod
+ * `.nullable()` non-optional field (like `MfaEnrolConfirmResponse.auth`) is
+ * required-but-nullable — the distinction the check preserves.
+ */
+describe('test:contract — slice 13-MFA schemas match their Zod DTOs exactly', () => {
+  function zodShape(schema: z.ZodObject<z.ZodRawShape>): {
+    keys: string[];
+    required: string[];
+  } {
+    const shape = schema.shape as Record<string, z.ZodTypeAny>;
+    const keys = Object.keys(shape);
+    // "Optional" defined behaviourally rather than by a zod internal flag:
+    // a field is optional exactly when the schema accepts `undefined`. That
+    // is the same thing openapi's `required` means, and it survives zod
+    // version changes (zod 4 moved `isOptional()` off the base type).
+    const required = keys.filter((key) => !shape[key].safeParse(undefined).success);
+    return { keys: keys.sort(), required: required.sort() };
+  }
+
+  const CASES: Array<{ schemaName: string; dto: z.ZodObject<z.ZodRawShape> }> = [
+    { schemaName: 'MfaChallenge', dto: mfaChallengeResponseSchema },
+    { schemaName: 'MfaEnrolRequest', dto: mfaEnrolRequestSchema },
+    { schemaName: 'MfaEnrolResponse', dto: mfaEnrolResponseSchema },
+    { schemaName: 'MfaEnrolConfirmRequest', dto: mfaEnrolConfirmRequestSchema },
+    { schemaName: 'MfaEnrolConfirmResponse', dto: mfaEnrolConfirmResponseSchema },
+    { schemaName: 'MfaVerifyRequest', dto: mfaVerifyRequestSchema },
+    { schemaName: 'MfaRecoveryRequest', dto: mfaRecoveryRequestSchema },
+    { schemaName: 'PasswordChangeRequest', dto: passwordChangeRequestSchema },
+  ];
+
+  it.each(CASES)(
+    'openapi $schemaName documents the same keys as its Zod DTO',
+    ({ schemaName, dto }) => {
+      const schema = getSchema(schemaName);
+      expect(Object.keys(schema.properties as object).sort()).toEqual(zodShape(dto).keys);
+    },
+  );
+
+  it.each(CASES)(
+    'openapi $schemaName marks the same fields required as its Zod DTO',
+    ({ schemaName, dto }) => {
+      const schema = getSchema(schemaName) as { required?: string[] };
+      expect([...(schema.required ?? [])].sort()).toEqual(zodShape(dto).required);
+    },
+  );
+
+  it('POST /auth/login documents BOTH 200 shapes — AuthResult and MfaChallenge', () => {
+    const login = loadOpenapiDocument().paths['/auth/login'].post;
+    const refs = (
+      login.responses['200'].content['application/json'].schema.oneOf as Array<{ $ref: string }>
+    ).map((entry) => entry.$ref);
+    expect(refs).toEqual(['#/components/schemas/AuthResult', '#/components/schemas/MfaChallenge']);
+  });
+
+  it('MfaChallenge pins mfaRequired to the literal true, so clients can discriminate on it', () => {
+    const schema = getSchema('MfaChallenge') as {
+      properties: { mfaRequired: { const?: unknown } };
+    };
+    expect(schema.properties.mfaRequired.const).toBe(true);
+    expect(
+      mfaChallengeResponseSchema.safeParse({
+        mfaRequired: false,
+        mfaEnrolled: true,
+        challengeToken: 't',
+        expiresIn: 300,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('every new slice-13-MFA path is documented and none is parked in the future-work allowlist', () => {
+    const documented = listOpenapiOperations().map((op) => `${op.method} ${op.path}`);
+    const NEW_PATHS = [
+      'POST /auth/password',
+      'POST /auth/mfa/enrol',
+      'POST /auth/mfa/enrol/confirm',
+      'POST /auth/mfa/verify',
+      'POST /auth/mfa/recovery',
+      'POST /users/{userId}/mfa-reset',
+    ];
+    for (const entry of NEW_PATHS) {
+      expect(documented).toContain(entry);
+    }
+    const allowlisted = FUTURE_SLICE_OPENAPI_PATHS.map((gap) => `${gap.method} ${gap.path}`);
+    for (const entry of NEW_PATHS) {
+      expect(allowlisted).not.toContain(entry);
+    }
+  });
 });

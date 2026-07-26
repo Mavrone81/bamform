@@ -30,6 +30,26 @@
 #    /return, /verify, and GET /sync/bootstrap) -- all five entries below
 #    are that ONE correction, not five unrelated ones.
 #
+# 2026-07-26, slice 13-MFA -- ONE entry, the last line of this file:
+#
+#  - POST /auth/login's 200 body becomes `oneOf: [AuthResult, MfaChallenge]`.
+#    This is a real, intentional contract widening, not a regression, and it
+#    is the shape the product decision requires: when MFA is enforced the
+#    password step legitimately does NOT produce an access token, so there is
+#    nothing honest to put in `accessToken` (BUILD_HANDOFF §5 moves MFA into
+#    Release 1; .superpowers/sdd/slice-13-mfa-brief.md §4.2 specifies "issue
+#    no access token and no refresh cookie ... return 200 with an MFA
+#    challenge token"). Modelling it any other way -- a 2xx with optional
+#    fields, or a non-200 status for a SUCCESSFUL password check -- would make
+#    the contract less truthful, not less breaking.
+#
+#    In practice no deployed client can observe the new branch today:
+#    MFA_ENABLED defaults to false and is not set anywhere in committed
+#    config, so /auth/login returns AuthResult exactly as before until the
+#    flag is deliberately turned on after slice 13-UI ships. Clients
+#    discriminate on the `mfaRequired: true` literal
+#    (`shared/src/mfa.ts#isMfaChallengeResponse`).
+#
 # If a genuinely new breaking change shows up in this list in a future
 # slice, do NOT copy-paste it in reflexively -- that defeats the gate.
 # Fix the regression, or if it's another deliberate, reviewed contract
@@ -41,3 +61,4 @@ in API POST /jobs/{jobId}/submit the response property `allOf[subschema #2]/appr
 in API POST /jobs/{jobId}/verify added the new required request property `drawnSignature` [new-required-request-property].
 in API POST /jobs/{jobId}/verify the response property `allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
 in API GET /sync/bootstrap the response property `jobs/items/allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
+in API POST /auth/login the response body was restructured into a oneOf, so a field that was previously guaranteed may no longer be present [response-body-wrapped-in-one-of].

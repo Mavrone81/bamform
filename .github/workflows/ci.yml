@@ -304,7 +304,7 @@ jobs:
       - name: Apply role grants (S-26 needs the real bamform_app permission-denied behaviour)
         run: psql "$DATABASE_URL" -f api/prisma/grants.sql
         env: { DATABASE_URL: "postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test" }
-      - name: Security test cases S-01 to S-34
+      - name: Security test cases S-01 to S-45
         run: npm run test:security
         env:
           DATABASE_URL: postgresql://bamform:ci_ephemeral_not_a_real_secret@localhost:5432/bamform_test
