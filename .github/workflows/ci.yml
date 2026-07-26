@@ -58,6 +58,12 @@ jobs:
         run: bash scripts/ci/assert-no-vite-secrets.sh
       - name: Every config key is documented in .env.example (PR-ENV-26)
         run: bash scripts/ci/assert-env-example-complete.sh
+      # Twice now a slice has added a SecretFileLoader.load() to a module
+      # without granting that secret to the compose service booting it, and
+      # crash-looped production (962e669, 30f0bbb). Code review reads code,
+      # not compose grants — so assert the contract mechanically.
+      - name: Compose grants every secret its services actually load
+        run: node scripts/ci/assert-compose-runtime-contract.mjs
 
   # ---------------------------------------------------------------- 2
   secret-scan:
