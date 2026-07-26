@@ -102,8 +102,183 @@ export interface paths {
     /**
      * Authenticate and receive an access token
      * @description Rate-limited (10/min per IP); account lockout after 5 failures.
+     *
+     *     Returns `AuthResult` — access token in the body, refresh token in the
+     *     `bf_refresh` cookie — in every case EXCEPT one: when `MFA_ENABLED` is
+     *     true AND the account holds a role in `MFA_REQUIRED_ROLES`
+     *     (`ADMIN`, `TEAM_LEADER`, `ENGINEER`, `DOC_CONTROLLER`, `AUDITOR` by
+     *     default; `MAINTAINER` is exempt - SEC RS-3/SO-3). In that case the
+     *     password was accepted but the login is not finished: the response is
+     *     an `MfaChallenge` with NO access token and NO refresh cookie, and the
+     *     client must call `/auth/mfa/verify` (or `/auth/mfa/recovery`, or
+     *     `/auth/mfa/enrol` + `/auth/mfa/enrol/confirm` when `mfaEnrolled` is
+     *     false) to complete it.
+     *
+     *     `MFA_ENABLED` defaults to **false**, in which case this endpoint
+     *     behaves exactly as it did before slice 13-MFA.
      */
     post: operations['login'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/password': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Change your own password
+     * @description Own account only - the subject comes from the access token, never the
+     *     body. Argon2id, minimum 12 characters, same policy as `/auth/login`
+     *     and `POST /users`. On success `password_changed_at` is stamped,
+     *     `must_change_password` is cleared, and every OTHER refresh-token
+     *     family for the user is revoked (the caller's own session survives).
+     *     Audited as `password_changed`. Rate-limited 10/min per user.
+     */
+    post: operations['changeOwnPassword'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/enrol': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Begin TOTP enrolment - issue a shared secret
+     * @description Generates a 160-bit TOTP secret, stores it field-encrypted, and
+     *     returns it in base32 plus `otpauth://` URI form. `mfa_enrolled` stays
+     *     false until `/auth/mfa/enrol/confirm` succeeds; calling this endpoint
+     *     again before confirmation REPLACES the pending secret.
+     *
+     *     Authorised by EITHER a normal `Authorization: Bearer` access token (a
+     *     signed-in user enrolling voluntarily) OR the `challengeToken` from a
+     *     `/auth/login` MFA challenge (a user who must enrol before they can
+     *     finish logging in). It is never anonymous.
+     *
+     *     Returns 409 if the account is already enrolled - the only way out of
+     *     an enrolled state is `POST /users/{userId}/mfa-reset`.
+     *
+     *     The QR image is rendered client-side; the API has no QR dependency.
+     *
+     *     Rate-limited 10/min per user, and refused with 429 while the account
+     *     is locked out - the same treatment as its three siblings.
+     */
+    post: operations['enrolMfa'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/enrol/confirm': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Confirm TOTP enrolment and receive the recovery codes
+     * @description Verifies a code against the pending secret, sets `mfa_enrolled`, and
+     *     returns the ten single-use recovery codes. **They are returned exactly
+     *     once and are never retrievable again.**
+     *
+     *     If this call was authorised by a `challengeToken` (i.e. it happened
+     *     during a login challenge) it also completes the login: `auth` carries
+     *     the `AuthResult` and the refresh cookie is set. For a voluntary
+     *     enrolment by an already-signed-in user, `auth` is null.
+     *
+     *     Failures count toward the same account-lockout counter a wrong
+     *     password does. Rate-limited 10/min per user.
+     *
+     *     NEVER ANONYMOUS. The empty `{}` security requirement below does not
+     *     mean "no credential" - it means the credential is the `challengeToken`
+     *     body field, which OpenAPI 3.1 cannot express as a security scheme. An
+     *     unauthenticated caller gets 401.
+     */
+    post: operations['confirmMfaEnrolment'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Complete login with a TOTP code
+     * @description Second step of login. Consumes the `challengeToken` from
+     *     `/auth/login`; on success issues the access token and refresh cookie
+     *     exactly as a password-only login would.
+     *
+     *     RFC 6238: 6 digits, 30 s period, plus/minus one step of clock skew.
+     *     An accepted code's time step is recorded, so the same code cannot be
+     *     replayed inside its own 30-second window. A wrong code returns the
+     *     same opaque 401 as a wrong/expired challenge token, and counts toward
+     *     the account-lockout counter. Rate-limited 10/min per user.
+     *
+     *     The challenge token is SINGLE-USE: the first request to redeem it wins
+     *     and every other one - including a simultaneous one - gets 401.
+     *
+     *     NEVER ANONYMOUS. The empty `{}` security requirement below does not
+     *     mean "no credential" - it means the credential is the `challengeToken`
+     *     body field, which OpenAPI 3.1 cannot express as a security scheme. An
+     *     unauthenticated caller gets 401.
+     */
+    post: operations['verifyMfa'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/recovery': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Complete login with a single-use recovery code
+     * @description Redeems one of the ten codes issued at enrolment. The code is marked
+     *     used and can never be redeemed again (it is never deleted - INV-07).
+     *     Audited as `mfa_recovery_code_used`. Failures count toward the
+     *     account-lockout counter. Rate-limited 5/min per user. The
+     *     `challengeToken` is single-use, as on `/auth/mfa/verify`.
+     *
+     *     NEVER ANONYMOUS. The empty `{}` security requirement below does not
+     *     mean "no credential" - it means the credential is the `challengeToken`
+     *     body field, which OpenAPI 3.1 cannot express as a security scheme. An
+     *     unauthenticated caller gets 401.
+     */
+    post: operations['redeemMfaRecoveryCode'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1076,6 +1251,55 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/records': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Search/filter the archive
+     * @description UR-058 — search and filter the archive by asset, asset type,
+     *     document number, frequency, date range (`archivedFrom`/`archivedTo`),
+     *     technician (submitter) and approver (a verifying `approval_step`
+     *     actor). An archived record IS a `job` row with `status = ARCHIVED`
+     *     (this system has no separate `record` table). Area-scoped
+     *     (PR-API-10): a MAINTAINER sees only their own records; TEAM_LEADER/
+     *     ENGINEER/DOC_CONTROLLER/ADMIN/AUDITOR see every archived record in
+     *     area scope (API_SPECIFICATION.md §4.1 "View archive").
+     */
+    get: operations['listRecords'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/records/{recordId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        recordId: string;
+      };
+      cookie?: never;
+    };
+    /**
+     * Retrieve one archived record in full
+     * @description 404 if the job does not exist or is not ARCHIVED; 403 out-of-scope/forbidden per the same area/role rule as `GET /records`.
+     */
+    get: operations['getRecord'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/records/{recordId}/pdf': {
     parameters: {
       query?: never;
@@ -1087,7 +1311,13 @@ export interface paths {
     };
     /**
      * Render the record in the controlled paper form layout
-     * @description Slice 12 (docs/BUILD_HANDOFF.md §3) - not yet implemented.
+     * @description PR-116/117/118, UR-056/057. Rendered server-side from an HTML
+     *     template via headless Chromium ON THE WORKER (never blocking `api`);
+     *     the footer carries the record id and its integrity digest (the
+     *     SAME `approval_step.content_hash` `GET /records/{recordId}/integrity`
+     *     checks — never a separately invented value). 409
+     *     `pdf-not-yet-available` if the record has never been through any
+     *     approval action (no digest exists yet to print).
      */
     get: operations['getRecordPdf'];
     put?: never;
@@ -1122,6 +1352,78 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/records/export': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Request an asynchronous export of a record set
+     * @description PR-119/UR-059. Async — returns immediately with `status: PENDING`;
+     *     poll `GET /exports/{exportId}`. The filter (or explicit `recordIds`)
+     *     is resolved to a concrete, scoped record-id snapshot at REQUEST
+     *     TIME, using the caller's own area/role scope — an id outside scope
+     *     is silently excluded, never leaked via a 403/404. `JOB_VIEW_ALL_ROLES`
+     *     only (API_SPECIFICATION.md §4.1 "Export records" — MAINTAINER is
+     *     NOT granted this, unlike "View archive").
+     */
+    post: operations['requestRecordExport'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/exports/{exportId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        exportId: string;
+      };
+      cookie?: never;
+    };
+    /**
+     * Poll an export job's status
+     * @description Authorised to the REQUESTER only — not re-scoped by the requester's CURRENT area/role (a snapshot taken earlier remains visible to whoever asked for it).
+     */
+    get: operations['getExportStatus'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/exports/{exportId}/download': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        exportId: string;
+      };
+      cookie?: never;
+    };
+    /**
+     * Download the finished export ZIP
+     * @description ADR-007 — streamed through `api`, authorised on EVERY fetch, never
+     *     a presigned URL. A ZIP of the rendered PDFs plus a `manifest.csv`
+     *     (PR-119). 404 if the export is not yet `DONE`.
+     */
+    get: operations['downloadExport'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/reports/measurements': {
     parameters: {
       query?: never;
@@ -1135,6 +1437,66 @@ export interface paths {
      *     joined across template revisions by stable key.
      */
     get: operations['getMeasurementTrend'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/reports/compliance': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Due vs. completed on time, grouped by area
+     * @description UR-067. Defaults to the last 90 days ending today when `from`/`to` are omitted.
+     */
+    get: operations['getComplianceReport'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/reports/overdue': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Currently overdue jobs
+     * @description UR-068. Reuses the same derived overdue rule as `GET /jobs?overdue=true` (PR-043 — never stored).
+     */
+    get: operations['getOverdueReport'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/reports/pending': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Submitted jobs awaiting verification, with ageing
+     * @description UR-068. Every SUBMITTED job in scope (not only ones the caller personally can verify — contrast with `GET /queue`).
+     */
+    get: operations['getPendingVerificationReport'];
     put?: never;
     post?: never;
     delete?: never;
@@ -1172,6 +1534,109 @@ export interface paths {
      *     and not implemented by this endpoint.
      */
     get: operations['getAuditChainStatus'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List users
+     * @description ADMIN only (API_SPECIFICATION.md §10.9, UR-072).
+     */
+    get: operations['listUsers'];
+    put?: never;
+    /**
+     * Create a user
+     * @description ADMIN only. `fullName`/`email`/`employeeId` are encrypted + blind-
+     *     indexed (PR-106/107/108) — same real crypto path as `/auth/login`.
+     *     `password` is admin-set (this slice's documented minimal mechanism —
+     *     no invite/temp-password email flow exists yet). Rejects a duplicate
+     *     `email` (blind-index uniqueness) with 409.
+     */
+    post: operations['createUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{userId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: string;
+      };
+      cookie?: never;
+    };
+    /**
+     * Get a user
+     * @description ADMIN only.
+     */
+    get: operations['getUser'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update a user. Deactivation only, never deletion.
+     * @description ADMIN only (UR-075). `active: false` is the only removal mechanism.
+     *     `roleCodes`, when present, REPLACES the role set (produces a
+     *     `permission_change` audit event, distinct from `update`).
+     */
+    patch: operations['updateUser'];
+    trace?: never;
+  };
+  '/users/{userId}/mfa-reset': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reset a user's multi-factor enrolment
+     * @description ADMIN only. Clears the user's TOTP enrolment and marks every unused
+     *     recovery code used, forcing a fresh enrolment on next login. Audited
+     *     as `mfa_reset` with both actor and subject.
+     *
+     *     An administrator can reset but can never READ - no endpoint discloses
+     *     anyone's TOTP secret or recovery codes.
+     */
+    post: operations['resetUserMfa'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/roles': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the role catalogue
+     * @description UR-073. Any authenticated user — seeded reference data, not ADMIN-restricted.
+     */
+    get: operations['listRoles'];
     put?: never;
     post?: never;
     delete?: never;
@@ -1242,6 +1707,62 @@ export interface components {
       expiresIn: number;
       user: components['schemas']['CurrentUser'];
     };
+    /**
+     * @description The alternative 200 body of `POST /auth/login`. No access token and no
+     *     refresh cookie accompany it.
+     *
+     *     `challengeToken` is a TOKEN and BUILD_HANDOFF non-negotiable #10
+     *     applies to it in full: the client holds it in memory only and must
+     *     never write it to `localStorage`/`sessionStorage`. It is valid for 5
+     *     minutes, is single-use, authorises only `/auth/mfa/*`, and can never
+     *     be presented as an access token (distinct audience and `typ`).
+     */
+    MfaChallenge: {
+      /** @constant */
+      mfaRequired: true;
+      /** @description False means the client must run enrolment before it can complete the login. */
+      mfaEnrolled: boolean;
+      challengeToken: string;
+      /** @description Seconds */
+      expiresIn: number;
+    };
+    MfaEnrolRequest: {
+      /** @description Present when enrolling mid-login; absent when an already-signed-in user enrols with a Bearer access token. */
+      challengeToken?: string;
+    };
+    MfaEnrolResponse: {
+      /** @description Base32 (RFC 4648, unpadded) shared secret, for manual entry. */
+      secret: string;
+      /** @description `otpauth://totp/...` - the same secret in the form a QR code encodes. HMAC-SHA1, 6 digits, 30 s period. */
+      otpauthUri: string;
+    };
+    MfaEnrolConfirmRequest: {
+      /** @description The 6-digit code from the authenticator app. */
+      totpCode: string;
+      challengeToken?: string;
+    };
+    MfaEnrolConfirmResponse: {
+      /** @description Ten single-use codes, returned exactly once and never retrievable again. */
+      recoveryCodes: string[];
+      /** @description Non-null only when this call completed a login challenge; null for a voluntary enrolment. */
+      auth: components['schemas']['AuthResult'] | null;
+    };
+    MfaVerifyRequest: {
+      challengeToken: string;
+      /** @description The 6-digit code from the authenticator app. */
+      totpCode: string;
+    };
+    MfaRecoveryRequest: {
+      challengeToken: string;
+      /** @description One of the single-use recovery codes issued at enrolment. */
+      recoveryCode: string;
+    };
+    PasswordChangeRequest: {
+      /** Format: password */
+      currentPassword: string;
+      /** Format: password */
+      newPassword: string;
+    };
     CurrentUser: {
       /** Format: uuid */
       id: string;
@@ -1281,9 +1802,16 @@ export interface components {
       scheduleAnchorDate?: string;
       status: components['schemas']['AssetStatus'];
       active?: boolean;
+      /**
+       * @description Slice 13a / B-09: `true` when `code` was auto-generated (the
+       *     admin did not supply one) and not yet confirmed — the UI renders
+       *     this "RED". Cleared the moment an admin changes `code`.
+       */
+      codeProvisional?: boolean;
     };
     AssetCreate: {
-      code: string;
+      /** @description Optional — omit to have the server auto-generate a provisional/"RED" code (B-09). */
+      code?: string;
       /** Format: uuid */
       assetTypeId: string;
       description?: string;
@@ -1299,6 +1827,8 @@ export interface components {
       scheduleAnchorDate: string;
     };
     AssetUpdate: {
+      /** @description Changing this confirms an auto-generated code — clears `codeProvisional`. */
+      code?: string;
       description?: string;
       manufacturer?: string;
       model?: string;
@@ -1307,6 +1837,51 @@ export interface components {
       locationDetail?: string;
       status?: components['schemas']['AssetStatus'];
       active?: boolean;
+    };
+    /**
+     * @description The closed set `role.code` holds — seeded by migration, not created through the API (UR-073).
+     * @enum {string}
+     */
+    RoleCode: 'MAINTAINER' | 'TEAM_LEADER' | 'ENGINEER' | 'DOC_CONTROLLER' | 'ADMIN' | 'AUDITOR';
+    Role: {
+      /** Format: uuid */
+      id: string;
+      code: components['schemas']['RoleCode'];
+      name: string;
+      description?: string | null;
+    };
+    /** @enum {string} */
+    UserStatus: 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+    User: {
+      /** Format: uuid */
+      id: string;
+      employeeId?: string | null;
+      fullName: string;
+      /** Format: email */
+      email: string;
+      status: components['schemas']['UserStatus'];
+      active: boolean;
+      roles: components['schemas']['RoleCode'][];
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      updatedAt: string;
+    };
+    UserCreate: {
+      fullName: string;
+      /** Format: email */
+      email: string;
+      employeeId?: string;
+      /** @description Admin-set initial password (this slice's documented minimal mechanism). Never returned by any endpoint. */
+      password: string;
+      roleCodes: components['schemas']['RoleCode'][];
+    };
+    UserUpdate: {
+      fullName?: string;
+      /** Format: email */
+      email?: string;
+      active?: boolean;
+      roleCodes?: components['schemas']['RoleCode'][];
     };
     ScheduleRule: {
       /** Format: uuid */
@@ -1781,9 +2356,78 @@ export interface components {
         judgement?: components['schemas']['Judgement'];
       }[];
     };
+    /** @description At least one of `recordIds` or `filters` is required — an empty request is `422`. */
+    RecordExportRequest: {
+      recordIds?: string[];
+      /** @description Same shape as `GET /records`'s query parameters (minus `limit`/`cursor`). */
+      filters?: {
+        /** Format: uuid */
+        assetId?: string;
+        /** Format: uuid */
+        assetTypeId?: string;
+        documentNumber?: string;
+        frequency?: components['schemas']['Frequency'];
+        /** Format: date */
+        archivedFrom?: string;
+        /** Format: date */
+        archivedTo?: string;
+        /** Format: uuid */
+        technician?: string;
+        /** Format: uuid */
+        approver?: string;
+      };
+    };
+    RecordExportStatus: {
+      /** Format: uuid */
+      id: string;
+      /** @enum {string} */
+      status: 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED';
+      recordCount: number;
+      /** Format: date-time */
+      requestedAt: string;
+      /** Format: date-time */
+      completedAt: string | null;
+      failedReason?: string | null;
+      /** @description Only populated once status is DONE — the api-relative path to GET /exports/{exportId}/download (ADR-007, never a presigned URL). */
+      downloadPath: string | null;
+    };
+    ComplianceReportRow: {
+      /** Format: uuid */
+      areaId: string | null;
+      areaCode: string | null;
+      dueCount: number;
+      completedOnTimeCount: number;
+      completedLateCount: number;
+      notCompletedCount: number;
+      compliancePercent: number;
+    };
+    ComplianceReport: {
+      /** Format: date */
+      from: string;
+      /** Format: date */
+      to: string;
+      rows: components['schemas']['ComplianceReportRow'][];
+    };
+    PendingVerificationEntry: components['schemas']['JobSummary'] & {
+      /** Format: date-time */
+      submittedAt: string;
+      ageHours: number;
+    };
   };
   responses: {
-    /** @description RFC 9457 Problem Details */
+    /**
+     * @description RFC 9457 Problem Details.
+     *
+     *     Note for every AUTHENTICATED operation in this document, whether or
+     *     not it lists a 403: since slice 13-MFA a user whose
+     *     `must_change_password` flag is set receives
+     *     `403 /errors/password-change-required` from ANY endpoint other than
+     *     `GET /auth/me`, `POST /auth/password` and `POST /auth/logout`, until
+     *     they change their password. It is a global deny-by-default guard, not
+     *     a per-endpoint rule, so it is documented once here rather than
+     *     repeated on ~60 operations. Clients should handle that `type`
+     *     globally.
+     */
     Problem: {
       headers: {
         [name: string]: unknown;
@@ -1969,6 +2613,128 @@ export interface operations {
       };
     };
     responses: {
+      /**
+       * @description Authenticated (refresh token set as an HttpOnly cookie), or an MFA
+       *     challenge issued (no cookie set - see the endpoint description).
+       */
+      200: {
+        headers: {
+          /** @description bf_refresh - HttpOnly, Secure, SameSite=Strict. Absent on an MfaChallenge response. */
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            components['schemas']['AuthResult'] | components['schemas']['MfaChallenge'];
+        };
+      };
+      401: components['responses']['Problem'];
+      429: components['responses']['Problem'];
+    };
+  };
+  changeOwnPassword: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PasswordChangeRequest'];
+      };
+    };
+    responses: {
+      /** @description Password changed */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+      429: components['responses']['Problem'];
+    };
+  };
+  enrolMfa: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaEnrolRequest'];
+      };
+    };
+    responses: {
+      /** @description Pending secret issued */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaEnrolResponse'];
+        };
+      };
+      401: components['responses']['Problem'];
+      /** @description Already enrolled */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      422: components['responses']['Problem'];
+      429: components['responses']['Problem'];
+    };
+  };
+  confirmMfaEnrolment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaEnrolConfirmRequest'];
+      };
+    };
+    responses: {
+      /** @description Enrolled. Recovery codes returned once. */
+      200: {
+        headers: {
+          /** @description bf_refresh - set only when this call completed a login challenge. */
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaEnrolConfirmResponse'];
+        };
+      };
+      401: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+      429: components['responses']['Problem'];
+    };
+  };
+  verifyMfa: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaVerifyRequest'];
+      };
+    };
+    responses: {
       /** @description Authenticated. Refresh token is set as an HttpOnly cookie. */
       200: {
         headers: {
@@ -1981,6 +2747,36 @@ export interface operations {
         };
       };
       401: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+      429: components['responses']['Problem'];
+    };
+  };
+  redeemMfaRecoveryCode: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaRecoveryRequest'];
+      };
+    };
+    responses: {
+      /** @description Authenticated. Refresh token is set as an HttpOnly cookie. */
+      200: {
+        headers: {
+          /** @description bf_refresh - HttpOnly, Secure, SameSite=Strict */
+          'Set-Cookie'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AuthResult'];
+        };
+      };
+      401: components['responses']['Problem'];
+      422: components['responses']['Problem'];
       429: components['responses']['Problem'];
     };
   };
@@ -3486,6 +4282,64 @@ export interface operations {
       429: components['responses']['Problem'];
     };
   };
+  listRecords: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+        assetId?: string;
+        assetTypeId?: string;
+        documentNumber?: string;
+        frequency?: components['schemas']['Frequency'];
+        archivedFrom?: string;
+        archivedTo?: string;
+        technician?: string;
+        approver?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated archived records */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['JobSummary'][];
+          };
+        };
+      };
+    };
+  };
+  getRecord: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        recordId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Record */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Job'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
   getRecordPdf: {
     parameters: {
       query?: never;
@@ -3506,7 +4360,9 @@ export interface operations {
           'application/pdf': string;
         };
       };
+      403: components['responses']['Problem'];
       404: components['responses']['Problem'];
+      409: components['responses']['Problem'];
     };
   };
   verifyRecordIntegrity: {
@@ -3529,6 +4385,80 @@ export interface operations {
           'application/json': components['schemas']['IntegrityResult'];
         };
       };
+      404: components['responses']['Problem'];
+    };
+  };
+  requestRecordExport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RecordExportRequest'];
+      };
+    };
+    responses: {
+      /** @description Export accepted, processing asynchronously */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RecordExportStatus'];
+        };
+      };
+      403: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  getExportStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        exportId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Export status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RecordExportStatus'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  downloadExport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        exportId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description ZIP archive */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/zip': string;
+        };
+      };
+      403: components['responses']['Problem'];
       404: components['responses']['Problem'];
     };
   };
@@ -3555,6 +4485,85 @@ export interface operations {
           'application/json': components['schemas']['MeasurementTrend'];
         };
       };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  getComplianceReport: {
+    parameters: {
+      query?: {
+        from?: string;
+        to?: string;
+        areaId?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Compliance report */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ComplianceReport'];
+        };
+      };
+      403: components['responses']['Problem'];
+    };
+  };
+  getOverdueReport: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated overdue jobs */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['JobSummary'][];
+          };
+        };
+      };
+    };
+  };
+  getPendingVerificationReport: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated pending-verification jobs */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['PendingVerificationEntry'][];
+          };
+        };
+      };
     };
   };
   getAuditChainStatus: {
@@ -3576,6 +4585,186 @@ export interface operations {
         };
       };
       403: components['responses']['Problem'];
+    };
+  };
+  listUsers: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+        roleCode?: components['schemas']['RoleCode'];
+        active?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated users */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['User'][];
+          };
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+    };
+  };
+  createUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UserCreate'];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['User'];
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      /** @description Duplicate email */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      422: components['responses']['Problem'];
+    };
+  };
+  getUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description User */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['User'];
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  updateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UserUpdate'];
+      };
+    };
+    responses: {
+      /** @description Updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['User'];
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      /** @description Duplicate email */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      422: components['responses']['Problem'];
+    };
+  };
+  resetUserMfa: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description MFA reset */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  listRoles: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated roles */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['Role'][];
+          };
+        };
+      };
+      401: components['responses']['Problem'];
     };
   };
 }

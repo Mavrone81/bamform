@@ -1,4 +1,10 @@
 import type { Page, Route } from '@playwright/test';
+import {
+  generateRecoveryCodes,
+  normaliseRecoveryCode,
+  randomBase32Secret,
+  verifyTotp,
+} from './totp';
 
 /**
  * A fake backend for the offline suite, installed via Playwright route
@@ -71,6 +77,7 @@ export const E2E_USERS: {
   teamLeader: E2EUser;
   engineer: E2EUser;
   delegate: E2EUser;
+  admin: E2EUser;
 } = {
   technician: {
     id: 'user-1',
@@ -100,14 +107,36 @@ export const E2E_USERS: {
     fullName: 'Test Delegate',
     roles: ['MAINTAINER'],
   },
+  // Slice 13-UI-A. ADMIN is in the default MFA_REQUIRED_ROLES list, which is
+  // exactly why the MFA journeys use it — and it is the role production's
+  // only account holds, so these tests exercise the case that made the flags
+  // unsafe to enable in the first place.
+  admin: {
+    id: 'user-5',
+    email: 'admin@bevorasg.com',
+    fullName: 'Test Administrator',
+    roles: ['ADMIN'],
+  },
 };
 
-/** The password every canned user accepts on login (fake server does not
- * check it there — matches the existing specs' single hard-coded literal)
- * AND the only password `/auth/step-up` accepts (there, it IS checked, so
- * the step-up-retry flow is genuinely exercised rather than always
- * trivially succeeding). */
+/**
+ * The password every canned user starts with. It IS checked, on `/auth/login`
+ * (slice 13-UI-A: the password-change journey needs the old password to stop
+ * working and the new one to start), on `/auth/step-up`, and on
+ * `/auth/password` as the `currentPassword`. Comfortably over the 12-character
+ * minimum `shared/src/mfa.ts` enforces.
+ */
 export const E2E_PASSWORD = 'correct-horse-battery-staple';
+
+/** Default `MFA_REQUIRED_ROLES` (slice 13-MFA D-1). `MAINTAINER` is exempt —
+ * SEC RS-3/SO-3 — which is why the technician journeys are untouched by MFA
+ * even when it is switched on. */
+export const MFA_REQUIRED_ROLES = ['ADMIN', 'TEAM_LEADER', 'ENGINEER', 'DOC_CONTROLLER', 'AUDITOR'];
+
+/** Endpoints a `must_change_password` user may still reach (slice 13-MFA §7). */
+const PASSWORD_CHANGE_ALLOWED_PATHS = ['/auth/me', '/auth/password', '/auth/logout'];
+
+const CHALLENGE_TTL_MS = 5 * 60_000;
 
 const USERS_BY_EMAIL = new Map<string, E2EUser>(Object.values(E2E_USERS).map((u) => [u.email, u]));
 const USERS_BY_ID = new Map<string, E2EUser>(Object.values(E2E_USERS).map((u) => [u.id, u]));
@@ -179,6 +208,63 @@ export class FakeServer {
    * which is what makes the pad's step-up-retry path a genuine test rather
    * than one that trivially never fires. */
   private stepUpValidUserIds = new Set<string>();
+
+  // ---- Slice 13-UI-A: MFA + password self-service state ----
+  //
+  // `mfaEnabled` defaults to FALSE, deliberately mirroring the api's
+  // `MFA_ENABLED` default and production's current setting. Every pre-slice-13
+  // spec therefore sees the one-step login it always saw; the MFA journeys opt
+  // in explicitly with `enableMfa()`.
+  private mfaEnabled = false;
+  private passwords = new Map<string, string>();
+  private mustChangePassword = new Set<string>();
+  private enrolledUserIds = new Set<string>();
+  private confirmedSecrets = new Map<string, string>();
+  private pendingSecrets = new Map<string, string>();
+  private lastUsedStep = new Map<string, number>();
+  /** userId -> normalised code -> used. Codes are marked used, never removed
+   * (INV-07), so a reuse is genuinely detected rather than silently missed. */
+  private recoveryCodes = new Map<string, Map<string, boolean>>();
+  private challenges = new Map<string, { userId: string; expiresAt: number }>();
+  private consumedChallenges = new Set<string>();
+  private challengeSeq = 0;
+  /** Every TOTP code the fake ever rejected, so a spec can assert the
+   * rejection really happened at the server rather than in the UI. */
+  rejectedTotpCodes: string[] = [];
+
+  /** Turns on enforcement, as flipping `MFA_ENABLED=true` would. */
+  enableMfa(): void {
+    this.mfaEnabled = true;
+  }
+
+  /** Pre-enrols a user with a known secret, so a spec can act as their phone.
+   * Returns the base32 secret. */
+  seedMfaEnrolment(userId: string, secret: string = randomBase32Secret()): string {
+    this.enrolledUserIds.add(userId);
+    this.confirmedSecrets.set(userId, secret);
+    return secret;
+  }
+
+  /** Issues recovery codes to an already-enrolled user (the enrolment journey
+   * gets its codes from `/auth/mfa/enrol/confirm` like a real user does). */
+  seedRecoveryCodes(userId: string, count = 10): string[] {
+    const codes = generateRecoveryCodes(count);
+    this.recoveryCodes.set(userId, new Map(codes.map((c) => [normaliseRecoveryCode(c), false])));
+    return codes;
+  }
+
+  /** Marks a user as admin-created, i.e. `must_change_password = true`. */
+  seedMustChangePassword(userId: string): void {
+    this.mustChangePassword.add(userId);
+  }
+
+  isEnrolled(userId: string): boolean {
+    return this.enrolledUserIds.has(userId);
+  }
+
+  passwordOf(userId: string): string {
+    return this.passwords.get(userId) ?? E2E_PASSWORD;
+  }
 
   seedJob(job: SeedJob): void {
     this.jobs.set(job.id, job);
@@ -328,19 +414,320 @@ export class FakeServer {
    * flag was pretending they were. Without this fix, every fresh page load
    * for a context that never logged in would ALSO be redirected straight
    * past the sign-in screen. */
-  private async handleLogin(route: Route) {
-    const body = route.request().postDataJSON() as { email?: string };
-    const user = (body.email && USERS_BY_EMAIL.get(body.email)) || E2E_USERS.technician;
+  private authResultBody(user: E2EUser) {
+    return {
+      accessToken: `e2e-token-${user.id}`,
+      expiresIn: 900,
+      user: { id: user.id, fullName: user.fullName, roles: user.roles },
+    };
+  }
+
+  /** The one place a session is issued, so `/auth/login`, `/auth/mfa/verify`,
+   * `/auth/mfa/recovery` and the enrol-completes-login path cannot drift —
+   * mirroring the api's own `SessionIssuerService`. */
+  private async fulfillAuthenticated(route: Route, user: E2EUser) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       headers: { 'Set-Cookie': `bf_refresh=e2e-refresh-${user.id}; Path=/; HttpOnly` },
+      body: JSON.stringify(this.authResultBody(user)),
+    });
+  }
+
+  /** Deliberately opaque, exactly as `invalidCredentialsProblem()` is: the
+   * caller is never told whether the code, the challenge token or the account
+   * was the problem. */
+  private async fulfillInvalidCredentials(route: Route) {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/problem+json',
+      body: JSON.stringify(this.problem(401, 'Invalid credentials', '/errors/invalid-credentials')),
+    });
+  }
+
+  private async handleLogin(route: Route) {
+    const body = route.request().postDataJSON() as { email?: string; password?: string };
+    const user = (body.email && USERS_BY_EMAIL.get(body.email)) || E2E_USERS.technician;
+
+    if (body.password !== this.passwordOf(user.id)) {
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+
+    // Slice 13-MFA §4: with the flag on, a user holding any MFA_REQUIRED_ROLE
+    // gets NO access token and NO refresh cookie — only a challenge.
+    // MAINTAINER is exempt, so the technician's flow is unchanged.
+    const mfaRequired =
+      this.mfaEnabled && user.roles.some((role) => MFA_REQUIRED_ROLES.includes(role));
+    if (!mfaRequired) {
+      await this.fulfillAuthenticated(route, user);
+      return;
+    }
+
+    const challengeToken = `mfa-challenge-${user.id}-${++this.challengeSeq}`;
+    this.challenges.set(challengeToken, {
+      userId: user.id,
+      expiresAt: Date.now() + CHALLENGE_TTL_MS,
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      // No Set-Cookie: the login is not finished.
       body: JSON.stringify({
-        accessToken: `e2e-token-${user.id}`,
-        expiresIn: 900,
-        user: { id: user.id, fullName: user.fullName, roles: user.roles },
+        mfaRequired: true,
+        mfaEnrolled: this.enrolledUserIds.has(user.id),
+        challengeToken,
+        expiresIn: Math.floor(CHALLENGE_TTL_MS / 1000),
       }),
     });
+  }
+
+  // ---- Slice 13-UI-A: /auth/mfa/*, /auth/password, /users/{id}/mfa-reset ----
+
+  /** Resolves a challenge token to its user, enforcing expiry and single use.
+   * Returns null for anything it will not honour. */
+  private challengeSubject(challengeToken: string | undefined): E2EUser | null {
+    if (!challengeToken) return null;
+    if (this.consumedChallenges.has(challengeToken)) return null;
+    const challenge = this.challenges.get(challengeToken);
+    if (!challenge || Date.now() > challenge.expiresAt) return null;
+    return USERS_BY_ID.get(challenge.userId) ?? null;
+  }
+
+  /** Burns a challenge token. The FIRST redemption wins; every later one —
+   * including a replay of the exact same request — gets 401. */
+  private consumeChallenge(challengeToken: string): void {
+    this.consumedChallenges.add(challengeToken);
+  }
+
+  /** Either credential the enrol endpoints accept (openapi: `bearerAuth` OR
+   * the body `challengeToken`). Never anonymous. */
+  private async enrolSubject(
+    route: Route,
+    body: { challengeToken?: string },
+  ): Promise<{ user: E2EUser; challengeToken?: string } | null> {
+    if (body.challengeToken) {
+      const user = this.challengeSubject(body.challengeToken);
+      return user ? { user, challengeToken: body.challengeToken } : null;
+    }
+    const auth = (await route.request().headerValue('authorization')) ?? '';
+    const match = auth.match(/Bearer e2e-token-(user-\d+)/);
+    const user = match ? USERS_BY_ID.get(match[1]) : undefined;
+    return user ? { user } : null;
+  }
+
+  private async handleMfaVerify(route: Route) {
+    const body = route.request().postDataJSON() as {
+      challengeToken?: string;
+      totpCode?: string;
+    };
+    const user = this.challengeSubject(body.challengeToken);
+    const secret = user ? this.confirmedSecrets.get(user.id) : undefined;
+    if (!user || !secret || !this.enrolledUserIds.has(user.id)) {
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+
+    const verification = verifyTotp(secret, body.totpCode ?? '', this.lastUsedStep.get(user.id));
+    if (!verification.valid) {
+      // A wrong code does NOT burn the challenge — the api only claims it on
+      // a successful redemption — so the user gets to retype.
+      this.rejectedTotpCodes.push(body.totpCode ?? '');
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+
+    this.lastUsedStep.set(user.id, verification.step!);
+    this.consumeChallenge(body.challengeToken!);
+    await this.fulfillAuthenticated(route, user);
+  }
+
+  private async handleMfaRecovery(route: Route) {
+    const body = route.request().postDataJSON() as {
+      challengeToken?: string;
+      recoveryCode?: string;
+    };
+    const user = this.challengeSubject(body.challengeToken);
+    const codes = user ? this.recoveryCodes.get(user.id) : undefined;
+    const normalised = normaliseRecoveryCode(body.recoveryCode ?? '');
+    // Must exist, belong to this user, and be UNUSED. Marked used, never
+    // deleted (INV-07), which is what makes a second attempt genuinely fail.
+    if (!user || !codes || codes.get(normalised) !== false) {
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+    codes.set(normalised, true);
+    this.consumeChallenge(body.challengeToken!);
+    await this.fulfillAuthenticated(route, user);
+  }
+
+  private async handleMfaEnrol(route: Route) {
+    const body = route.request().postDataJSON() as { challengeToken?: string };
+    const subject = await this.enrolSubject(route, body);
+    if (!subject) {
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+    if (this.enrolledUserIds.has(subject.user.id)) {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/problem+json',
+        body: JSON.stringify(
+          this.problem(
+            409,
+            'Multi-factor authentication is already set up for this account',
+            '/errors/conflict',
+          ),
+        ),
+      });
+      return;
+    }
+    // Re-calling before confirmation REPLACES the pending secret.
+    const secret = randomBase32Secret();
+    this.pendingSecrets.set(subject.user.id, secret);
+    const label = encodeURIComponent(`BamForm:${subject.user.email}`);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        secret,
+        otpauthUri: `otpauth://totp/${label}?secret=${secret}&issuer=BamForm&algorithm=SHA1&digits=6&period=30`,
+      }),
+    });
+  }
+
+  private async handleMfaEnrolConfirm(route: Route) {
+    const body = route.request().postDataJSON() as {
+      challengeToken?: string;
+      totpCode?: string;
+    };
+    const subject = await this.enrolSubject(route, body);
+    const pending = subject ? this.pendingSecrets.get(subject.user.id) : undefined;
+    if (!subject || !pending) {
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+    const verification = verifyTotp(
+      pending,
+      body.totpCode ?? '',
+      this.lastUsedStep.get(subject.user.id),
+    );
+    if (!verification.valid) {
+      this.rejectedTotpCodes.push(body.totpCode ?? '');
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+
+    this.pendingSecrets.delete(subject.user.id);
+    this.confirmedSecrets.set(subject.user.id, pending);
+    this.enrolledUserIds.add(subject.user.id);
+    this.lastUsedStep.set(subject.user.id, verification.step!);
+    const codes = generateRecoveryCodes();
+    this.recoveryCodes.set(
+      subject.user.id,
+      new Map(codes.map((c) => [normaliseRecoveryCode(c), false])),
+    );
+
+    // Confirming on a challenge token also COMPLETES the login (§4.4);
+    // a voluntary enrolment returns `auth: null` and keeps its session.
+    if (subject.challengeToken) {
+      this.consumeChallenge(subject.challengeToken);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: {
+          'Set-Cookie': `bf_refresh=e2e-refresh-${subject.user.id}; Path=/; HttpOnly`,
+        },
+        body: JSON.stringify({
+          recoveryCodes: codes,
+          auth: this.authResultBody(subject.user),
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ recoveryCodes: codes, auth: null }),
+    });
+  }
+
+  private async handlePasswordChange(route: Route) {
+    const requester = await this.currentUser(route);
+    const body = route.request().postDataJSON() as {
+      currentPassword?: string;
+      newPassword?: string;
+    };
+    if (body.currentPassword !== this.passwordOf(requester.id)) {
+      await this.fulfillInvalidCredentials(route);
+      return;
+    }
+    if ((body.newPassword ?? '').length < 12) {
+      await route.fulfill({
+        status: 422,
+        contentType: 'application/problem+json',
+        body: JSON.stringify(
+          this.problem(422, 'Password must be at least 12 characters', '/errors/validation-failed'),
+        ),
+      });
+      return;
+    }
+    this.passwords.set(requester.id, body.newPassword!);
+    this.mustChangePassword.delete(requester.id);
+    await route.fulfill({ status: 204, body: '' });
+  }
+
+  private async handleMfaReset(route: Route, userId: string) {
+    const requester = await this.currentUser(route);
+    if (!requester.roles.includes('ADMIN')) {
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/problem+json',
+        body: JSON.stringify(this.problem(403, 'Forbidden', '/errors/forbidden')),
+      });
+      return;
+    }
+    if (!USERS_BY_ID.has(userId)) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/problem+json',
+        body: JSON.stringify(this.problem(404, 'Not found', '/errors/not-found')),
+      });
+      return;
+    }
+    this.enrolledUserIds.delete(userId);
+    this.confirmedSecrets.delete(userId);
+    this.pendingSecrets.delete(userId);
+    this.lastUsedStep.delete(userId);
+    const codes = this.recoveryCodes.get(userId);
+    if (codes) for (const code of codes.keys()) codes.set(code, true);
+    await route.fulfill({ status: 204, body: '' });
+  }
+
+  /**
+   * The global, deny-by-default forced-password-change guard (slice 13-MFA
+   * §7). Wrapped around every NON-auth route in `install()` so a route added
+   * later inherits it, exactly as the server's `APP_GUARD` does — rather than
+   * being remembered per handler.
+   */
+  private guarded(handler: (route: Route) => Promise<void>): (route: Route) => Promise<void> {
+    return async (route: Route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (!PASSWORD_CHANGE_ALLOWED_PATHS.some((allowed) => path.endsWith(allowed))) {
+        const requester = await this.currentUser(route);
+        if (this.mustChangePassword.has(requester.id)) {
+          await route.fulfill({
+            status: 403,
+            contentType: 'application/problem+json',
+            body: JSON.stringify(
+              this.problem(403, 'Password change required', '/errors/password-change-required'),
+            ),
+          });
+          return;
+        }
+      }
+      await handler(route);
+    };
   }
 
   private async handleRefresh(route: Route) {
@@ -882,57 +1269,107 @@ export class FakeServer {
   }
 
   async install(page: Page): Promise<void> {
+    // ---- Auth: exempt from the forced-password-change guard by design.
     await page.route('**/api/v1/auth/login', (route) => this.handleLogin(route));
     await page.route('**/api/v1/auth/refresh', (route) => this.handleRefresh(route));
-    await page.route('**/api/v1/auth/step-up', (route) => this.handleStepUp(route));
     await page.route('**/api/v1/auth/logout', (route) => route.fulfill({ status: 204, body: '' }));
-    await page.route('**/api/v1/sync/bootstrap*', (route) => this.handleBootstrap(route));
-    await page.route('**/api/v1/sync/outbox', (route) => this.handleOutbox(route));
-    await page.route(/\/api\/v1\/jobs\/([^/]+)\/submit/, (route) => {
-      const match = route
-        .request()
-        .url()
-        .match(/\/jobs\/([^/]+)\/submit/);
-      return this.handleSubmit(route, match ? match[1] : 'unknown');
-    });
-    await page.route('**/api/v1/queue*', (route) => this.handleQueue(route));
-    await page.route(/\/api\/v1\/jobs\/([^/]+)\/verify/, (route) => {
-      const match = route
-        .request()
-        .url()
-        .match(/\/jobs\/([^/]+)\/verify/);
-      return this.handleVerify(route, match ? match[1] : 'unknown');
-    });
-    await page.route(/\/api\/v1\/jobs\/([^/]+)\/return/, (route) => {
-      const match = route
-        .request()
-        .url()
-        .match(/\/jobs\/([^/]+)\/return/);
-      return this.handleReturn(route, match ? match[1] : 'unknown');
-    });
+    await page.route('**/api/v1/auth/password', (route) => this.handlePasswordChange(route));
+    await page.route('**/api/v1/auth/mfa/verify', (route) => this.handleMfaVerify(route));
+    await page.route('**/api/v1/auth/mfa/recovery', (route) => this.handleMfaRecovery(route));
+    await page.route('**/api/v1/auth/mfa/enrol/confirm', (route) =>
+      this.handleMfaEnrolConfirm(route),
+    );
+    await page.route('**/api/v1/auth/mfa/enrol', (route) => this.handleMfaEnrol(route));
+
+    // ---- Everything else runs behind the global forced-change guard.
+    await page.route(
+      '**/api/v1/auth/step-up',
+      this.guarded((route) => this.handleStepUp(route)),
+    );
+    await page.route(
+      /\/api\/v1\/users\/([^/]+)\/mfa-reset/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/users\/([^/]+)\/mfa-reset/);
+        return this.handleMfaReset(route, match ? decodeURIComponent(match[1]) : 'unknown');
+      }),
+    );
+    await page.route(
+      '**/api/v1/sync/bootstrap*',
+      this.guarded((route) => this.handleBootstrap(route)),
+    );
+    await page.route(
+      '**/api/v1/sync/outbox',
+      this.guarded((route) => this.handleOutbox(route)),
+    );
+    await page.route(
+      /\/api\/v1\/jobs\/([^/]+)\/submit/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/jobs\/([^/]+)\/submit/);
+        return this.handleSubmit(route, match ? match[1] : 'unknown');
+      }),
+    );
+    await page.route(
+      '**/api/v1/queue*',
+      this.guarded((route) => this.handleQueue(route)),
+    );
+    await page.route(
+      /\/api\/v1\/jobs\/([^/]+)\/verify/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/jobs\/([^/]+)\/verify/);
+        return this.handleVerify(route, match ? match[1] : 'unknown');
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/jobs\/([^/]+)\/return/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/jobs\/([^/]+)\/return/);
+        return this.handleReturn(route, match ? match[1] : 'unknown');
+      }),
+    );
     // Anchored (no trailing segment) so it never intercepts /submit,
     // /verify, /return, /items/*, /measurements/*, /parts, /attachments —
     // all of which are registered as their own, more specific routes above
     // and below. Playwright resolves overlapping routes last-registered-
     // first, but this still keeps each handler's own responsibility
     // unambiguous to read.
-    await page.route(/\/api\/v1\/jobs\/([^/]+)$/, (route) => {
-      const match = route
-        .request()
-        .url()
-        .match(/\/jobs\/([^/]+)$/);
-      return this.handleGetJob(route, match ? match[1] : 'unknown');
-    });
-    await page.route('**/api/v1/delegations', (route) => {
-      if (route.request().method() === 'POST') return this.handleCreateDelegation(route);
-      return this.handleListDelegations(route);
-    });
-    await page.route(/\/api\/v1\/delegations\/([^/]+)$/, (route) => {
-      const match = route
-        .request()
-        .url()
-        .match(/\/delegations\/([^/]+)$/);
-      return this.handleRevokeDelegation(route, match ? match[1] : 'unknown');
-    });
+    await page.route(
+      /\/api\/v1\/jobs\/([^/]+)$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/jobs\/([^/]+)$/);
+        return this.handleGetJob(route, match ? match[1] : 'unknown');
+      }),
+    );
+    await page.route(
+      '**/api/v1/delegations',
+      this.guarded((route) => {
+        if (route.request().method() === 'POST') return this.handleCreateDelegation(route);
+        return this.handleListDelegations(route);
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/delegations\/([^/]+)$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/delegations\/([^/]+)$/);
+        return this.handleRevokeDelegation(route, match ? match[1] : 'unknown');
+      }),
+    );
   }
 }

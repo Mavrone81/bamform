@@ -6,7 +6,18 @@ import { RecordCapture } from './screens/RecordCapture';
 import { VerifierQueue } from './screens/VerifierQueue';
 import { RecordReview } from './screens/RecordReview';
 import { Delegations } from './screens/Delegations';
-import { getAccessToken, onTokenChange, ensureFreshToken } from './auth';
+import { ChangePassword } from './screens/ChangePassword';
+import { AdminMfaReset } from './screens/AdminMfaReset';
+import { RecoveryCodes } from './screens/RecoveryCodes';
+import {
+  getAccessToken,
+  onTokenChange,
+  ensureFreshToken,
+  isPasswordChangeRequired,
+  onPasswordChangeRequired,
+  getPendingRecoveryCodes,
+  onPendingRecoveryCodesChange,
+} from './auth';
 import { watchOnlineAndDrain } from './offline/sync-engine';
 import { notifySynced } from './offline/sync-events';
 import { getServices } from './state/services';
@@ -16,6 +27,8 @@ function Screens() {
   const { path, navigate } = useRouter();
   const [authed, setAuthed] = useState(() => Boolean(getAccessToken()));
   const [checkingSession, setCheckingSession] = useState(true);
+  const [mustChangePassword, setMustChangePassword] = useState(() => isPasswordChangeRequired());
+  const [recoveryCodes, setRecoveryCodes] = useState(() => getPendingRecoveryCodes());
 
   useEffect(() => {
     // A hard reload always starts with no in-memory token (non-negotiable
@@ -24,6 +37,18 @@ function Screens() {
     ensureFreshToken().finally(() => setCheckingSession(false));
     return onTokenChange((state) => setAuthed(Boolean(state)));
   }, []);
+
+  // Slice 13-MFA §7: the server refuses `403 /errors/password-change-required`
+  // on every endpoint but three until an admin-set password is changed.
+  // `api/http-transport.ts` latches that centrally; this is the one place the
+  // app reacts to it, so no screen has to know the rule exists.
+  useEffect(() => onPasswordChangeRequired(setMustChangePassword), []);
+
+  // Confirming enrolment mid-login authenticates the app in the same tick it
+  // returns the ten one-time recovery codes, so the sign-in screen holding
+  // them is unmounted immediately. They are latched instead, and shown here,
+  // across that transition — see auth/recovery-codes-store.ts.
+  useEffect(() => onPendingRecoveryCodesChange(setRecoveryCodes), []);
 
   useEffect(() => {
     if (!checkingSession && !authed && path !== '/sign-in') navigate('/sign-in');
@@ -40,10 +65,21 @@ function Screens() {
 
   if (!authed) return <SignIn />;
 
+  // Shown once, ahead of everything else: there is no endpoint that can ever
+  // reissue these, so nothing may take the screen away from the user first.
+  if (recoveryCodes) return <RecoveryCodes codes={recoveryCodes} />;
+
+  // Rendered in place of the whole app, not as a route: the user is
+  // authenticated but every other endpoint is closed to them, so offering any
+  // other screen would only produce failures they cannot act on.
+  if (mustChangePassword) return <ChangePassword forced />;
+
   const reviewParams = matchPath('/jobs/:id/review', path);
   if (reviewParams) return <RecordReview jobId={reviewParams.id} />;
   if (matchPath('/queue', path)) return <VerifierQueue />;
   if (matchPath('/delegations', path)) return <Delegations />;
+  if (matchPath('/change-password', path)) return <ChangePassword />;
+  if (matchPath('/admin/mfa-reset', path)) return <AdminMfaReset />;
   const jobParams = matchPath('/jobs/:id', path);
   if (jobParams) return <RecordCapture jobId={jobParams.id} />;
   return <JobList />;
