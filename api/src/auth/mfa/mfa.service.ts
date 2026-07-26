@@ -496,6 +496,22 @@ export class MfaService {
    * been burned. Redis is not transactional with Postgres, so the one
    * remaining asymmetry is fail-CLOSED: if the surrounding transaction rolls
    * back after the claim, the challenge is spent and the user logs in again.
+   *
+   * ACCEPTED TRADE (fix-delta re-review, FD-3): this puts a Redis round trip
+   * inside the Prisma interactive transaction, while the `app_user` row lock
+   * is held. A Redis stall therefore holds that lock and can burn the 5 s
+   * transaction timeout, surfacing as a 500 on this one login attempt. The
+   * ordering is not incidental — moving the claim outside the transaction is
+   * exactly the interleaving that let three concurrent verifies mint three
+   * access tokens. A single `SET NX` against loopback Redis is sub-millisecond
+   * in the deployed topology (same host, no network hop), the blast radius is
+   * one login rather than any data, and it fails closed. Revisit only if
+   * Redis moves off-box.
+   *
+   * `claim()` itself is pinned by direct tests in
+   * `test/integration/auth-redis-primitives.spec.ts` (FD-1): NO end-to-end
+   * test can catch a regression here, because the in-process Postgres pool
+   * and the row lock serialise HTTP requests before they ever reach Redis.
    */
   private async claimChallenge(actor: MfaActor): Promise<void> {
     if (!actor.challenge) {

@@ -238,7 +238,7 @@ A compromised session-token key must not confer the ability to forge historical 
 
 | Variable | Type | Default | Required | Secret | Description |
 |---|---|---|---|---|---|
-| `MFA_ENABLED` | bool | **`false`** | N | N | **Master switch for ALL MFA enforcement. MUST stay `false` until slice 13-UI is deployed** — see PR-ENV-10 |
+| `MFA_ENABLED` | bool | **`false`** | N | N | **Master switch for ALL MFA enforcement. MUST stay `false` until slice 13-UI is deployed** — see PR-ENV-27 |
 | `MFA_REQUIRED_ROLES` | CSV | `ADMIN,TEAM_LEADER,ENGINEER,DOC_CONTROLLER,AUDITOR` | N | N | `MAINTAINER` deliberately absent (SEC §14 RS-3/SO-3) |
 | `MFA_TOTP_ISSUER` | string | `BamForm` | N | N | Shown in the authenticator app |
 | `MFA_CHALLENGE_TTL_SECONDS` | int | `300` | N | N | Life of the post-password login challenge token |
@@ -246,9 +246,9 @@ A compromised session-token key must not confer the ability to forge historical 
 | `RATE_LIMIT_MFA_ENROL_PER_MIN` | int | `10` | N | N | Per user (`POST /auth/mfa/enrol`) |
 | `RATE_LIMIT_MFA_RECOVERY_PER_MIN` | int | `5` | N | N | Per user |
 | `RATE_LIMIT_PASSWORD_CHANGE_PER_MIN` | int | `10` | N | N | Per user (`POST /auth/password`) |
-| `FORCE_PASSWORD_CHANGE_ENABLED` | bool | **`false`** | N | N | Whether `POST /users` marks the new account `must_change_password`. **MUST stay `false` until slice 13-UI is deployed** — see PR-ENV-10 |
+| `FORCE_PASSWORD_CHANGE_ENABLED` | bool | **`false`** | N | N | Whether `POST /users` marks the new account `must_change_password`. **MUST stay `false` until slice 13-UI is deployed** — see PR-ENV-27 |
 
-**PR-ENV-10** `MFA_ENABLED` and `FORCE_PASSWORD_CHANGE_ENABLED` are **deployment-ordering master
+**PR-ENV-27** `MFA_ENABLED` and `FORCE_PASSWORD_CHANGE_ENABLED` are **deployment-ordering master
 switches**, not feature preferences. Both gate behaviour whose *user interface* ships in a later
 slice (13-UI): MFA enforcement needs a screen that can collect a TOTP code, and the forced
 password change needs a screen that can collect a new password. Turning either on before that

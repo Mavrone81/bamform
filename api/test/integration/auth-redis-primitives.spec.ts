@@ -53,6 +53,43 @@ describe('Redis-backed auth primitives (real Redis, ADR-006)', () => {
 
       await expect(service.isDenylisted('jti-expired')).resolves.toBe(false);
     });
+
+    // Slice 13-MFA fix-delta re-review, finding FD-1. `claim()` is what makes
+    // the MFA challenge token single-use under concurrency, but NOTHING pinned
+    // it: reverting it to isDenylisted()+denylist() leaves every end-to-end
+    // test green, because the in-process Postgres pool and the app_user row
+    // lock serialise those requests long before the claim is reached. The
+    // race is real in a multi-worker deployment; the test that would catch a
+    // regression has to exercise the primitive directly.
+    it('claim() burns a jti for exactly ONE caller — the single-use guarantee (FD-1)', async () => {
+      const service = new TokenDenylistService(redis);
+
+      await expect(service.claim('jti-claim-once', 900)).resolves.toBe(true);
+      await expect(service.claim('jti-claim-once', 900)).resolves.toBe(false);
+      await expect(service.isDenylisted('jti-claim-once')).resolves.toBe(true);
+    });
+
+    it('claim() is atomic under concurrency — exactly one of N racers wins (FD-1)', async () => {
+      const service = new TokenDenylistService(redis);
+
+      // Bypasses the app-level serialisation that hides this at the HTTP
+      // layer: these land on Redis genuinely concurrently.
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () => service.claim('jti-claim-race', 900)),
+      );
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it('claim() writes a bounded TTL even when the remaining lifetime rounds to zero', async () => {
+      const service = new TokenDenylistService(redis);
+
+      // Unlike denylist(), claim() must never no-op: writing nothing would
+      // hand `true` to every concurrent caller and silently restore the race.
+      await expect(service.claim('jti-claim-ttl0', 0)).resolves.toBe(true);
+      await expect(service.claim('jti-claim-ttl0', 0)).resolves.toBe(false);
+      expect(await redis.ttl('bamform:auth:denylist:jti-claim-ttl0')).toBeGreaterThan(0);
+    });
   });
 
   describe('RateLimiterService — login scope (PR-092, API_SPEC §9: 10/min per IP)', () => {
