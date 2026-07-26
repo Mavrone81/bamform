@@ -1,4 +1,8 @@
 import { getAccessToken, ensureFreshToken, refresh } from '../auth/index';
+import {
+  isPasswordChangeRequiredProblem,
+  markPasswordChangeRequired,
+} from '../auth/password-change-gate';
 import { TransportError } from './transport';
 import { API_BASE } from './config';
 import { uuidv7 } from '../lib/uuidv7';
@@ -38,6 +42,25 @@ async function authorizedFetch(
   if (res.status === 401 && attempt === 0) {
     const refreshed = await refresh();
     if (refreshed) return authorizedFetch(path, init, attempt + 1);
+  }
+
+  // Slice 13-MFA §7 / review finding I-3: a user whose password was set by an
+  // administrator is refused `403 /errors/password-change-required` by a
+  // GLOBAL server-side guard, on every endpoint except `/auth/me`,
+  // `/auth/password` and `/auth/logout`. Detecting it here — the single
+  // function every authenticated request in this app already passes through —
+  // is what keeps that check out of ~10 screens and makes a screen added in a
+  // future slice inherit it for free.
+  //
+  // This is not an authorisation decision (#6): it latches what the server
+  // just said, and `changePassword` clears the latch when the server accepts
+  // the new password. `clone()` because the caller still has to read the body.
+  if (res.status === 403) {
+    const problem = await res
+      .clone()
+      .json()
+      .catch(() => undefined);
+    if (isPasswordChangeRequiredProblem(problem)) markPasswordChangeRequired();
   }
   return res;
 }

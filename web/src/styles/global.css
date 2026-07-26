@@ -256,6 +256,75 @@ button:disabled {
   cursor: crosshair;
 }
 
+/* ---- MFA enrolment + recovery codes (slice 13-UI-A) ---- */
+
+/* The symbol needs a light quiet zone to scan, so it carries its own white
+ * plate rather than inheriting the surface colour — this keeps it readable
+ * in a dark theme too. */
+.qr-frame {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3);
+}
+
+.qr-code {
+  background: #ffffff;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  max-width: 100%;
+  height: auto;
+}
+
+.manual-entry {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* A base32 secret has no spaces to wrap on, and the container is 375px wide
+ * on the smallest supported viewport — `break-all` is what stops it forcing
+ * page-level horizontal scroll (E-RSP-01). */
+.setup-key code {
+  font-family: var(--font-mono);
+  font-size: 1.0625rem;
+  letter-spacing: 0.08em;
+  word-break: break-all;
+  user-select: all;
+}
+
+.recovery-codes {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-raised);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11ch, 1fr));
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+  overflow-x: auto;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-weight: 400;
+}
+
+.checkbox-field input[type='checkbox'] {
+  /* Meets the 44px tap target (A-04) without the width:100% the other
+   * `.field input` rules apply. */
+  width: var(--tap-min);
+  height: var(--tap-min);
+  min-height: var(--tap-min);
+  flex: 0 0 auto;
+}
+
 /* ---- Read-only record review (slice 11b) ---- */
 .readonly-value {
   font-weight: 600;

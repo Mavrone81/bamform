@@ -1,13 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpSyncTransport } from './http-transport';
 import { _resetForTests, setAccessToken } from '../auth/token-store';
+import {
+  isPasswordChangeRequired,
+  _resetForTests as resetPasswordGate,
+} from '../auth/password-change-gate';
 
+/** `clone()` is part of the contract now: `authorizedFetch` reads a 403 body
+ * to spot `/errors/password-change-required` and must leave the original
+ * response readable for the caller. */
 function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 401): Response {
-  return { ok, status, json: async () => body } as Response;
+  return {
+    ok,
+    status,
+    json: async () => body,
+    clone: () => jsonResponse(body, ok, status),
+  } as Response;
 }
 
 beforeEach(() => {
   _resetForTests();
+  resetPasswordGate();
   vi.stubGlobal('fetch', vi.fn());
 });
 
@@ -349,5 +362,81 @@ describe('HttpSyncTransport', () => {
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toContain('/delegations/deleg-1');
     expect(init?.method).toBe('DELETE');
+  });
+});
+
+/**
+ * U-TRANS-01 — brief §2.3: the forced-password-change 403 is detected once,
+ * centrally, in the transport layer, "not scattered across screens". Every
+ * authenticated request in this app goes through `authorizedFetch`, so these
+ * assertions cover the whole surface rather than the two endpoints named.
+ */
+describe('U-TRANS-01: the forced-password-change 403 is intercepted centrally', () => {
+  const passwordChangeProblem = {
+    type: '/errors/password-change-required',
+    title: 'Password change required',
+    status: 403,
+    detail: 'Your password was set by an administrator.',
+  };
+
+  it('latches the gate on a 403 password-change-required from a plain GET', async () => {
+    setAccessToken('tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(passwordChangeProblem, false, 403));
+
+    const transport = new HttpSyncTransport();
+    await expect(transport.bootstrap()).rejects.toThrow('bootstrap failed: 403');
+
+    expect(isPasswordChangeRequired()).toBe(true);
+  });
+
+  it('latches it from an action endpoint too, and still hands the caller a readable body', async () => {
+    setAccessToken('tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(passwordChangeProblem, false, 403));
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.verifyJob('job-1', {
+      drawnSignature: 'data:image/png;base64,x',
+    });
+
+    // The interception reads a CLONE — the original response body is intact.
+    expect(result).toEqual({ status: 403, ok: false, problem: passwordChangeProblem });
+    expect(isPasswordChangeRequired()).toBe(true);
+  });
+
+  it('does NOT latch on an unrelated 403 — a step-up prompt must not become a password change', async () => {
+    setAccessToken('tok', 900);
+    const stepUp = {
+      type: 'https://form.bevorasg.com/errors/step-up-required',
+      title: 'Re-authentication required before signing',
+      status: 403,
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(stepUp, false, 403));
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.verifyJob('job-1', {
+      drawnSignature: 'data:image/png;base64,x',
+    });
+
+    expect(result.problem).toEqual(stepUp);
+    expect(isPasswordChangeRequired()).toBe(false);
+  });
+
+  it('does not latch on a 403 whose body is not JSON at all', async () => {
+    setAccessToken('tok', 900);
+    const broken = {
+      ok: false,
+      status: 403,
+      json: async () => {
+        throw new SyntaxError('not json');
+      },
+      clone: () => broken,
+    } as unknown as Response;
+    vi.mocked(fetch).mockResolvedValueOnce(broken);
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.returnJob('job-1', 'a reason long enough');
+
+    expect(result.status).toBe(403);
+    expect(isPasswordChangeRequired()).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ import {
 import { onSynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { SyncStatusChip } from '../components/SyncStatusChip';
+import { getCurrentUser, onCurrentUserChange } from '../auth';
 import { useRouter } from '../router';
 
 interface Row {
@@ -40,6 +41,11 @@ export function JobList() {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [clockSkew, setClockSkew] = useState<ClockSkewRecord | null>(null);
+  // Presentation only (non-negotiable #6). The server owns who may reset
+  // another user's MFA; not offering the link to everyone else just avoids
+  // a control that would certainly 403.
+  const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
+  useEffect(() => onCurrentUserChange(setCurrentUser), []);
 
   const refresh = useCallback(async () => {
     const { db } = getServices();
@@ -109,6 +115,17 @@ export function JobList() {
           Verifier queue
         </button>
       </div>
+
+      <nav aria-label="Account" className="card-row">
+        <button type="button" onClick={() => navigate('/change-password')}>
+          Change password
+        </button>
+        {currentUser?.roles.includes('ADMIN') && (
+          <button type="button" onClick={() => navigate('/admin/mfa-reset')}>
+            Reset a user&rsquo;s authenticator
+          </button>
+        )}
+      </nav>
 
       <p className="status-chip" data-tone={isOnline ? 'good' : 'attention'} role="status">
         <span aria-hidden="true">{isOnline ? '◉' : '◌'}</span>
