@@ -84,6 +84,35 @@ export const PUBLIC_ROUTES: readonly MethodPath[] = [
 ];
 
 /**
+ * Slice 13-MFA introduced a SECOND authentication class,
+ * `@MfaChallengeAuth(mode)` (`api/src/auth/decorators/mfa-challenge-auth.decorator.ts`),
+ * and the fix pass added this allowlist for it (review finding M-6).
+ *
+ * Why it needs its own list rather than riding on `PUBLIC_ROUTES`: such a
+ * route is NOT `@Public()` — it demands a signed, audience-pinned, unexpired,
+ * non-denylisted token — so C-07's `isPublic === false` check passes and says
+ * nothing. But the principal it establishes is a challenge token, not an
+ * access token: `request.user` stays unset, there is no `roles` claim, and
+ * `PasswordChangeRequiredGuard` therefore returns early. Every one of those is
+ * correct for a mid-login route and wrong for anything else, and until this
+ * list existed nothing in CI would have noticed the decorator appearing on a
+ * fifth route. Checked in BOTH directions, exactly as `PUBLIC_ROUTES` is.
+ *
+ * `challenge-only` = finishes a login and accepts nothing else.
+ * `challenge-or-access` = also serves an already-signed-in user.
+ */
+export interface MfaChallengeRoute extends MethodPath {
+  mode: 'challenge-only' | 'challenge-or-access';
+}
+
+export const MFA_CHALLENGE_ROUTES: readonly MfaChallengeRoute[] = [
+  { method: 'POST', path: '/api/v1/auth/mfa/enrol', mode: 'challenge-or-access' },
+  { method: 'POST', path: '/api/v1/auth/mfa/enrol/confirm', mode: 'challenge-or-access' },
+  { method: 'POST', path: '/api/v1/auth/mfa/verify', mode: 'challenge-only' },
+  { method: 'POST', path: '/api/v1/auth/mfa/recovery', mode: 'challenge-only' },
+];
+
+/**
  * PR-API-10 / ADR-005 / `api/src/common/area-scope.ts`: scoping applies to
  * collection reads over an entity that HAS an `areaId` column. Per
  * `.superpowers/sdd/slice-4-report.md`: "assets is the only PR-019..028

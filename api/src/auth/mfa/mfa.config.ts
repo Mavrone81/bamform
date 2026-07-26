@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { isEnvFlagEnabled } from '../../common/env-flag';
 
 /**
  * Brief §1 D-1: the roles for which a second factor is mandatory.
@@ -38,9 +39,14 @@ export const DEFAULT_MFA_REQUIRED_ROLES: readonly string[] = [
 export class MfaConfig {
   constructor(private readonly config: ConfigService) {}
 
-  /** Master switch for ALL enforcement. Default false — see the class comment. */
+  /**
+   * Master switch for ALL enforcement. Default false — see the class comment.
+   * Parsed by the shared `isEnvFlagEnabled` so this flag and
+   * `FORCE_PASSWORD_CHANGE_ENABLED` (`PasswordPolicyConfig`) cannot drift into
+   * two different notions of "true".
+   */
   get enabled(): boolean {
-    return String(this.config.get('MFA_ENABLED') ?? 'false').toLowerCase() === 'true';
+    return isEnvFlagEnabled(this.config.get('MFA_ENABLED'));
   }
 
   /** D-4: `MFA_REQUIRED_ROLES`, CSV, defaulting to the D-1 list. */
@@ -70,6 +76,15 @@ export class MfaConfig {
 
   get verifyRateLimitPerMinute(): number {
     return Number(this.config.get('RATE_LIMIT_MFA_VERIFY_PER_MIN') ?? 10);
+  }
+
+  /**
+   * `POST /auth/mfa/enrol`. Added in the fix pass (review finding M-4) — the
+   * endpoint had no limit at all, and it is reachable on a challenge token,
+   * i.e. with the password alone.
+   */
+  get enrolRateLimitPerMinute(): number {
+    return Number(this.config.get('RATE_LIMIT_MFA_ENROL_PER_MIN') ?? 10);
   }
 
   get recoveryRateLimitPerMinute(): number {

@@ -93,9 +93,9 @@ Modelling it as `PATCH {status: "VERIFIED"}` would invite clients to treat it as
 | `POST /auth/step-up` | Body `{ password }`. Refreshes `last_authenticated_at`. **Required before signing** if the step-up window has lapsed (PR-091). **Password-only** — TOTP is deliberately not required here (§3.2) |
 | `POST /auth/password` | Body `{ currentPassword, newPassword }`. Own account only. Clears `must_change_password`, stamps `password_changed_at`, revokes every OTHER refresh-token family. Audited `password_changed` |
 | `POST /auth/mfa/enrol` | Issues a TOTP secret (base32 + `otpauth://` URI). Authorised by an access token or an MFA `challengeToken`. 409 if already enrolled |
-| `POST /auth/mfa/enrol/confirm` | Body `{ code }`. Confirms enrolment and returns the ten recovery codes **once**. Completes the login when called with a `challengeToken` |
-| `POST /auth/mfa/verify` | Body `{ challengeToken, code }`. Second step of login; issues the access token and refresh cookie |
-| `POST /auth/mfa/recovery` | Body `{ challengeToken, code }`. Redeems a single-use recovery code. Audited `mfa_recovery_code_used` |
+| `POST /auth/mfa/enrol/confirm` | Body `{ totpCode }`. Confirms enrolment and returns the ten recovery codes **once**. Completes the login when called with a `challengeToken` |
+| `POST /auth/mfa/verify` | Body `{ challengeToken, totpCode }`. Second step of login; issues the access token and refresh cookie |
+| `POST /auth/mfa/recovery` | Body `{ challengeToken, recoveryCode }`. Redeems a single-use recovery code. Audited `mfa_recovery_code_used` |
 | `GET /.well-known/jwks.json` | Public. Publishes Ed25519 verification keys with `kid` (PR-087) |
 
 **PR-API-06** Access tokens are held in memory by the client, never in `localStorage`. The
@@ -237,6 +237,12 @@ not by callers, so a new endpoint cannot forget it.
 | `/errors/rate-limited` | 429 | `Retry-After` header present |
 | `/errors/internal` | 500 | No internal detail leaked; `requestId` correlates to logs |
 
+**PR-API-14a** `/errors/password-change-required` is not tied to any one path. It is raised by a
+**global** deny-by-default guard, so **every authenticated endpoint in this document can return
+it**, including endpoints whose `responses:` block in `api/openapi.yaml` lists no `403`. It is
+documented here and on the shared `Problem` response rather than repeated on ~60 operations;
+a client must handle the `type` globally, not per-screen (§3.3, PR-API-07e).
+
 **PR-API-12** `detail` is safe to show a user. It never contains a stack trace, a SQL fragment,
 an internal hostname, or decrypted personal data.
 
@@ -311,6 +317,7 @@ change — this makes the archive cheaply cacheable.
 |---|---|---|
 | `POST /auth/login` | 10/min per IP, plus account lockout after 5 failures | 429 + `Retry-After` |
 | `POST /auth/step-up` | 10/min per user | 429 |
+| `POST /auth/mfa/enrol` | 10/min per user | 429 |
 | `POST /auth/mfa/verify` | 10/min per user | 429 |
 | `POST /auth/mfa/enrol/confirm` | 10/min per user | 429 |
 | `POST /auth/mfa/recovery` | 5/min per user | 429 |

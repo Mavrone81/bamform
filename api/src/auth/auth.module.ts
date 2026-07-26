@@ -21,6 +21,7 @@ import {
 } from './mfa/mfa-challenge-token.service';
 import { MFA_CHALLENGE_TOKEN_SERVICE } from './mfa/mfa.tokens';
 import { PasswordChangeService } from './password/password-change.service';
+import { PasswordPolicyConfig } from './password/password-policy.config';
 import { PasswordService } from './password/password.service';
 import { RateLimiterService } from './redis/rate-limiter.service';
 import { TokenDenylistService } from './redis/token-denylist.service';
@@ -45,6 +46,7 @@ import { SessionIssuerService } from './session/session-issuer.service';
     AuthService,
     PasswordService,
     PasswordChangeService,
+    PasswordPolicyConfig,
     RefreshTokenService,
     SecurityAuditService,
     RateLimiterService,
@@ -82,6 +84,6 @@ import { SessionIssuerService } from './session/session-issuer.service';
   // `MfaService` exported (slice 13-MFA) so `UsersController` can expose the
   // ADMIN reset (`POST /users/{userId}/mfa-reset`) without duplicating the
   // reset logic or the audit write.
-  exports: [PasswordService, AuthService, MfaService],
+  exports: [PasswordService, AuthService, MfaService, PasswordPolicyConfig],
 })
 export class AuthModule {}

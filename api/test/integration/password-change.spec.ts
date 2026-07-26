@@ -26,12 +26,14 @@ async function userRow(userId: string) {
  */
 describe('Slice 13-MFA §7 — POST /auth/password and the forced-change gate', () => {
   let app: INestApplication;
+  const originalForceFlag = process.env.FORCE_PASSWORD_CHANGE_ENABLED;
 
   beforeAll(async () => {
     app = await createTestApp();
   });
 
   afterAll(async () => {
+    process.env.FORCE_PASSWORD_CHANGE_ENABLED = originalForceFlag;
     await app.close();
     await closeAll();
     await closeRedis();
@@ -41,6 +43,10 @@ describe('Slice 13-MFA §7 — POST /auth/password and the forced-change gate', 
     await resetDatabase();
     await resetRedis();
     delete process.env.MFA_ENABLED;
+    // Default OFF for every test, exactly as production defaults it
+    // (review finding I-3). Tests that need the forcing turn it on
+    // explicitly, the way the MFA suite turns on MFA_ENABLED.
+    delete process.env.FORCE_PASSWORD_CHANGE_ENABLED;
   });
 
   async function signIn(email: string): Promise<{ accessToken: string; refreshCookie: string }> {
@@ -243,7 +249,8 @@ describe('Slice 13-MFA §7 — POST /auth/password and the forced-change gate', 
 
   // -------------------------------------------------- the forced-change gate
   describe('S-43 must_change_password gate', () => {
-    it('POST /users creates the user with must_change_password = true', async () => {
+    it('POST /users creates the user with must_change_password = true when the flag is ON', async () => {
+      process.env.FORCE_PASSWORD_CHANGE_ENABLED = 'true';
       await createLoginableUser({
         email: 'creator@bevorasg.com',
         password: PASSWORD,
@@ -280,6 +287,127 @@ describe('Slice 13-MFA §7 — POST /auth/password and the forced-change gate', 
         .get('/api/v1/users')
         .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
+    });
+
+    // =====================================================================
+    // S-47 — the SECOND deployment-safety property (review finding I-3).
+    // The password-change screen lands in slice 13-UI, exactly as the MFA
+    // screens do. If `POST /users` forced the change before that screen
+    // existed, the first technician created after deploy would log in fine
+    // and then get 403 on every page with no way out. Same hazard as
+    // MFA_ENABLED, same default-off master switch, same both-directions
+    // proof as S-38.
+    // =====================================================================
+    describe('S-47 FORCE_PASSWORD_CHANGE_ENABLED gates the forcing, default OFF', () => {
+      const ADMIN_CHOSE = 'AdminChose_This1!';
+
+      async function createStarter(email: string): Promise<string> {
+        await createLoginableUser({
+          email: 'flag-admin@bevorasg.com',
+          password: PASSWORD,
+          roleCodes: ['ADMIN'],
+        });
+        const admin = await signIn('flag-admin@bevorasg.com');
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/users')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send({
+            fullName: 'New Starter',
+            email,
+            password: ADMIN_CHOSE,
+            roleCodes: ['TEAM_LEADER'],
+          })
+          .expect(201);
+        return created.body.id as string;
+      }
+
+      it('flag ABSENT: the new user is NOT forced, and really reaches a normal endpoint', async () => {
+        const id = await createStarter('unforced@bevorasg.com');
+        expect((await userRow(id)).must_change_password).toBe(false);
+
+        const login = await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ email: 'unforced@bevorasg.com', password: ADMIN_CHOSE })
+          .expect(200);
+
+        // Non-vacuous: not "login returned 200", but "a real, guarded,
+        // non-allowlisted endpoint actually served this user".
+        const jobs = await request(app.getHttpServer())
+          .get('/api/v1/jobs')
+          .set('Authorization', `Bearer ${login.body.accessToken}`)
+          .expect(200);
+        expect(Array.isArray(jobs.body.data)).toBe(true);
+        await request(app.getHttpServer())
+          .get('/api/v1/assets')
+          .set('Authorization', `Bearer ${login.body.accessToken}`)
+          .expect(200);
+      });
+
+      it('flag ON: the same user IS forced, and is blocked until they change it', async () => {
+        process.env.FORCE_PASSWORD_CHANGE_ENABLED = 'true';
+        const id = await createStarter('forced-by-flag@bevorasg.com');
+        expect((await userRow(id)).must_change_password).toBe(true);
+
+        const login = await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ email: 'forced-by-flag@bevorasg.com', password: ADMIN_CHOSE })
+          .expect(200);
+
+        const blocked = await request(app.getHttpServer())
+          .get('/api/v1/jobs')
+          .set('Authorization', `Bearer ${login.body.accessToken}`)
+          .expect(403);
+        expect(blocked.body).toMatchObject({ type: '/errors/password-change-required' });
+
+        await request(app.getHttpServer())
+          .post('/api/v1/auth/password')
+          .set('Authorization', `Bearer ${login.body.accessToken}`)
+          .send({ currentPassword: ADMIN_CHOSE, newPassword: NEW_PASSWORD })
+          .expect(204);
+        await request(app.getHttpServer())
+          .get('/api/v1/jobs')
+          .set('Authorization', `Bearer ${login.body.accessToken}`)
+          .expect(200);
+      });
+
+      it('only the literal "true" turns it on — no truthy coercion, same strictness as MFA_ENABLED', async () => {
+        const off = ['false', '0', '1', 'yes', 'on', 'TRUE ', ''];
+        for (const [index, value] of off.entries()) {
+          await resetDatabase();
+          await resetRedis();
+          process.env.FORCE_PASSWORD_CHANGE_ENABLED = value;
+          const id = await createStarter(`coerce-off-${index}@bevorasg.com`);
+          expect([value, (await userRow(id)).must_change_password]).toEqual([value, false]);
+        }
+        // ...and the exact literal, in either case, does.
+        const on = ['true', 'TRUE', 'True'];
+        for (const [index, value] of on.entries()) {
+          await resetDatabase();
+          await resetRedis();
+          process.env.FORCE_PASSWORD_CHANGE_ENABLED = value;
+          const id = await createStarter(`coerce-on-${index}@bevorasg.com`);
+          expect([value, (await userRow(id)).must_change_password]).toEqual([value, true]);
+        }
+      });
+
+      it('the guard itself is NOT gated — a row that already carries the flag is still blocked with the switch off', async () => {
+        // Gating the SETTING and not the GUARD is deliberate: deny-by-default
+        // must never be dormant.
+        const { userId } = await createLoginableUser({
+          email: 'preset@bevorasg.com',
+          password: PASSWORD,
+          roleCodes: ['ADMIN'],
+        });
+        await setMustChangePassword(userId, true);
+        expect(process.env.FORCE_PASSWORD_CHANGE_ENABLED).toBeUndefined();
+
+        const { accessToken } = await signIn('preset@bevorasg.com');
+        const blocked = await request(app.getHttpServer())
+          .get('/api/v1/jobs')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .expect(403);
+        expect(blocked.body).toMatchObject({ type: '/errors/password-change-required' });
+      });
     });
 
     it('a forced-change user can still authenticate and reach exactly the three allowlisted endpoints', async () => {
@@ -392,6 +520,7 @@ describe('Slice 13-MFA §7 — POST /auth/password and the forced-change gate', 
     });
 
     it('the full admin-creates-user journey: created, blocked, changes password, unblocked', async () => {
+      process.env.FORCE_PASSWORD_CHANGE_ENABLED = 'true';
       await createLoginableUser({
         email: 'admin2@bevorasg.com',
         password: PASSWORD,

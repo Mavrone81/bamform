@@ -224,7 +224,8 @@ not evidence of correctness.
 | U-MFA-06 | Recovery code normalisation (case, spacing, NFC) and its keyed blind index | a hand-retyped code produces the same 32-byte index; a different code or a different key does not |
 | U-MFA-07 | `MFA_ENABLED` absent, `"false"`, `"0"`, `""`, `"1"`, `"yes"` | **all OFF** — only the literal `"true"` enables enforcement; an ADMIN is not challenged while off |
 | U-MFA-08 | `MFA_REQUIRED_ROLES` default and CSV override | defaults to the five privileged roles; `MAINTAINER` alone exempt, `MAINTAINER`+`TEAM_LEADER` subject; a blank override falls back to the default rather than exempting everyone |
-| U-MFA-09 | Rate-limit defaults | verify 10/min, recovery 5/min, password change 10/min |
+| U-MFA-09 | Rate-limit defaults | verify 10/min, recovery 5/min, password change 10/min, **enrol 10/min** (M-4) |
+| U-MFA-10 | `FORCE_PASSWORD_CHANGE_ENABLED` absent, `"false"`, `"0"`, `""`, `"1"`, `"yes"`, `"true "` | **all OFF** — only the literal `"true"` enables the forcing; parsed by the same `isEnvFlagEnabled` helper as `MFA_ENABLED`, asserted equal to it value by value |
 
 ---
 
@@ -359,6 +360,8 @@ Each maps to a threat in BAMFORM-SEC-001 §4.
 | S-43 | E-1 | A `must_change_password` user calls any endpoint other than `/auth/me`, `/auth/password`, `/auth/logout` — reads and a record-mutating write | 403 `/errors/password-change-required`, deny-by-default; nothing is written |
 | S-44 | S-2 | Password changed while three sessions are live | the other two refresh families are revoked (`password_changed`); the caller's own survives |
 | S-45 | S-1 | An MFA challenge token replayed after the login it completed | rejected 401 — `jti` denylisted for its remaining life |
+| S-46 | S-1 | **Concurrent** redemption of one single-use MFA credential: 3 simultaneous `/auth/mfa/verify` with the same challenge token and the same code; 2 with codes from *different* steps; 3 simultaneous `/auth/mfa/enrol/confirm`; 2 simultaneous `/auth/mfa/recovery` | exactly **one** 200 in each case, the rest 401 — one refresh-token family, one `login` audit event, ten recovery codes not thirty. The replay guard and the challenge single-use hold under concurrency, not only in sequence (review finding I-2) |
+| S-47 | — | `FORCE_PASSWORD_CHANGE_ENABLED=false`: an admin-created user logs in and calls a normal endpoint | `must_change_password` is **not** set and `GET /jobs`/`GET /assets` return 200 — the second deployment-safety property (review finding I-3). With the flag on, the same user gets 403 `/errors/password-change-required` until they change it; the guard itself is never gated, so a pre-set row is still blocked with the switch off |
 
 **PR-TST-08** S-10 and S-11 are performed by writing directly to the database with elevated
 credentials, bypassing the application. They prove the detection mechanism works against an
@@ -588,7 +591,7 @@ checklist. Template content is `CON`, not `PER` — it contains no personal data
 | UR-072 to UR-078 Admin and audit | S-11, S-21, S-24, S-26, S-42, S-43, E-07 |
 | UR-079 to UR-085 Usability | E-RSP-01 to E-RSP-08, A-01 to A-07, P-05 |
 | UR-086 to UR-090 Performance | P-01 to P-10 |
-| UR-091 to UR-101 Security | S-01 to S-45, U-MFA-01 to U-MFA-09 |
+| UR-091 to UR-101 Security | S-01 to S-47, U-MFA-01 to U-MFA-10 |
 | UR-102 to UR-106 Compliance | E-05, E-07, S-10, S-11, AC-09, AC-11 |
 | UR-107 to UR-112 Retention and backup | M-01 to M-06, R-01 to R-07 |
 | UR-113 to UR-116 Operational | AC-16, AC-17, RUN §3.3 |

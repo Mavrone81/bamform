@@ -137,7 +137,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
       const confirm = await request(server)
         .post('/api/v1/auth/mfa/enrol/confirm')
         .set('Authorization', `Bearer ${login.body.accessToken}`)
-        .send({ code: totpCode(base32Decode(enrol.body.secret), currentTotpStep()) })
+        .send({ totpCode: totpCode(base32Decode(enrol.body.secret), currentTotpStep()) })
         .expect(200);
 
       expect(confirm.body.recoveryCodes).toHaveLength(10);
@@ -286,7 +286,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/verify')
         .send({
           challengeToken: login.body.challengeToken,
-          code: totpCode(secret, currentTotpStep()),
+          totpCode: totpCode(secret, currentTotpStep()),
         })
         .expect(200);
 
@@ -317,7 +317,12 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         roleCodes: ['ENGINEER'],
       });
       await enrolMfaForUser(userId, secret);
-      const code = totpCode(secret, currentTotpStep());
+      // Captured ONCE (review finding M-8). Re-reading `currentTotpStep()` in
+      // the assertion below made this test straddle a 30 s step boundary and
+      // fail spuriously — the code under test burned step N, the assertion
+      // asked for step N+1.
+      const step = currentTotpStep();
+      const code = totpCode(secret, step);
 
       const first = await request(app.getHttpServer())
         .post('/api/v1/auth/login')
@@ -325,11 +330,11 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       await request(app.getHttpServer())
         .post('/api/v1/auth/mfa/verify')
-        .send({ challengeToken: first.body.challengeToken, code })
+        .send({ challengeToken: first.body.challengeToken, totpCode: code })
         .expect(200);
 
       // The step is burned...
-      expect(Number((await userRow(userId)).mfa_last_used_step)).toBe(currentTotpStep());
+      expect(Number((await userRow(userId)).mfa_last_used_step)).toBe(step);
 
       // ...so a fresh login presenting the SAME still-valid code is refused.
       const second = await request(app.getHttpServer())
@@ -338,7 +343,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       const replayed = await request(app.getHttpServer())
         .post('/api/v1/auth/mfa/verify')
-        .send({ challengeToken: second.body.challengeToken, code })
+        .send({ challengeToken: second.body.challengeToken, totpCode: code })
         .expect(401);
       expect(replayed.body).toMatchObject({ type: '/errors/unauthenticated' });
     });
@@ -360,7 +365,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/verify')
         .send({
           challengeToken: login.body.challengeToken,
-          code: totpCode(secret, currentTotpStep()),
+          totpCode: totpCode(secret, currentTotpStep()),
         })
         .expect(200);
 
@@ -370,18 +375,272 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/verify')
         .send({
           challengeToken: login.body.challengeToken,
-          code: totpCode(secret, currentTotpStep() + 1),
+          totpCode: totpCode(secret, currentTotpStep() + 1),
         })
         .expect(401);
+    });
+
+    // -------------------------------------------------- concurrency (I-2)
+    // The sequential replay guard (S-36) and the sequential single-use
+    // challenge (S-45) both passed while the implementation was a
+    // read-then-write race: three simultaneous requests all read
+    // `mfa_last_used_step` before any of them wrote it, and all three passed
+    // the guard's denylist check before `consumeChallenge` ran, so one
+    // captured code + one captured challenge token minted THREE sessions.
+    // These tests fail on the pre-fix implementation.
+    it('S-46 three CONCURRENT verifies with the same challenge token and the same code mint exactly ONE session', async () => {
+      const secret = randomBytes(20);
+      const { userId } = await createLoginableUser({
+        email: 'concurrent-verify@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      await enrolMfaForUser(userId, secret);
+      const server = app.getHttpServer();
+
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: 'concurrent-verify@bevorasg.com', password: PASSWORD })
+        .expect(200);
+
+      const step = currentTotpStep();
+      const code = totpCode(secret, step);
+      const responses = await Promise.all(
+        [0, 1, 2].map(() =>
+          request(server)
+            .post('/api/v1/auth/mfa/verify')
+            .send({ challengeToken: login.body.challengeToken, totpCode: code }),
+        ),
+      );
+
+      const accepted = responses.filter((res) => res.status === 200);
+      expect(accepted).toHaveLength(1);
+      // The other two are rejected, and rejected the SAME opaque way a wrong
+      // code is — never a 500 and never a partial success.
+      for (const rejected of responses.filter((res) => res.status !== 200)) {
+        expect(rejected.status).toBe(401);
+        expect(rejected.body).toMatchObject({ type: '/errors/unauthenticated' });
+      }
+
+      // Exactly one session, i.e. exactly one refresh-token family and one
+      // `login` audit event — not three.
+      expect(responses.filter((res) => extractCookie(res, 'bf_refresh'))).toHaveLength(1);
+      const { rows: families } = await adminPool.query(
+        `SELECT COUNT(DISTINCT "family_id")::int AS n FROM "refresh_token" WHERE "user_id" = $1`,
+        [userId],
+      );
+      expect(families[0].n).toBe(1);
+      expect((await auditActions(userId)).filter((action) => action === 'login')).toHaveLength(1);
+      expect(Number((await userRow(userId)).mfa_last_used_step)).toBe(step);
+    });
+
+    it('S-46 the same captured code presented CONCURRENTLY on THREE different challenge tokens is accepted once', async () => {
+      // This is the case that isolates the RFC 6238 §5.2 replay guard. Three
+      // distinct `jti`s, so the challenge single-use claim cannot arbitrate —
+      // only the conditional `mfa_last_used_step` write can. It is also the
+      // realistic attack: someone holding the password can mint a fresh
+      // challenge token per attempt, so "one captured code, one session" has
+      // to hold across tokens, not just within one.
+      // Replacing the conditional `updateMany` with an unconditional
+      // `update` makes exactly this test go to 3 × 200.
+      const secret = randomBytes(20);
+      const { userId } = await createLoginableUser({
+        email: 'concurrent-tokens@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      await enrolMfaForUser(userId, secret);
+      const server = app.getHttpServer();
+
+      const logins = await Promise.all(
+        [0, 1, 2].map(() =>
+          request(server)
+            .post('/api/v1/auth/login')
+            .send({ email: 'concurrent-tokens@bevorasg.com', password: PASSWORD })
+            .expect(200),
+        ),
+      );
+      const jtis = new Set(logins.map((res) => res.body.challengeToken as string));
+      expect(jtis.size).toBe(3);
+
+      const step = currentTotpStep();
+      const code = totpCode(secret, step);
+      const responses = await Promise.all(
+        logins.map((login) =>
+          request(server)
+            .post('/api/v1/auth/mfa/verify')
+            .send({ challengeToken: login.body.challengeToken, totpCode: code }),
+        ),
+      );
+
+      expect(responses.filter((res) => res.status === 200)).toHaveLength(1);
+      const { rows: families } = await adminPool.query(
+        `SELECT COUNT(DISTINCT "family_id")::int AS n FROM "refresh_token" WHERE "user_id" = $1`,
+        [userId],
+      );
+      expect(families[0].n).toBe(1);
+      expect(Number((await userRow(userId)).mfa_last_used_step)).toBe(step);
+    });
+
+    it('S-46 two CONCURRENT verifies on the same challenge token with codes from DIFFERENT steps still mint exactly ONE session', async () => {
+      // The step guard alone cannot catch this pair: t-1 committing before t
+      // leaves `t-1 < t`, so both would burn cleanly. Only an atomic
+      // single-use claim on the challenge `jti` stops the second one.
+      const secret = randomBytes(20);
+      const { userId } = await createLoginableUser({
+        email: 'concurrent-steps@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      await enrolMfaForUser(userId, secret);
+      const server = app.getHttpServer();
+
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: 'concurrent-steps@bevorasg.com', password: PASSWORD })
+        .expect(200);
+
+      const step = currentTotpStep();
+      const responses = await Promise.all(
+        [step - 1, step].map((s) =>
+          request(server)
+            .post('/api/v1/auth/mfa/verify')
+            .send({ challengeToken: login.body.challengeToken, totpCode: totpCode(secret, s) }),
+        ),
+      );
+
+      expect(responses.filter((res) => res.status === 200)).toHaveLength(1);
+      const { rows: families } = await adminPool.query(
+        `SELECT COUNT(DISTINCT "family_id")::int AS n FROM "refresh_token" WHERE "user_id" = $1`,
+        [userId],
+      );
+      expect(families[0].n).toBe(1);
+    });
+
+    it('S-46 three CONCURRENT enrol/confirms on one challenge token enrol once and issue ONE set of recovery codes', async () => {
+      const { userId } = await createLoginableUser({
+        email: 'concurrent-confirm@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      const server = app.getHttpServer();
+
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: 'concurrent-confirm@bevorasg.com', password: PASSWORD })
+        .expect(200);
+      const enrol = await request(server)
+        .post('/api/v1/auth/mfa/enrol')
+        .send({ challengeToken: login.body.challengeToken })
+        .expect(200);
+
+      const { base32Decode } = await import('../../src/auth/mfa/base32');
+      const code = totpCode(base32Decode(enrol.body.secret), currentTotpStep());
+      const responses = await Promise.all(
+        [0, 1, 2].map(() =>
+          request(server)
+            .post('/api/v1/auth/mfa/enrol/confirm')
+            .send({ challengeToken: login.body.challengeToken, totpCode: code }),
+        ),
+      );
+
+      expect(responses.filter((res) => res.status === 200)).toHaveLength(1);
+      // Ten recovery codes exist, not twenty or thirty, and one enrolment
+      // audit event, not three.
+      const { rows } = await adminPool.query(
+        `SELECT COUNT(*)::int AS n FROM "mfa_recovery_code" WHERE "user_id" = $1`,
+        [userId],
+      );
+      expect(rows[0].n).toBe(10);
+      expect((await auditActions(userId)).filter((a) => a === 'mfa_enrolled')).toHaveLength(1);
+    });
+
+    it('S-46 a verify and a recovery redeemed CONCURRENTLY on ONE challenge token mint exactly ONE session', async () => {
+      // This is the case that isolates the challenge-token claim. The two
+      // requests contend over completely different atomic primitives — one
+      // burns a TOTP step on `app_user`, the other burns a row in
+      // `mfa_recovery_code` — so neither of those guards can arbitrate
+      // between them. Only a single-use claim on the challenge `jti` can.
+      // Replacing `denylist.claim()` (SET NX) with the old
+      // check-then-`denylist()` pair makes exactly this test go to 2 × 200.
+      const secret = randomBytes(20);
+      const { userId } = await createLoginableUser({
+        email: 'concurrent-mixed@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      await enrolMfaForUser(userId, secret);
+      const recoveryCode = 'MMMM-NNNN-OOOO-PPPP-QQQQ-RRRR-SSSS-TTTT';
+      await seedRecoveryCodes(userId, [recoveryCode]);
+      const server = app.getHttpServer();
+
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: 'concurrent-mixed@bevorasg.com', password: PASSWORD })
+        .expect(200);
+
+      const responses = await Promise.all([
+        request(server)
+          .post('/api/v1/auth/mfa/verify')
+          .send({
+            challengeToken: login.body.challengeToken,
+            totpCode: totpCode(secret, currentTotpStep()),
+          }),
+        request(server)
+          .post('/api/v1/auth/mfa/recovery')
+          .send({ challengeToken: login.body.challengeToken, recoveryCode }),
+      ]);
+
+      expect(responses.filter((res) => res.status === 200)).toHaveLength(1);
+      const { rows: families } = await adminPool.query(
+        `SELECT COUNT(DISTINCT "family_id")::int AS n FROM "refresh_token" WHERE "user_id" = $1`,
+        [userId],
+      );
+      expect(families[0].n).toBe(1);
+      expect((await auditActions(userId)).filter((action) => action === 'login')).toHaveLength(1);
+    });
+
+    it('S-46 two CONCURRENT recovery redemptions of the same code mint exactly ONE session', async () => {
+      const { userId } = await createLoginableUser({
+        email: 'concurrent-recovery@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      await enrolMfaForUser(userId, randomBytes(20));
+      const code = 'AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH';
+      await seedRecoveryCodes(userId, [code]);
+      const server = app.getHttpServer();
+
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: 'concurrent-recovery@bevorasg.com', password: PASSWORD })
+        .expect(200);
+
+      const responses = await Promise.all(
+        [0, 1].map(() =>
+          request(server)
+            .post('/api/v1/auth/mfa/recovery')
+            .send({ challengeToken: login.body.challengeToken, recoveryCode: code }),
+        ),
+      );
+      expect(responses.filter((res) => res.status === 200)).toHaveLength(1);
+      const { rows: families } = await adminPool.query(
+        `SELECT COUNT(DISTINCT "family_id")::int AS n FROM "refresh_token" WHERE "user_id" = $1`,
+        [userId],
+      );
+      expect(families[0].n).toBe(1);
     });
 
     it('a garbage or absent challenge token is 401, indistinguishable from a wrong code', async () => {
       const server = app.getHttpServer();
       await request(server)
         .post('/api/v1/auth/mfa/verify')
-        .send({ challengeToken: 'not.a.token', code: '123456' })
+        .send({ challengeToken: 'not.a.token', totpCode: '123456' })
         .expect(401);
-      await request(server).post('/api/v1/auth/mfa/verify').send({ code: '123456' }).expect(401);
+      await request(server)
+        .post('/api/v1/auth/mfa/verify')
+        .send({ totpCode: '123456' })
+        .expect(401);
     });
 
     it('S-37 wrong TOTP codes feed the SAME account-lockout counter a wrong password does', async () => {
@@ -410,7 +669,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
           .expect(200);
         await request(server)
           .post('/api/v1/auth/mfa/verify')
-          .send({ challengeToken: login.body.challengeToken, code: '000000' })
+          .send({ challengeToken: login.body.challengeToken, totpCode: '000000' })
           .expect(401);
       }
       expect((await userRow(userId)).failed_login_count).toBe(4);
@@ -422,7 +681,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       const locked = await request(server)
         .post('/api/v1/auth/mfa/verify')
-        .send({ challengeToken: fifth.body.challengeToken, code: '000000' })
+        .send({ challengeToken: fifth.body.challengeToken, totpCode: '000000' })
         .expect(429);
       expect(locked.body).toMatchObject({ type: '/errors/rate-limited' });
       expect(locked.headers['retry-after']).toBeDefined();
@@ -454,7 +713,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       await request(server)
         .post('/api/v1/auth/mfa/verify')
-        .send({ challengeToken: first.body.challengeToken, code: '000000' })
+        .send({ challengeToken: first.body.challengeToken, totpCode: '000000' })
         .expect(401);
       expect((await userRow(userId)).failed_login_count).toBe(1);
 
@@ -466,10 +725,68 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/verify')
         .send({
           challengeToken: second.body.challengeToken,
-          code: totpCode(secret, currentTotpStep()),
+          totpCode: totpCode(secret, currentTotpStep()),
         })
         .expect(200);
       expect((await userRow(userId)).failed_login_count).toBe(0);
+    });
+
+    // M-4 — before the fix pass `/auth/mfa/enrol` was the ONE MFA entry point
+    // with neither a rate limit nor a lockout check. The reviewer's probe C
+    // got 30 × 200 from a single challenge token, each minting a fresh
+    // 160-bit secret and an AES-GCM encrypt.
+    it('rate-limits /auth/mfa/enrol at 10/min per user, with Retry-After (M-4)', async () => {
+      await createLoginableUser({
+        email: 'enrol-ratelimit@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      const server = app.getHttpServer();
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: 'enrol-ratelimit@bevorasg.com', password: PASSWORD })
+        .expect(200);
+
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < 11; attempt += 1) {
+        const res = await request(server)
+          .post('/api/v1/auth/mfa/enrol')
+          .send({ challengeToken: login.body.challengeToken });
+        statuses.push(res.status);
+        if (res.status === 429) {
+          expect(res.body).toMatchObject({ type: '/errors/rate-limited' });
+          expect(res.headers['retry-after']).toBeDefined();
+        }
+      }
+      expect(statuses.slice(0, 10)).toEqual(Array(10).fill(200));
+      expect(statuses[10]).toBe(429);
+    });
+
+    it('refuses /auth/mfa/enrol while the account is locked out (M-4)', async () => {
+      const { userId } = await createLoginableUser({
+        email: 'enrol-locked@bevorasg.com',
+        password: PASSWORD,
+        roleCodes: ['ADMIN'],
+      });
+      const server = app.getHttpServer();
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: 'enrol-locked@bevorasg.com', password: PASSWORD })
+        .expect(200);
+
+      await adminPool.query(
+        `UPDATE "app_user" SET "failed_login_count" = 5, "locked_until" = now() + interval '15 minutes' WHERE "id" = $1`,
+        [userId],
+      );
+
+      const res = await request(server)
+        .post('/api/v1/auth/mfa/enrol')
+        .send({ challengeToken: login.body.challengeToken });
+      expect(res.status).toBe(429);
+      expect(res.body).toMatchObject({ type: '/errors/rate-limited' });
+      expect(res.headers['retry-after']).toBeDefined();
+      // Nothing was minted for a locked account.
+      expect((await userRow(userId)).mfa_secret_ct).toBeNull();
     });
 
     it('rate-limits /auth/mfa/verify at 10/min per user (brief §6)', async () => {
@@ -498,7 +815,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
       for (let attempt = 0; attempt < 11; attempt += 1) {
         const res = await request(app.getHttpServer())
           .post('/api/v1/auth/mfa/verify')
-          .send({ challengeToken: login.body.challengeToken, code: '000000' });
+          .send({ challengeToken: login.body.challengeToken, totpCode: '000000' });
         statuses.push(res.status);
       }
       // Whatever the mix of 401/429 from the lockout, the 11th call must be a
@@ -541,7 +858,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/enrol/confirm')
         .send({
           challengeToken: login.body.challengeToken,
-          code: totpCode(secret, currentTotpStep()),
+          totpCode: totpCode(secret, currentTotpStep()),
         })
         .expect(200);
 
@@ -585,7 +902,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/enrol/confirm')
         .send({
           challengeToken: login.body.challengeToken,
-          code: totpCode(base32Decode(first.body.secret), currentTotpStep()),
+          totpCode: totpCode(base32Decode(first.body.secret), currentTotpStep()),
         })
         .expect(401);
       // ...and the current one does.
@@ -593,7 +910,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/enrol/confirm')
         .send({
           challengeToken: login.body.challengeToken,
-          code: totpCode(base32Decode(second.body.secret), currentTotpStep()),
+          totpCode: totpCode(base32Decode(second.body.secret), currentTotpStep()),
         })
         .expect(200);
     });
@@ -638,7 +955,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/enrol/confirm')
         .send({
           challengeToken: login.body.challengeToken,
-          code: totpCode(base32Decode(enrol.body.secret), currentTotpStep()),
+          totpCode: totpCode(base32Decode(enrol.body.secret), currentTotpStep()),
         })
         .expect(200);
 
@@ -695,7 +1012,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       const redeemed = await request(server)
         .post('/api/v1/auth/mfa/recovery')
-        .send({ challengeToken: first.body.challengeToken, code })
+        .send({ challengeToken: first.body.challengeToken, recoveryCode: code })
         .expect(200);
       expect(authResultSchema.safeParse(redeemed.body).success).toBe(true);
       expect(await auditActions(userId)).toContain('mfa_recovery_code_used');
@@ -714,7 +1031,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       await request(server)
         .post('/api/v1/auth/mfa/recovery')
-        .send({ challengeToken: second.body.challengeToken, code })
+        .send({ challengeToken: second.body.challengeToken, recoveryCode: code })
         .expect(401);
     });
 
@@ -736,7 +1053,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/recovery')
         .send({
           challengeToken: login.body.challengeToken,
-          code: 'aaaa bbbb cccc dddd eeee ffff gggg hhhh',
+          recoveryCode: 'aaaa bbbb cccc dddd eeee ffff gggg hhhh',
         })
         .expect(200);
     });
@@ -763,7 +1080,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       await request(app.getHttpServer())
         .post('/api/v1/auth/mfa/recovery')
-        .send({ challengeToken: login.body.challengeToken, code: victimCode })
+        .send({ challengeToken: login.body.challengeToken, recoveryCode: victimCode })
         .expect(401);
 
       // The victim's code is still unused and still works for the victim.
@@ -773,7 +1090,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .expect(200);
       await request(app.getHttpServer())
         .post('/api/v1/auth/mfa/recovery')
-        .send({ challengeToken: victimLogin.body.challengeToken, code: victimCode })
+        .send({ challengeToken: victimLogin.body.challengeToken, recoveryCode: victimCode })
         .expect(200);
     });
 
@@ -793,7 +1110,7 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .post('/api/v1/auth/mfa/recovery')
         .send({
           challengeToken: login.body.challengeToken,
-          code: 'QQQQ-QQQQ-QQQQ-QQQQ-QQQQ-QQQQ-QQQQ-QQQQ',
+          recoveryCode: 'QQQQ-QQQQ-QQQQ-QQQQ-QQQQ-QQQQ-QQQQ-QQQQ',
         })
         .expect(401);
       expect((await userRow(userId)).failed_login_count).toBe(1);
@@ -900,6 +1217,31 @@ describe('Slice 13-MFA — TOTP multi-factor authentication', () => {
         .set('Authorization', `Bearer ${login.body.accessToken}`)
         .expect(403);
       expect((await userRow(victim.userId)).mfa_enrolled).toBe(true);
+    });
+
+    // I-1: openapi.yaml promises 404 on this operation. There is no global
+    // exception filter, so a bare `findUniqueOrThrow` surfaced Prisma's
+    // P2025/P2023 as a non-RFC-9457 500.
+    it('an unknown user id is 404 /errors/not-found, exactly as the contract promises', async () => {
+      const token = await adminToken();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/users/00000000-0000-7000-8000-000000000000/mfa-reset')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+      expect(res.body).toMatchObject({
+        type: '/errors/not-found',
+        title: 'Not found',
+        status: 404,
+      });
+    });
+
+    it('a malformed (non-UUID) user id is 404, not a 500', async () => {
+      const token = await adminToken();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/users/not-a-uuid/mfa-reset')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+      expect(res.body).toMatchObject({ type: '/errors/not-found', status: 404 });
     });
 
     it('is refused without any token at all (deny-by-default)', async () => {

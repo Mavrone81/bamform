@@ -23,6 +23,15 @@ const REDACTED = '[REDACTED]';
  * `roleCode`, `assetCode`, `areaCode`, `codeBidx` and the machine codes are
  * all non-secret and redacting them would make failure logs unreadable for
  * no security gain.
+ *
+ * That exclusion left a residue the review caught (M-5): two MFA DTO fields
+ * were themselves called `code` and held a live TOTP code and a live recovery
+ * code. The fix was to rename the FIELDS — they are now `totpCode` and
+ * `recoveryCode` (`shared/src/mfa.ts`), both of which the pattern below
+ * already matches — rather than to widen the pattern and blind every failure
+ * log to `roleCode`. Naming a field for what it holds is what makes brief
+ * §8's "never log a TOTP code, a recovery code" structural instead of
+ * accidental.
  */
 const SENSITIVE_KEY_PATTERN =
   /pass(?:word)?|secret|token|api[-_]?key|authorization|cookie|dek\b|private[-_]?key|signing[-_]?key|hmac|blind[-_]?index[-_]?key|client[-_]?secret|recovery[-_]?code|backup[-_]?code|otpauth|totp/i;

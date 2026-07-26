@@ -8,9 +8,18 @@ import { authResultSchema } from './auth';
  * (ADR-002: one rule, validated the same way client and server).
  *
  * ⚠️ Nothing in this file is ever logged. `secret`, `otpauthUri`,
- * `recoveryCodes`, `code` and both password fields are credential material;
- * `RedactingLogger` (`common/logging/redacting-logger.ts`) covers the key
- * names, and job 6's `test:log-redaction` is the gate.
+ * `recoveryCodes`, `totpCode`, `recoveryCode` and both password fields are
+ * credential material; `RedactingLogger`
+ * (`common/logging/redacting-logger.ts`) covers the key names, and job 6's
+ * `test:log-redaction` is the gate.
+ *
+ * The two credential fields are named `totpCode` and `recoveryCode`, not
+ * `code` (review finding M-5). A bare `code` cannot be added to the redaction
+ * pattern — `roleCode`, `assetCode`, `areaCode` and the machine codes are all
+ * non-secret and redacting them would make failure logs unreadable — so
+ * naming the field for what it holds is what actually makes brief §8's "never
+ * log a recovery code, a TOTP code" true by construction rather than by
+ * nobody happening to log a request body.
  */
 
 /** A 6-digit TOTP code, or the same code as the authenticator app groups it ("123 456"). */
@@ -82,7 +91,7 @@ export type MfaEnrolResponse = z.infer<typeof mfaEnrolResponseSchema>;
 // ------------------------------------------------ POST /auth/mfa/enrol/confirm
 
 export const mfaEnrolConfirmRequestSchema = z.object({
-  code: totpCodeSchema,
+  totpCode: totpCodeSchema,
   challengeToken: challengeTokenSchema.optional(),
 });
 export type MfaEnrolConfirmRequest = z.infer<typeof mfaEnrolConfirmRequestSchema>;
@@ -103,7 +112,7 @@ export type MfaEnrolConfirmResponse = z.infer<typeof mfaEnrolConfirmResponseSche
 
 export const mfaVerifyRequestSchema = z.object({
   challengeToken: challengeTokenSchema,
-  code: totpCodeSchema,
+  totpCode: totpCodeSchema,
 });
 export type MfaVerifyRequest = z.infer<typeof mfaVerifyRequestSchema>;
 
@@ -111,7 +120,7 @@ export type MfaVerifyRequest = z.infer<typeof mfaVerifyRequestSchema>;
 
 export const mfaRecoveryRequestSchema = z.object({
   challengeToken: challengeTokenSchema,
-  code: recoveryCodeSchema,
+  recoveryCode: recoveryCodeSchema,
 });
 export type MfaRecoveryRequest = z.infer<typeof mfaRecoveryRequestSchema>;
 

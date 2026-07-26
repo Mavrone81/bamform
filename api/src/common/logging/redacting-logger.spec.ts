@@ -80,6 +80,11 @@ describe('S-15 (threat I-3): secrets never appear in log output', () => {
         ['recoveryCodes', RECOVERY_CODE],
         ['backupCodes', RECOVERY_CODE],
         ['totpSecret', TOTP_SECRET],
+        // M-5: the two DTO fields that carry a LIVE credential. They were
+        // named `code`, which cannot be added to the redaction pattern
+        // without swallowing roleCode/assetCode/areaCode; renaming them is
+        // what makes brief §8 true by construction.
+        ['totpCode', '123456'],
         ['currentPassword', KNOWN_PASSWORD],
         ['newPassword', KNOWN_PASSWORD],
       ])('redacts the `%s` field', (key, value) => {
@@ -106,6 +111,31 @@ describe('S-15 (threat I-3): secrets never appear in log output', () => {
         expect(
           redactSecrets({ roleCode: 'ADMIN', assetCode: 'PMP-001', codeBidx: 'deadbeef' }),
         ).toEqual({ roleCode: 'ADMIN', assetCode: 'PMP-001', codeBidx: 'deadbeef' });
+      });
+
+      // M-5 — the whole point of the rename: an /auth/mfa request body, as a
+      // logger would see it, leaks nothing. Before the rename the credential
+      // field was called `code` and came through in the clear.
+      it('redacts a whole /auth/mfa/verify request body', () => {
+        const json = JSON.stringify(
+          redactSecrets({ challengeToken: CHALLENGE, totpCode: '123456' }),
+        );
+        expect(json).not.toContain(CHALLENGE);
+        expect(json).not.toContain('123456');
+      });
+
+      it('redacts a whole /auth/mfa/recovery request body', () => {
+        const json = JSON.stringify(
+          redactSecrets({ challengeToken: CHALLENGE, recoveryCode: RECOVERY_CODE }),
+        );
+        expect(json).not.toContain(CHALLENGE);
+        expect(json).not.toContain(RECOVERY_CODE);
+      });
+
+      it('redacts a whole /auth/mfa/enrol/confirm request body, access-token flavour (no sibling token to key off)', () => {
+        // Deliberately no `challengeToken` sibling: the redaction must come
+        // from the field NAME, not from a heuristic about its neighbours.
+        expect(JSON.stringify(redactSecrets({ totpCode: '654321' }))).not.toContain('654321');
       });
     });
   });

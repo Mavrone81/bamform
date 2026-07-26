@@ -228,6 +228,9 @@ paths:
         an enrolled state is `POST /users/{userId}/mfa-reset`.
 
         The QR image is rendered client-side; the API has no QR dependency.
+
+        Rate-limited 10/min per user, and refused with 429 while the account
+        is locked out - the same treatment as its three siblings.
       security:
         - bearerAuth: []
         - {}
@@ -249,6 +252,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
 
   /auth/mfa/enrol/confirm:
     post:
@@ -267,6 +271,11 @@ paths:
 
         Failures count toward the same account-lockout counter a wrong
         password does. Rate-limited 10/min per user.
+
+        NEVER ANONYMOUS. The empty `{}` security requirement below does not
+        mean "no credential" - it means the credential is the `challengeToken`
+        body field, which OpenAPI 3.1 cannot express as a security scheme. An
+        unauthenticated caller gets 401.
       security:
         - bearerAuth: []
         - {}
@@ -303,8 +312,15 @@ paths:
         An accepted code's time step is recorded, so the same code cannot be
         replayed inside its own 30-second window. A wrong code returns the
         same opaque 401 as a wrong/expired challenge token, and counts toward
-        the account-lockout counter. The challenge token is single-use.
-        Rate-limited 10/min per user.
+        the account-lockout counter. Rate-limited 10/min per user.
+
+        The challenge token is SINGLE-USE: the first request to redeem it wins
+        and every other one - including a simultaneous one - gets 401.
+
+        NEVER ANONYMOUS. The empty `{}` security requirement below does not
+        mean "no credential" - it means the credential is the `challengeToken`
+        body field, which OpenAPI 3.1 cannot express as a security scheme. An
+        unauthenticated caller gets 401.
       security:
         - {}
       requestBody:
@@ -335,7 +351,13 @@ paths:
         Redeems one of the ten codes issued at enrolment. The code is marked
         used and can never be redeemed again (it is never deleted - INV-07).
         Audited as `mfa_recovery_code_used`. Failures count toward the
-        account-lockout counter. Rate-limited 5/min per user.
+        account-lockout counter. Rate-limited 5/min per user. The
+        `challengeToken` is single-use, as on `/auth/mfa/verify`.
+
+        NEVER ANONYMOUS. The empty `{}` security requirement below does not
+        mean "no credential" - it means the credential is the `challengeToken`
+        body field, which OpenAPI 3.1 cannot express as a security scheme. An
+        unauthenticated caller gets 401.
       security:
         - {}
       requestBody:
@@ -2152,7 +2174,18 @@ components:
 
   responses:
     Problem:
-      description: RFC 9457 Problem Details
+      description: |
+        RFC 9457 Problem Details.
+
+        Note for every AUTHENTICATED operation in this document, whether or
+        not it lists a 403: since slice 13-MFA a user whose
+        `must_change_password` flag is set receives
+        `403 /errors/password-change-required` from ANY endpoint other than
+        `GET /auth/me`, `POST /auth/password` and `POST /auth/logout`, until
+        they change their password. It is a global deny-by-default guard, not
+        a per-endpoint rule, so it is documented once here rather than
+        repeated on ~60 operations. Clients should handle that `type`
+        globally.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -2281,9 +2314,9 @@ components:
 
     MfaEnrolConfirmRequest:
       type: object
-      required: [code]
+      required: [totpCode]
       properties:
-        code: { type: string, description: The 6-digit code from the authenticator app. }
+        totpCode: { type: string, description: The 6-digit code from the authenticator app. }
         challengeToken: { type: string }
 
     MfaEnrolConfirmResponse:
@@ -2302,17 +2335,17 @@ components:
 
     MfaVerifyRequest:
       type: object
-      required: [challengeToken, code]
+      required: [challengeToken, totpCode]
       properties:
         challengeToken: { type: string }
-        code: { type: string, description: The 6-digit code from the authenticator app. }
+        totpCode: { type: string, description: The 6-digit code from the authenticator app. }
 
     MfaRecoveryRequest:
       type: object
-      required: [challengeToken, code]
+      required: [challengeToken, recoveryCode]
       properties:
         challengeToken: { type: string }
-        code: { type: string, description: One of the single-use recovery codes issued at enrolment. }
+        recoveryCode: { type: string, description: One of the single-use recovery codes issued at enrolment. }
 
     PasswordChangeRequest:
       type: object

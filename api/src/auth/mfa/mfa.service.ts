@@ -1,8 +1,10 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import type { MfaEnrolConfirmResponse, MfaEnrolResponse } from '@bamform/shared';
-import { AuditActionT, type AppUser } from '@prisma/client';
+import { AuditActionT, Prisma, type AppUser } from '@prisma/client';
 import { AuditEventService } from '../../audit/audit-event.service';
+import { notFoundProblem } from '../../common/domain-problems';
 import { toBytes } from '../../common/prisma-bytes';
+import { isUuid } from '../../common/uuid';
 import { FIELD_ENCRYPTION_SERVICE } from '../../crypto/crypto.tokens';
 import type { FieldEncryptionService } from '../../crypto/field-encryption';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -48,13 +50,18 @@ function toStep(value: bigint | null): number | null {
  *
  * 1. **Replay guard.** Every accepted TOTP step is written to
  *    `app_user.mfa_last_used_step` in the SAME transaction that issues the
- *    session, and `verifyTotp` refuses any step `<=` it. A captured code
- *    cannot be reused inside its own 30 s window (RFC 6238 §5.2).
+ *    session, by a CONDITIONAL `updateMany` whose predicate is the guard
+ *    itself, so it holds under concurrency and not merely in sequence. A
+ *    captured code cannot be reused inside its own 30 s window (RFC 6238
+ *    §5.2), even by simultaneous requests.
  * 2. **Shared lockout.** Every failed code or recovery code goes through
  *    `AccountLockoutService.recordFailure`, i.e. the same
- *    `failed_login_count` a wrong password increments.
- * 3. **Single-use challenge.** A redeemed challenge token's `jti` is
- *    denylisted for its remaining life, so it cannot complete a second login.
+ *    `failed_login_count` a wrong password increments. Every entry point
+ *    calls `assertNotLocked` first.
+ * 3. **Single-use challenge.** A redeemed challenge token's `jti` is claimed
+ *    with a single Redis `SET NX` — inside the issuing transaction and before
+ *    the session exists — so exactly one request can ever spend a given
+ *    challenge, and it cannot complete a second login.
  * 4. **Nothing is logged.** No method here logs, and no secret, recovery
  *    code or TOTP code is ever placed in an audit `before`/`after` payload
  *    (PR-SEC-02 already forbids personal data there; credential material even
@@ -92,9 +99,18 @@ export class MfaService {
    * MFA while holding a required role" — re-enrolment is a disable-and-
    * re-enable in disguise. The only way out of an enrolled state is the
    * ADMIN reset.
+   *
+   * Rate-limited and lockout-checked like its three siblings (review finding
+   * M-4). It was the only MFA entry point with neither, and it is reachable
+   * on a challenge token — i.e. with the password alone — for that token's
+   * five-minute life, so an unbounded caller could drive an unlimited number
+   * of 160-bit secret generations, AES-GCM encrypts and row updates.
    */
   async enrol(actor: MfaActor): Promise<MfaEnrolResponse> {
-    const user = await this.prisma.appUser.findUniqueOrThrow({ where: { id: actor.userId } });
+    await this.enforceRateLimit('mfa-enrol', actor.userId, this.mfaConfig.enrolRateLimitPerMinute);
+
+    const user = await this.subjectOf(actor.userId);
+    this.lockout.assertNotLocked(user);
 
     if (user.mfaEnrolled) {
       throw new ConflictException({
@@ -152,7 +168,7 @@ export class MfaService {
       this.mfaConfig.verifyRateLimitPerMinute,
     );
 
-    const user = await this.prisma.appUser.findUniqueOrThrow({ where: { id: actor.userId } });
+    const user = await this.subjectOf(actor.userId);
     this.lockout.assertNotLocked(user);
 
     if (user.mfaEnrolled || !user.mfaSecretCt || user.mfaSecretDekVersion === null) {
@@ -172,14 +188,26 @@ export class MfaService {
     const now = new Date();
 
     const outcome = await this.prisma.$transaction(async (tx) => {
-      await tx.appUser.update({
-        where: { id: user.id },
+      // Atomic, for the same reason `verify` is (I-2): without the
+      // `mfaEnrolled: false` predicate, three concurrent confirms on one
+      // challenge token all flipped the flag and each minted its own ten
+      // recovery codes — thirty rows for one enrolment. The step predicate
+      // rides along so a confirm cannot replay a step either.
+      const enrolled = await tx.appUser.updateMany({
+        where: {
+          id: user.id,
+          mfaEnrolled: false,
+          ...stepNotYetUsed(verification.step!),
+        },
         data: {
           mfaEnrolled: true,
           mfaEnrolledAt: now,
           mfaLastUsedStep: BigInt(verification.step!),
         },
       });
+      if (enrolled.count !== 1) {
+        throw invalidCredentialsProblem();
+      }
 
       for (const recoveryCode of recoveryCodes) {
         await tx.mfaRecoveryCode.create({
@@ -202,10 +230,12 @@ export class MfaService {
         requestId: meta.requestId,
       });
 
-      return actor.challenge ? await this.sessions.issue(tx, user.id, meta) : undefined;
+      if (!actor.challenge) {
+        return undefined;
+      }
+      await this.claimChallenge(actor);
+      return this.sessions.issue(tx, user.id, meta);
     });
-
-    await this.consumeChallenge(actor);
 
     return {
       response: { recoveryCodes, auth: outcome?.result ?? null },
@@ -223,7 +253,7 @@ export class MfaService {
       this.mfaConfig.verifyRateLimitPerMinute,
     );
 
-    const user = await this.prisma.appUser.findUniqueOrThrow({ where: { id: actor.userId } });
+    const user = await this.subjectOf(actor.userId);
     this.lockout.assertNotLocked(user);
 
     if (!user.mfaEnrolled || !user.mfaSecretCt || user.mfaSecretDekVersion === null) {
@@ -240,19 +270,26 @@ export class MfaService {
       throw await this.lockout.recordFailure(this.prisma, user, meta);
     }
 
-    const outcome = await this.prisma.$transaction(async (tx) => {
-      // RFC 6238 §5.2 replay guard. Written in the SAME transaction as the
-      // session issue, so there is no window in which a session exists but
-      // the step has not been burned.
-      await tx.appUser.update({
-        where: { id: user.id },
-        data: { mfaLastUsedStep: BigInt(verification.step!) },
-      });
+    return this.prisma.$transaction(async (tx) => {
+      // RFC 6238 §5.2 replay guard, made ATOMIC (review finding I-2). The
+      // pre-check inside `verifyTotp` above reads `mfa_last_used_step`
+      // OUTSIDE any transaction, so on its own it is a read-then-write race:
+      // three simultaneous verifies carrying the same captured code all read
+      // the old value and all three were accepted. Putting the predicate in
+      // the WHERE clause makes Postgres arbitrate — under READ COMMITTED the
+      // second writer blocks on the row lock and then re-evaluates the
+      // predicate against the committed row, so exactly one `updateMany` can
+      // report `count === 1`. Same shape as the recovery-code redemption
+      // below; the two single-use primitives now use one pattern.
+      await this.burnTotpStep(tx, user.id, verification.step!);
+      // ...and the challenge token itself is burned before a session exists,
+      // not after. Needed as well as the step guard: two concurrent verifies
+      // carrying codes from DIFFERENT steps (t-1 and t) can BOTH satisfy the
+      // step predicate if they commit in ascending order, and only the
+      // single-use claim on the `jti` stops the second one.
+      await this.claimChallenge(actor);
       return this.sessions.issue(tx, user.id, meta);
     });
-
-    await this.consumeChallenge(actor);
-    return outcome;
   }
 
   /**
@@ -267,7 +304,7 @@ export class MfaService {
       this.mfaConfig.recoveryRateLimitPerMinute,
     );
 
-    const user = await this.prisma.appUser.findUniqueOrThrow({ where: { id: actor.userId } });
+    const user = await this.subjectOf(actor.userId);
     this.lockout.assertNotLocked(user);
 
     const bidx = toBytes(computeRecoveryCodeBlindIndex(code, this.blindIndexKey));
@@ -280,7 +317,7 @@ export class MfaService {
       throw await this.lockout.recordFailure(this.prisma, user, meta);
     }
 
-    const outcome = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       // INV-07/INV-16: marked used, NEVER deleted. `updateMany` with
       // `usedAt: null` in the predicate makes the redemption atomic — two
       // concurrent requests with the same code cannot both see a count of 1.
@@ -308,11 +345,9 @@ export class MfaService {
         requestId: meta.requestId,
       });
 
+      await this.claimChallenge(actor);
       return this.sessions.issue(tx, user.id, meta);
     });
-
-    await this.consumeChallenge(actor);
-    return outcome;
   }
 
   // ----------------------------------------------------------- ADMIN reset
@@ -323,12 +358,23 @@ export class MfaService {
    * recovery code, forcing the user to enrol again from scratch.
    *
    * An admin never sees the secret or the codes: this method only writes.
+   *
+   * An id that names no user is the documented `404` (`openapi.yaml`'s
+   * `/users/{userId}/mfa-reset` lists exactly `204/401/403/404`), raised
+   * through the house `notFoundProblem` factory so the body is RFC 9457 like
+   * every other error in the system. A malformed id is the same 404 rather
+   * than a Prisma P2023 escaping as a 500 — review finding I-1.
    */
   async resetForUser(
     subjectUserId: string,
     actor: { actorId: string; sourceIp?: string; requestId?: string },
   ): Promise<void> {
-    const subject = await this.prisma.appUser.findUniqueOrThrow({ where: { id: subjectUserId } });
+    const subject = isUuid(subjectUserId)
+      ? await this.prisma.appUser.findUnique({ where: { id: subjectUserId } })
+      : null;
+    if (!subject) {
+      throw notFoundProblem('User', subjectUserId);
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.appUser.update({
@@ -367,6 +413,26 @@ export class MfaService {
 
   // -------------------------------------------------------------- internals
 
+  /**
+   * The user behind an already-VERIFIED principal (an access token's `sub` or
+   * a challenge token's `sub`), never an id from a request body.
+   *
+   * `findUniqueOrThrow` here would raise Prisma's `P2025`, and with no global
+   * exception filter in `api/src` that leaves the endpoint as a bare 500 —
+   * the same defect review finding I-1 caught on the ADMIN reset. Unreachable
+   * today (`bamform_app` has no DELETE grant on `app_user`, INV-16, so a
+   * signed token's subject always resolves), but if it ever happens it is an
+   * authentication failure, not an internal error, and these endpoints answer
+   * every other failure with the same opaque 401.
+   */
+  private async subjectOf(userId: string): Promise<AppUser> {
+    const user = await this.prisma.appUser.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw invalidCredentialsProblem();
+    }
+    return user;
+  }
+
   private accountName(user: Pick<AppUser, 'id' | 'emailCt' | 'dekVersion'>): string {
     return decodeIdentityField(
       user.emailCt,
@@ -394,16 +460,60 @@ export class MfaService {
   }
 
   /**
+   * RFC 6238 §5.2, atomically: advance `mfa_last_used_step` to `step` only if
+   * it is still strictly below it. A `count` of 0 means another request got
+   * there first with the same or a later step, i.e. this is a replay — which
+   * the caller reports as ordinary invalid credentials, giving an attacker no
+   * signal that they lost a race rather than typed a wrong code.
+   *
+   * Deliberately NOT fed into the account-lockout counter: losing a race is
+   * not a failed guess, and counting it would let a user with a flaky client
+   * that retries lock themselves out.
+   */
+  private async burnTotpStep(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    step: number,
+  ): Promise<void> {
+    const burned = await tx.appUser.updateMany({
+      where: { id: userId, ...stepNotYetUsed(step) },
+      data: { mfaLastUsedStep: BigInt(step) },
+    });
+    if (burned.count !== 1) {
+      throw invalidCredentialsProblem();
+    }
+  }
+
+  /**
    * Burn the challenge token that authorised this operation, so it cannot
    * complete a second login (brief §4: a replayed challenge token is a 401).
    * Uses the same Redis `jti` denylist PR-088 already uses for logged-out
-   * access tokens.
+   * access tokens, but through `claim()` — a single `SET NX` — so the check
+   * and the write cannot be interleaved (review finding I-2).
+   *
+   * Called INSIDE the issuing transaction and BEFORE `sessions.issue`, so
+   * there is no instant at which a session exists on a challenge that has not
+   * been burned. Redis is not transactional with Postgres, so the one
+   * remaining asymmetry is fail-CLOSED: if the surrounding transaction rolls
+   * back after the claim, the challenge is spent and the user logs in again.
    */
-  private async consumeChallenge(actor: MfaActor): Promise<void> {
+  private async claimChallenge(actor: MfaActor): Promise<void> {
     if (!actor.challenge) {
       return;
     }
     const remainingTtl = actor.challenge.exp - Math.floor(Date.now() / 1000);
-    await this.denylist.denylist(actor.challenge.jti, remainingTtl);
+    const claimed = await this.denylist.claim(actor.challenge.jti, remainingTtl);
+    if (!claimed) {
+      throw invalidCredentialsProblem();
+    }
   }
+}
+
+/**
+ * The replay-guard predicate, shared by `verify` and `enrol/confirm` so the
+ * two cannot drift: the stored high-water mark is either absent (a fresh
+ * secret) or strictly older than the step being accepted.
+ */
+function stepNotYetUsed(step: number): Prisma.AppUserWhereInput {
+  return { OR: [{ mfaLastUsedStep: null }, { mfaLastUsedStep: { lt: BigInt(step) } }] };
 }

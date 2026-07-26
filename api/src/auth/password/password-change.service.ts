@@ -66,7 +66,16 @@ export class PasswordChangeService {
       );
     }
 
-    const user = await this.prisma.appUser.findUniqueOrThrow({ where: { id: userId } });
+    // `findUnique` + an explicit 401, not `findUniqueOrThrow`: there is no
+    // global exception filter in `api/src`, so Prisma's P2025 would leave a
+    // bare `500 {"statusCode":500,...}` — the defect review finding I-1
+    // caught on the ADMIN reset. Unreachable today (no DELETE grant on
+    // `app_user`, INV-16) but a principal that no longer resolves is an
+    // authentication failure, not an internal error.
+    const user = await this.prisma.appUser.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw invalidCredentialsProblem();
+    }
 
     const currentValid = user.passwordHash
       ? await this.passwordService.verify(user.passwordHash, currentPassword)

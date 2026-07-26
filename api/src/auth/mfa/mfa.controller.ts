@@ -42,11 +42,19 @@ export class MfaController {
   @Post('enrol')
   @HttpCode(HttpStatus.OK)
   @MfaChallengeAuth('challenge-or-access')
-  enrol(
+  async enrol(
     @Body(new ZodValidationPipe(mfaEnrolRequestSchema)) _dto: MfaEnrolRequest,
     @Req() req: RequestWithPrincipals,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.mfa.enrol(actorFrom(req));
+    // Rate-limited and lockout-checked since the fix pass (M-4), so it can
+    // now answer 429 and owes the same `Retry-After` its siblings send.
+    try {
+      return await this.mfa.enrol(actorFrom(req));
+    } catch (error) {
+      applyRetryAfter(res, error);
+      throw error;
+    }
   }
 
   @Post('enrol/confirm')
@@ -60,7 +68,7 @@ export class MfaController {
     try {
       const { response, refreshToken } = await this.mfa.confirmEnrolment(
         actorFrom(req),
-        dto.code,
+        dto.totpCode,
         requestMeta(req),
       );
       if (refreshToken) {
@@ -84,7 +92,7 @@ export class MfaController {
     try {
       const { result, refreshToken } = await this.mfa.verify(
         actorFrom(req),
-        dto.code,
+        dto.totpCode,
         requestMeta(req),
       );
       setRefreshCookie(res, refreshToken);
@@ -106,7 +114,7 @@ export class MfaController {
     try {
       const { result, refreshToken } = await this.mfa.redeemRecoveryCode(
         actorFrom(req),
-        dto.code,
+        dto.recoveryCode,
         requestMeta(req),
       );
       setRefreshCookie(res, refreshToken);

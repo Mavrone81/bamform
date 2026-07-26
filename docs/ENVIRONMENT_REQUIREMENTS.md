@@ -232,6 +232,33 @@ A compromised session-token key must not confer the ability to forge historical 
 | `RATE_LIMIT_API_PER_MIN` | int | `300` | N | N | Per authenticated user |
 | `SESSION_IDLE_TIMEOUT_MINUTES` | int | `60` | N | N | UR-097 |
 | `PASSWORD_MIN_LENGTH` | int | `12` | N | N | |
+| `RATE_LIMIT_STEP_UP_PER_MIN` | int | `10` | N | N | Per user (PR-091/PR-092) |
+
+### 4.6.1 Multi-factor auth and forced password change (slice 13-MFA)
+
+| Variable | Type | Default | Required | Secret | Description |
+|---|---|---|---|---|---|
+| `MFA_ENABLED` | bool | **`false`** | N | N | **Master switch for ALL MFA enforcement. MUST stay `false` until slice 13-UI is deployed** — see PR-ENV-10 |
+| `MFA_REQUIRED_ROLES` | CSV | `ADMIN,TEAM_LEADER,ENGINEER,DOC_CONTROLLER,AUDITOR` | N | N | `MAINTAINER` deliberately absent (SEC §14 RS-3/SO-3) |
+| `MFA_TOTP_ISSUER` | string | `BamForm` | N | N | Shown in the authenticator app |
+| `MFA_CHALLENGE_TTL_SECONDS` | int | `300` | N | N | Life of the post-password login challenge token |
+| `RATE_LIMIT_MFA_VERIFY_PER_MIN` | int | `10` | N | N | Per user; also `/auth/mfa/enrol/confirm` |
+| `RATE_LIMIT_MFA_ENROL_PER_MIN` | int | `10` | N | N | Per user (`POST /auth/mfa/enrol`) |
+| `RATE_LIMIT_MFA_RECOVERY_PER_MIN` | int | `5` | N | N | Per user |
+| `RATE_LIMIT_PASSWORD_CHANGE_PER_MIN` | int | `10` | N | N | Per user (`POST /auth/password`) |
+| `FORCE_PASSWORD_CHANGE_ENABLED` | bool | **`false`** | N | N | Whether `POST /users` marks the new account `must_change_password`. **MUST stay `false` until slice 13-UI is deployed** — see PR-ENV-10 |
+
+**PR-ENV-10** `MFA_ENABLED` and `FORCE_PASSWORD_CHANGE_ENABLED` are **deployment-ordering master
+switches**, not feature preferences. Both gate behaviour whose *user interface* ships in a later
+slice (13-UI): MFA enforcement needs a screen that can collect a TOTP code, and the forced
+password change needs a screen that can collect a new password. Turning either on before that
+screen exists locks users — including the sole production ADMIN — out of
+`form.bevorasg.com` with no in-product way back.
+
+Both are parsed by the same strict helper (`api/src/common/env-flag.ts`): **only the literal
+`"true"`, in any case, enables**. Absent, `""`, `"0"`, `"1"`, `"yes"`, `"on"` are all OFF, so a
+typo or a half-written line fails safe. Neither may appear as `true` in committed configuration;
+flipping them is a deliberate manual step after 13-UI is deployed and verified.
 
 ## 4.7 Scheduling and notification
 
