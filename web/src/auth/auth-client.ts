@@ -5,8 +5,12 @@ import {
   isChallengeExpired,
   setChallenge,
 } from './challenge-store';
-import { clearCurrentUser, setCurrentUser } from './current-user-store';
-import { acknowledgeRecoveryCodes, setPendingRecoveryCodes } from './recovery-codes-store';
+import { clearCurrentUser, getCurrentUser, setCurrentUser } from './current-user-store';
+import {
+  acknowledgeRecoveryCodes,
+  discardPendingRecoveryCodes,
+  setPendingRecoveryCodes,
+} from './recovery-codes-store';
 import { clearPasswordChangeRequired } from './password-change-gate';
 import { API_BASE } from '../api/config';
 import type { components } from '../api/generated/openapi-types';
@@ -70,9 +74,32 @@ function isMfaChallenge(body: AuthResult | MfaChallenge): body is MfaChallenge {
   return (body as MfaChallenge).mfaRequired === true;
 }
 
-/** Applies a successful authentication: memory-only token, principal cached
- * for presentation, and any spent MFA challenge dropped. */
+/**
+ * Applies a successful authentication: memory-only token, principal cached
+ * for presentation, and any spent MFA challenge dropped.
+ *
+ * It also drops the two latches that describe a SESSION rather than a device
+ * — the forced-password-change gate and any pending recovery codes — but only
+ * when the principal is not the one already held (review finding m3). Both
+ * are module-level and survive an `authed` transition, so without this a
+ * second user signing in on the same page instance inherits the first user's
+ * state: shown `<ChangePassword forced />` the server never asked them for,
+ * or handed ten recovery codes that are not theirs.
+ *
+ * The comparison matters as much as the clearing. `refresh()` runs
+ * `acceptAuthResult` for the SAME user on every proactive token rotation, and
+ * that can land while they are reading the recovery-codes screen or sitting on
+ * the forced-change screen; clearing unconditionally would yank either away
+ * mid-use — the codes-lost failure this slice exists to prevent. An absent
+ * cached principal counts as a change, because `refresh()` clears it on
+ * failure and that is precisely the path by which a different user reaches a
+ * sign-in on this page.
+ */
 function acceptAuthResult(auth: AuthResult): void {
+  if (getCurrentUser()?.id !== auth.user.id) {
+    clearPasswordChangeRequired();
+    discardPendingRecoveryCodes();
+  }
   setAccessToken(auth.accessToken, auth.expiresIn);
   setCurrentUser(auth.user);
   clearChallenge();
@@ -283,12 +310,22 @@ export async function confirmMfaEnrolment(
     (res) => res.json() as Promise<MfaEnrolConfirmResponse>,
   );
   if (result.ok) {
-    // Order matters. Applying the AuthResult authenticates the app, and `App`
-    // immediately swaps the sign-in screen for the job list — so the codes
-    // must already be latched when that happens, or the only copy of ten
-    // one-time credentials is lost in the transition.
-    setPendingRecoveryCodes(result.value.recoveryCodes);
+    // Order matters, in THIS direction: `acceptAuthResult` discards latched
+    // state belonging to a different principal (see it, and m3), and mid-login
+    // there is no cached principal yet — so it counts as a change and would
+    // wipe codes latched before it. Swap these two lines and the ten codes are
+    // discarded a microsecond after they arrive; U-AUTH-19 and the E-06
+    // journey both go red, which is how this is held in place rather than by
+    // this comment.
+    //
+    // What keeps the codes alive ACROSS the authentication itself is not the
+    // ordering: it is that `recovery-codes-store` is a module-level latch with
+    // subscribers, and that `App` renders `RecoveryCodes` ahead of every other
+    // authenticated screen (`App.tsx`). The sign-in tree holding this
+    // component is unmounted the instant the session is applied; nothing
+    // rendered inside it could survive.
     if (result.value.auth) acceptAuthResult(result.value.auth);
+    setPendingRecoveryCodes(result.value.recoveryCodes);
   }
   return result;
 }

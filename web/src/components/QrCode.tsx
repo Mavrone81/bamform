@@ -12,12 +12,16 @@ import { encodeQr, toSvgPath } from '../lib/qrcode';
  *
  * The symbol is one inline `<path>` of pure geometry: no external image, no
  * data: URI, no canvas, nothing for the app's CSP to block and nothing that
- * can be fetched over the network. `currentColor` keeps it correct in both
- * themes and in forced-colours mode.
+ * can be fetched over the network. Its two colours are hardcoded black on
+ * white rather than inherited: a QR symbol needs that contrast and polarity
+ * to scan at all, so it deliberately does NOT follow the theme (and will not
+ * adapt in forced-colours mode either) — review finding m2.
  *
  * ⚠️ `value` contains the TOTP shared secret. It is never logged, never
  * stored, and is not put in any attribute a devtools DOM dump would surface
- * beyond the geometry itself.
+ * beyond the geometry itself. That is also why the encoder failure below is
+ * swallowed rather than reported: its message would carry nothing sensitive
+ * today, but nothing on this path may ever reach a console.
  */
 export function QrCode({
   value,
@@ -30,10 +34,30 @@ export function QrCode({
   /** Rendered edge length in CSS pixels. */
   size?: number;
 }) {
+  // `encodeQr` throws on an empty payload and on anything past the 213-byte
+  // capacity of a version-10 level-M symbol — reachable in production with a
+  // long enough email local part (the `otpauth://` URI crosses 213 bytes at
+  // 87 characters). A throw here is NOT a broken picture: React has no error
+  // boundary between this component and the root, so it would unmount the
+  // whole app, taking the manual setup key rendered beside it down too and
+  // locking that account out of a mandatory enrolment (review finding I-1).
+  // Contained here instead, so the QR is the only thing lost.
   const svg = useMemo(() => {
-    const matrix = encodeQr(value);
-    return toSvgPath(matrix);
+    try {
+      return toSvgPath(encodeQr(value));
+    } catch {
+      return null;
+    }
   }, [value]);
+
+  if (!svg) {
+    return (
+      <p className="field-error" role="alert">
+        This QR code could not be drawn. Add the account by hand with the setup key below — it works
+        exactly the same way.
+      </p>
+    );
+  }
 
   return (
     <svg

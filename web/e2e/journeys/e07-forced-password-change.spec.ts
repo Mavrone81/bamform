@@ -124,6 +124,52 @@ test('E-07: an admin-created user is routed to the change-password screen and ca
   });
 });
 
+test('E-07e: a forced user who cannot change their password can still sign out', async ({
+  browser,
+}, testInfo) => {
+  // Review finding I-3. The gate is rendered in place of the whole app and
+  // nothing else in it calls `logout()`, so before this the screen was a trap:
+  // a user who was told their temporary password over the phone and mis-heard
+  // it cannot supply the "current password" this form needs, and a reload does
+  // not free them — the in-memory latch clears, then the first authenticated
+  // request 403s and sets it again. Their only remedy was an out-of-band admin
+  // reset, with no way even to leave the screen and no way to ask.
+  const server = new FakeServer();
+  server.seedJob(JOB);
+  server.seedMustChangePassword(E2E_USERS.technician.id);
+  const viewport = viewportFrom(testInfo);
+
+  await withPage(browser, server, viewport, async (page) => {
+    await signIn(page, E2E_USERS.technician.email, E2E_PASSWORD);
+    await expect(page.getByRole('heading', { name: 'Change your password' })).toBeVisible();
+
+    // The trap, demonstrated: a reload lands them right back here.
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Change your password' })).toBeVisible();
+
+    const signOut = page.getByRole('button', { name: 'Sign out' });
+    await signOut.scrollIntoViewIfNeeded();
+    await signOut.click();
+
+    // Out — genuinely, not just visually: the sign-in form is back and the
+    // gate has released rather than re-rendering over it.
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+    await expect(page.getByLabel('Email')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Change your password' })).toHaveCount(0);
+
+    // ...and it survives a reload, which the gate itself does not: the session
+    // genuinely ended rather than the latch merely being forgotten.
+    await page.reload();
+    await expect(page.getByLabel('Email')).toBeVisible();
+
+    // And the gate is not weakened: signing straight back in returns them to
+    // it. Leaving is not the same as getting past it.
+    await signIn(page, E2E_USERS.technician.email, E2E_PASSWORD);
+    await expect(page.getByRole('heading', { name: 'Change your password' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Your jobs' })).toHaveCount(0);
+  });
+});
+
 test('E-07b: a user who is NOT forced can still change their password voluntarily', async ({
   browser,
 }, testInfo) => {

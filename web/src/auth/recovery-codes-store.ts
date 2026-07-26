@@ -31,9 +31,25 @@ export function getPendingRecoveryCodes(): readonly string[] | null {
   return pending;
 }
 
-/** The user has said they saved them. This is the only exit — there is no
- * endpoint that can ever show them again. */
+/** The user has said they saved them. This is the only exit a USER has —
+ * there is no endpoint that can ever show them again. */
 export function acknowledgeRecoveryCodes(): void {
+  clear();
+}
+
+/**
+ * Drops the latch without anyone having acknowledged anything. Only for a
+ * change of principal: codes belong to the session that minted them, and a
+ * different user signing in on the same page instance must never be handed
+ * the previous user's (review finding m3). Named apart from
+ * `acknowledgeRecoveryCodes` because it is not an acknowledgement — it is a
+ * discard, and the two must stay distinguishable to a reader.
+ */
+export function discardPendingRecoveryCodes(): void {
+  clear();
+}
+
+function clear(): void {
   if (pending === null) return;
   pending = null;
   for (const listener of listeners) listener(pending);

@@ -70,9 +70,24 @@ test('E-06: an unenrolled ADMIN scans, confirms, saves the recovery codes and la
   server.enableMfa();
 
   await withPage(browser, server, viewportFrom(testInfo), async (page) => {
+    const enrolResponse = page.waitForResponse(
+      (res) => res.url().includes('/auth/mfa/enrol') && !res.url().includes('confirm'),
+    );
     await submitPassword(page, E2E_USERS.admin.email);
 
     await expect(page.getByRole('heading', { name: 'Set up your authenticator' })).toBeVisible();
+
+    // The URI this screen turns into a QR must be the shape the REAL api
+    // emits, character for character — `api/src/auth/mfa/totp.ts`
+    // #buildOtpauthUri encodes the issuer and the account name separately, so
+    // the separator is a literal colon and only the `@` is escaped. The
+    // hand-check artefact is the last gap before `MFA_ENABLED` can be turned
+    // on, and it is worthless if it validates a URI production never produces
+    // (review finding m1).
+    const { otpauthUri } = (await (await enrolResponse).json()) as { otpauthUri: string };
+    expect(otpauthUri).toMatch(
+      /^otpauth:\/\/totp\/BamForm:admin%40bevorasg\.com\?secret=[A-Z2-7]+&issuer=BamForm&algorithm=SHA1&digits=6&period=30$/,
+    );
 
     // The QR is a real, rendered symbol with an accessible name...
     const qr = page.getByRole('img', { name: /QR code/i });

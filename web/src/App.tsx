@@ -9,6 +9,7 @@ import { Delegations } from './screens/Delegations';
 import { ChangePassword } from './screens/ChangePassword';
 import { AdminMfaReset } from './screens/AdminMfaReset';
 import { RecoveryCodes } from './screens/RecoveryCodes';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   getAccessToken,
   onTokenChange,
@@ -102,7 +103,11 @@ export function App() {
         Skip to main content
       </a>
       <div id="main-content">
-        <Screens />
+        {/* Last resort only: a render throw would otherwise unmount the root
+         * and leave a blank tab with no way back (review finding I-1). */}
+        <ErrorBoundary>
+          <Screens />
+        </ErrorBoundary>
       </div>
     </RouterProvider>
   );

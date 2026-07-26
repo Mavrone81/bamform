@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { changePassword } from '../auth';
+import { changePassword, logout } from '../auth';
 import { useRouter } from '../router';
 
 /** Guidance only. The server owns the policy (`shared/src/mfa.ts`
@@ -24,6 +24,16 @@ const MIN_PASSWORD_LENGTH = 12;
  * On success the server revokes the user's OTHER sessions and clears the
  * flag; this session survives, so `changePassword` releases the latch and the
  * user carries straight on rather than signing in again.
+ *
+ * The forced branch also carries the app's only sign-out control. It is not a
+ * hole in the gate — the user still cannot reach a single other screen without
+ * changing their password — it is the difference between a gate and a trap. A
+ * user told their temporary password over the phone who mis-heard it cannot
+ * supply the "current password" this form needs, and reloading does not free
+ * them: the in-memory latch clears, but the first authenticated request 403s
+ * and sets it again (`api/http-transport.ts`). Without this button their only
+ * remedy is an out-of-band admin reset, with no in-app way even to leave the
+ * screen (review finding I-3).
  */
 export function ChangePassword({ forced = false }: { forced?: boolean }) {
   const { navigate } = useRouter();
@@ -32,11 +42,13 @@ export function ChangePassword({ forced = false }: { forced?: boolean }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
 
   const mismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
   const tooShort = newPassword.length > 0 && newPassword.length < MIN_PASSWORD_LENGTH;
   const canSubmit =
     !submitting &&
+    !signingOut &&
     currentPassword.length > 0 &&
     newPassword.length >= MIN_PASSWORD_LENGTH &&
     newPassword === confirmPassword;
@@ -75,6 +87,17 @@ export function ChangePassword({ forced = false }: { forced?: boolean }) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    // `logout()` is best-effort against the server and unconditional locally:
+    // it clears the access token, the cached principal, any challenge, the
+    // forced-change latch and any pending recovery codes. Dropping the token
+    // is what returns `App` to the sign-in screen; the navigate only keeps the
+    // URL honest.
+    await logout();
+    navigate('/sign-in');
   }
 
   return (
@@ -158,6 +181,24 @@ export function ChangePassword({ forced = false }: { forced?: boolean }) {
       </form>
 
       <p>Changing your password signs you out everywhere else. This device stays signed in.</p>
+
+      {forced && (
+        <>
+          <p>
+            Don&rsquo;t know the password you were given, or is this not your account? Sign out and
+            ask an administrator to set a new one. You will still be asked to choose your own the
+            next time you sign in.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            disabled={signingOut}
+            style={{ width: 'fit-content' }}
+          >
+            {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
+        </>
+      )}
     </main>
   );
 }

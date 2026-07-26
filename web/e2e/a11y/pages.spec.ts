@@ -148,6 +148,25 @@ test('A-01: the change-password screen has zero axe violations', async ({ signed
   await expectNoViolations(page);
 });
 
+test('A-01: the FORCED change-password screen has zero axe violations, sign-out included', async ({
+  page,
+  server,
+}) => {
+  // The voluntary screen above is not the same DOM: the forced branch swaps
+  // "Back to your jobs" for a role="alert" banner and the app's only sign-out
+  // control (review finding I-3), and it is the one screen a user can be held
+  // on. It gets its own sweep.
+  server.seedMustChangePassword(E2E_USERS.technician.id);
+  await page.goto('/sign-in');
+  await page.getByLabel('Email').fill(E2E_USERS.technician.email);
+  await page.getByLabel('Password').fill(E2E_PASSWORD);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Change your password' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expectNoViolations(page);
+});
+
 test('A-01: the admin MFA-reset screen has zero axe violations, including its confirmation', async ({
   page,
   server,

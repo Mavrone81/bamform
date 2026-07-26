@@ -585,7 +585,13 @@ export class FakeServer {
     // Re-calling before confirmation REPLACES the pending secret.
     const secret = randomBase32Secret();
     this.pendingSecrets.set(subject.user.id, secret);
-    const label = encodeURIComponent(`BamForm:${subject.user.email}`);
+    // Byte-for-byte what `api/src/auth/mfa/totp.ts#buildOtpauthUri` emits:
+    // issuer and account name are encoded SEPARATELY, so the separator stays a
+    // literal colon rather than becoming `%3A`. Both forms are legal under the
+    // Key URI Format, but `qr-hand-check.spec.ts` is the one artefact a human
+    // scans before MFA can be switched on, and it has to be validating the
+    // string production actually produces (review finding m1).
+    const label = `${encodeURIComponent('BamForm')}:${encodeURIComponent(subject.user.email)}`;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -1272,7 +1278,18 @@ export class FakeServer {
     // ---- Auth: exempt from the forced-password-change guard by design.
     await page.route('**/api/v1/auth/login', (route) => this.handleLogin(route));
     await page.route('**/api/v1/auth/refresh', (route) => this.handleRefresh(route));
-    await page.route('**/api/v1/auth/logout', (route) => route.fulfill({ status: 204, body: '' }));
+    await page.route('**/api/v1/auth/logout', (route) =>
+      route.fulfill({
+        status: 204,
+        // The real endpoint revokes the refresh-token family and expires the
+        // cookie, so a reload after signing out lands on the sign-in screen.
+        // Returning a bare 204 and leaving `bf_refresh` in place made this
+        // fake claim that signing out does not actually end the session —
+        // which is the one thing E-07e is there to prove (review finding I-3).
+        headers: { 'Set-Cookie': 'bf_refresh=; Path=/; HttpOnly; Max-Age=0' },
+        body: '',
+      }),
+    );
     await page.route('**/api/v1/auth/password', (route) => this.handlePasswordChange(route));
     await page.route('**/api/v1/auth/mfa/verify', (route) => this.handleMfaVerify(route));
     await page.route('**/api/v1/auth/mfa/recovery', (route) => this.handleMfaRecovery(route));

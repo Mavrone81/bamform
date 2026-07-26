@@ -35,6 +35,7 @@ import {
 } from './password-change-gate';
 import {
   getPendingRecoveryCodes,
+  setPendingRecoveryCodes,
   _resetForTests as resetRecoveryCodes,
 } from './recovery-codes-store';
 
@@ -329,8 +330,11 @@ describe('enrolment', () => {
     expect(lastCall().body).toEqual({ challengeToken: 'challenge-abc', totpCode: '123456' });
     expect(getAccessToken()).toBe('tok-1');
     expect(getChallengeToken()).toBeNull();
-    // Latched BEFORE the session was applied: applying it unmounts the screen
-    // that was holding them, so an unlatched copy would simply be lost.
+    // Latched, and latched AFTER the session was applied. `acceptAuthResult`
+    // discards codes belonging to a different principal, and mid-login there
+    // is no cached principal yet, so latching first would hand these straight
+    // to it to be discarded. Swap the two lines in `confirmMfaEnrolment` and
+    // this assertion is what goes red.
     expect(getPendingRecoveryCodes()).toEqual(codes);
   });
 
@@ -436,6 +440,73 @@ describe('refresh', () => {
     expect(await refresh()).toBeNull();
     expect(getAccessToken()).toBeNull();
     expect(getCurrentUser()).toBeNull();
+  });
+});
+
+describe('latched state belongs to a principal, not to the page (review finding m3)', () => {
+  const OTHER_USER = { id: 'u2', fullName: 'B', roles: ['MAINTAINER'] };
+  const OTHER_AUTH = { accessToken: 'tok-2', expiresIn: 900, user: OTHER_USER };
+
+  it('U-AUTH-28: a different principal does not inherit the forced-change latch', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(AUTH_RESULT));
+    await login('a@b.com', 'password12345');
+    markPasswordChangeRequired();
+
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(OTHER_AUTH));
+    await login('b@b.com', 'password12345');
+
+    // Without this, user B is shown `<ChangePassword forced />` that the
+    // server never asked for, and cannot leave it until they change a password
+    // that was never flagged.
+    expect(isPasswordChangeRequired()).toBe(false);
+    expect(getCurrentUser()).toEqual(OTHER_USER);
+  });
+
+  it('U-AUTH-29: nor the previous principal’s pending recovery codes', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(AUTH_RESULT));
+    await login('a@b.com', 'password12345');
+    setPendingRecoveryCodes(['A-CODE']);
+
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(OTHER_AUTH));
+    await login('b@b.com', 'password12345');
+
+    expect(getPendingRecoveryCodes()).toBeNull();
+  });
+
+  it('U-AUTH-30: and not after a failed refresh dropped the cached principal — the path that makes this reachable', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(AUTH_RESULT));
+    await login('a@b.com', 'password12345');
+    markPasswordChangeRequired();
+    setPendingRecoveryCodes(['A-CODE']);
+
+    // `refresh()` clears the token and the principal but leaves the latches —
+    // this is exactly how `authed` goes false without a `logout()`.
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, false, 401));
+    expect(await refresh()).toBeNull();
+    expect(getCurrentUser()).toBeNull();
+
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(OTHER_AUTH));
+    await login('b@b.com', 'password12345');
+
+    expect(isPasswordChangeRequired()).toBe(false);
+    expect(getPendingRecoveryCodes()).toBeNull();
+  });
+
+  it('U-AUTH-31: a token rotation for the SAME principal keeps both, or it would yank a screen out from under them', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(AUTH_RESULT));
+    await login('a@b.com', 'password12345');
+    markPasswordChangeRequired();
+    setPendingRecoveryCodes(['A-CODE']);
+
+    // A proactive refresh can land while the user is reading their recovery
+    // codes or sitting on the forced-change screen. Clearing unconditionally
+    // would destroy the only copy of ten one-time credentials — the very
+    // failure `recovery-codes-store` exists to prevent.
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ ...AUTH_RESULT, accessToken: 'tok-3' }));
+    expect((await refresh())?.accessToken).toBe('tok-3');
+
+    expect(isPasswordChangeRequired()).toBe(true);
+    expect(getPendingRecoveryCodes()).toEqual(['A-CODE']);
   });
 });
 
