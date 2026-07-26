@@ -146,11 +146,17 @@ services:
       - record_signing_key
       - postgres_password
       - redis_password
+      # Slice 12 added MinioModule to WorkerModule (export job uploads the ZIP,
+      # PDF assembly reads attachments) — its MINIO_CLIENT factory loads the
+      # `minio_root_password` secret at boot, so the worker must be granted it
+      # too, exactly like bamform-api. Omitting it crash-loops the worker.
+      - minio_root_password
       - minio_sse_key
       - smtp_password
     depends_on:
       bamform-postgres: { condition: service_healthy }
       bamform-redis:    { condition: service_healthy }
+      bamform-minio:    { condition: service_healthy }
     # Chromium (PDF rendering, PR-ENV-13) needs writable /tmp and more headroom
     tmpfs:
       - /tmp:size=1g,mode=1777
