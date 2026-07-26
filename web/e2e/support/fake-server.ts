@@ -392,6 +392,45 @@ export class FakeServer {
     return ordinal >= 2 ? 'ENGINEER' : 'TEAM_LEADER';
   }
 
+  /**
+   * `POST /auth/logout`. Two things the real endpoint does that this fake must
+   * also do, each because omitting it let a real defect through:
+   *
+   *  1. It REQUIRES the bearer token — the route is not `@Public()` and is
+   *     covered by openapi.yaml's global `security: [bearerAuth]`. Fulfilling
+   *     unconditionally let the web client ship a header-less `logout()` that
+   *     returns 401 in production while every E2E test passed (fix-delta
+   *     re-review, finding C-1). Verified against live prod: no header → 401
+   *     and the refresh cookie still mints a session; with header → 204 and
+   *     refresh then → 401.
+   *  2. It expires `bf_refresh`, so a reload after signing out lands on the
+   *     sign-in screen rather than resurrecting the session — which is the one
+   *     thing E-07e exists to prove (review finding I-3).
+   */
+  private async handleLogout(route: Route): Promise<void> {
+    // Same UNANCHORED shape the sibling handlers use (`currentUser`, :429) —
+    // deliberately not `$`-anchored, because `handleRefresh` issues
+    // `e2e-token-<id>-refreshed` (:787) and a strict tail match would reject a
+    // perfectly valid rotated token. An anchored version of this check made
+    // E-07e fail exactly as the real bug does: 401 → cookie kept → the session
+    // survives the reload. What must be rejected is an absent or unparseable
+    // bearer, which is the C-1 regression.
+    const auth = (await route.request().headerValue('authorization')) ?? '';
+    if (!/Bearer e2e-token-user-\d+/.test(auth)) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/problem+json',
+        body: JSON.stringify(this.problem(401, 'Unauthenticated')),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 204,
+      headers: { 'Set-Cookie': 'bf_refresh=; Path=/; HttpOnly; Max-Age=0' },
+      body: '',
+    });
+  }
+
   private async currentUser(route: Route): Promise<E2EUser> {
     const auth = (await route.request().headerValue('authorization')) ?? '';
     const match = auth.match(/Bearer e2e-token-(user-\d+)/);
@@ -1278,18 +1317,7 @@ export class FakeServer {
     // ---- Auth: exempt from the forced-password-change guard by design.
     await page.route('**/api/v1/auth/login', (route) => this.handleLogin(route));
     await page.route('**/api/v1/auth/refresh', (route) => this.handleRefresh(route));
-    await page.route('**/api/v1/auth/logout', (route) =>
-      route.fulfill({
-        status: 204,
-        // The real endpoint revokes the refresh-token family and expires the
-        // cookie, so a reload after signing out lands on the sign-in screen.
-        // Returning a bare 204 and leaving `bf_refresh` in place made this
-        // fake claim that signing out does not actually end the session —
-        // which is the one thing E-07e is there to prove (review finding I-3).
-        headers: { 'Set-Cookie': 'bf_refresh=; Path=/; HttpOnly; Max-Age=0' },
-        body: '',
-      }),
-    );
+    await page.route('**/api/v1/auth/logout', (route) => this.handleLogout(route));
     await page.route('**/api/v1/auth/password', (route) => this.handlePasswordChange(route));
     await page.route('**/api/v1/auth/mfa/verify', (route) => this.handleMfaVerify(route));
     await page.route('**/api/v1/auth/mfa/recovery', (route) => this.handleMfaRecovery(route));

@@ -536,6 +536,36 @@ describe('logout', () => {
     await expect(logout()).resolves.toBeUndefined();
     expect(getAccessToken()).toBeNull();
   });
+
+  // Fix-delta re-review, finding C-1. `POST /auth/logout` is NOT @Public() and
+  // is covered by openapi.yaml's global `security: [bearerAuth]`, so a
+  // header-less call 401s. Confirmed against live production: without the
+  // header 401 and `POST /auth/refresh` still returns 200 (the session
+  // survives); with it 204 and refresh then 401.
+  //
+  // The bug hid because a 401 is not a fetch rejection: the local state above
+  // still clears, so the UI looks signed out while the server-side refresh
+  // family is never revoked. `bf_refresh` (30-day TTL) then resurrects the
+  // session on the next mount — on a shared plant-floor tablet, silently
+  // authenticating the next person AS THE PREVIOUS USER, who can then sign
+  // records under that identity. That is an ISO-13485 attribution failure.
+  //
+  // The sibling test above passes `expect.anything()` for the request options,
+  // which is exactly why it never caught this. Assert the header itself.
+  it('sends the bearer token — without it the server 401s and the session survives (C-1)', async () => {
+    setAccessToken('tok-logout', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(emptyResponse(204));
+
+    await logout();
+
+    const [, init] = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) => String(url).includes('/auth/logout'))!;
+    expect((init as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer tok-logout',
+    });
+    expect((init as RequestInit).credentials).toBe('include');
+  });
 });
 
 describe('ensureFreshToken', () => {

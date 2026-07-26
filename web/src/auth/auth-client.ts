@@ -174,7 +174,26 @@ export async function refresh(): Promise<AuthResult | null> {
 }
 
 export async function logout(): Promise<void> {
-  await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {
+  // The bearer token is REQUIRED here. `POST /auth/logout` is not `@Public()`
+  // and is covered by openapi.yaml's global `security: [bearerAuth]`, so a
+  // header-less call returns 401 — verified against live production:
+  // without the header 401 and the refresh cookie still mints a new session
+  // (`POST /auth/refresh` → 200); with it 204 and refresh correctly → 401.
+  //
+  // Getting this wrong is worse than it looks. A 401 is not a fetch
+  // rejection, so the local state below still clears and the UI LOOKS signed
+  // out — while server-side the refresh family is never revoked and the
+  // `jti` never denylisted. The `bf_refresh` cookie (30-day TTL) survives,
+  // and `App`'s `ensureFreshToken()` silently resurrects the session on the
+  // next mount. On a shared plant-floor tablet that means the next person to
+  // reload is authenticated AS THE PREVIOUS USER and can sign records under
+  // their identity — an ISO-13485 attribution failure, not just a bug.
+  const token = getAccessToken();
+  await fetch(`${API_BASE}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  }).catch(() => {
     // Best-effort: even if the request fails, the local session must end.
   });
   clearAccessToken();
