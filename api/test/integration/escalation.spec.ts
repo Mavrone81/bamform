@@ -75,10 +75,16 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
   afterEach(async () => {
     // approval_stage is PR-DBD-09 seed data, NOT truncated by resetDatabase()
     // (see helpers/db.ts) — any test that mutates stage 1's escalation
-    // config must restore the delivered default (NULL/NULL) so it never
-    // bleeds into a later test file sharing this same Postgres instance.
+    // config must restore the DELIVERED default so it never bleeds into a
+    // later test file sharing this same Postgres instance.
+    //
+    // That delivered default changed on 2026-07-26: migration
+    // 20260726120000_enable_verification_escalation_default sets
+    // escalation_hours = 72 (UR-050, resolving the slice-11a finding D
+    // contradiction). escalate_to_role_id stays NULL — "notify whoever is
+    // currently eligible to verify this stage".
     await adminPool.query(
-      `UPDATE "approval_stage" SET escalation_hours = NULL, escalate_to_role_id = NULL WHERE id = $1`,
+      `UPDATE "approval_stage" SET escalation_hours = 72, escalate_to_role_id = NULL WHERE id = $1`,
       [stage1Id],
     );
   });
@@ -120,7 +126,15 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     return { userId, token };
   }
 
-  it('DEFAULT (delivered seed, escalation_hours NULL) — submitting schedules NOTHING (NULL means "no escalation", not "use a default")', async () => {
+  it('a stage with escalation_hours NULL schedules NOTHING (NULL means "no escalation", not "use a default")', async () => {
+    // The NULL semantics are unchanged and still load-bearing — an admin who
+    // clears a stage's escalation_hours turns escalation off for that stage.
+    // Set it explicitly: since migration 20260726120000 the DELIVERED value is
+    // 72, so this case no longer arises from the seed alone.
+    await adminPool.query(
+      `UPDATE "approval_stage" SET escalation_hours = NULL, escalate_to_role_id = NULL WHERE id = $1`,
+      [stage1Id],
+    );
     const { jobId, token } = await makeSubmittableJob();
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
@@ -129,6 +143,23 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
 
     const job = await notificationQueue.getEscalationJob(jobId, 1);
     expect(job).toBeFalsy();
+  });
+
+  it('DELIVERED CONFIG (UR-050) — submitting schedules escalation at the 72h default, targeting the eligible verifiers', async () => {
+    // Guards the product decision of 2026-07-26 (slice-11a finding D). If a
+    // future migration or seed edit silently reverts the delivered route to
+    // NULL, escalation goes inert again and this test is what catches it.
+    const { jobId, token } = await makeSubmittableJob();
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/submit`)
+      .set(...authHeader(token))
+      .expect(200);
+
+    const job = await notificationQueue.getEscalationJob(jobId, 1);
+    expect(job).toBeTruthy();
+    expect(job!.opts.delay).toBe(72 * 3_600_000);
+    // null target = "fall back to whoever is currently eligible to verify"
+    expect(job!.data).toMatchObject({ jobId, stageOrdinal: 1, recipientRoleCode: null });
   });
 
   it('when stage 1 has escalation_hours configured, SUBMITTING schedules a delayed escalation job for the right delay', async () => {

@@ -67,11 +67,16 @@ export class ApprovalRepository {
   /**
    * PR-077's escalation config for one stage. `escalationHours: null` is a
    * distinct, deliberate "no escalation for this stage" state — NOT "use a
-   * system default" — per the seed migration's own comment
-   * (`20260723180100_seed_reference_data`: "No escalation is configured by
-   * this seed... NULL escalation_hours [is] the 'no escalation' state").
-   * Callers (`SubmissionService`/`VerificationService`) must not schedule an
-   * escalation job when this returns `escalationHours: null`.
+   * system default". Callers (`SubmissionService`/`VerificationService`) must
+   * not schedule an escalation job when this returns `escalationHours: null`.
+   *
+   * The DELIVERED route no longer relies on that null state: migration
+   * `20260726120000_enable_verification_escalation_default` sets 72 hours on
+   * both stages of `SINGLE_STAGE_TL_OR_ENG` (UR-050 — Samuel, 2026-07-26,
+   * resolving the slice-11a finding-D contradiction between
+   * `ENVIRONMENT_REQUIREMENTS.md`'s advertised 72h default and the original
+   * seed's "escalation off"). Clearing a stage's value still switches
+   * escalation off for that stage, which is why the null branch stays.
    */
   async getStageEscalationConfig(
     approvalRouteId: string,
