@@ -105,22 +105,46 @@ describe('POST /records/export, GET /exports/{id}(/download) (E-12, PR-119)', ()
     return { jobId, jobNumber: jobRow.rows[0].job_number as string };
   }
 
+  // 40 × 250 ms = 10 s reddened main on the slice-13-MFA merge (run
+  // 30202437698 job 4 — "did not finish within the poll budget", 349/350
+  // otherwise green). Nothing about export changed in that slice; the job just
+  // ran out of wall clock. This assertion is inherently slow, and slower under
+  // CI conditions that do not apply locally:
+  //   * CI runs jest with --coverage, the plain local run does not, and the
+  //     instrumentation slows the in-process BullMQ worker as well as the test
+  //   * it renders real PDFs through Chromium (worker concurrency 2)
+  //   * the GitHub runner has far less CPU than the dev machine
+  //   * slice 13-MFA added ~2k instrumented source lines and two large specs,
+  //     so this now runs later in a longer, more GC-pressured process
+  // Raising the allowance weakens nothing: every assertion about the ZIP
+  // contents, the CSV columns and the terminal state is unchanged, and a
+  // genuinely stuck export still fails — after 30 s instead of 10 s, still
+  // inside this test's existing 60 s timeout.
+  const POLL_ATTEMPTS = 120; // × 250 ms = 30 s
+
   async function pollUntilDone(
     exportId: string,
     token: string,
-    maxAttempts = 40,
+    maxAttempts = POLL_ATTEMPTS,
   ): Promise<RecordExportStatusResponse> {
+    let lastStatus = '(never observed)';
     for (let i = 0; i < maxAttempts; i++) {
       const res = await request(app.getHttpServer())
         .get(`/api/v1/exports/${exportId}`)
         .set(...authHeader(token))
         .expect(200);
+      lastStatus = String(res.body.status);
       if (res.body.status === 'DONE' || res.body.status === 'FAILED') {
         return res.body;
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    throw new Error(`export ${exportId} did not finish within the poll budget`);
+    // Report the last status so a future failure distinguishes "never picked
+    // up" (QUEUED) from "too slow" (RUNNING) — the old message could not.
+    throw new Error(
+      `export ${exportId} did not finish within the poll budget ` +
+        `(${maxAttempts} × 250ms); last status seen: ${lastStatus}`,
+    );
   }
 
   it('produces a ZIP of PDFs + a CSV manifest with the right columns (PR-119)', async () => {
