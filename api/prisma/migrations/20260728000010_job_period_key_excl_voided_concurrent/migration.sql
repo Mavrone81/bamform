@@ -1,0 +1,56 @@
+-- Reversal: DROP INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_not_voided_key";
+--           (only after re-creating the original full unique index — see the
+--           companion 20260728000020 migration's reversal note; the two
+--           migrations reverse as a pair, in reverse order.)
+--
+-- MID-FAILURE RECOVERY (slice-17 review V-4 — read this if `migrate deploy`
+-- is failing on THIS migration with:
+--   relation "job_asset_frequency_scope_due_on_not_voided_key" already exists
+-- ): an interrupted `CREATE INDEX CONCURRENTLY` (crash, timeout, ^C) leaves
+-- behind an INVALID index that still holds the name, so a plain deploy retry
+-- collides with it. Recovery, run verbatim against the affected database:
+--
+--   1. psql:  DROP INDEX CONCURRENTLY IF EXISTS
+--               "job_asset_frequency_scope_due_on_not_voided_key";
+--      (confirm it was INVALID first if you want the evidence:
+--       SELECT indexrelid::regclass, indisvalid FROM pg_index
+--       WHERE indexrelid::regclass::text LIKE '%not_voided%';)
+--   2. npx prisma migrate resolve --rolled-back
+--        20260728000010_job_period_key_excl_voided_concurrent
+--   3. npx prisma migrate deploy   (re-runs this migration cleanly)
+--
+-- SAFETY DURING ANY OF THIS: deploy halts before 20260728000020, so the old
+-- FULL unique index is still in place — enforcement is never weaker than
+-- intended while this migration is broken, only (harmlessly) stricter. The
+-- same applies if 20260728000020's DROP fails: the extra index is redundant,
+-- never dangerous.
+--
+-- Slice 17-VOID / system-review SYS-19 — the owner's 2026-07-27 decision:
+-- "a voided job never satisfies its schedule period and never blocks
+-- regeneration — the schedule behaves as if that PM never happened."
+--
+-- PR-052's generation-idempotency key (I-INV-14) becomes PARTIAL: uniqueness
+-- over (asset_id, frequency_scope, due_on) is enforced for LIVE rows only —
+-- a VOIDED row no longer occupies its period, so the scheduler can generate
+-- the replacement job for the same asset/scope/due-date (previously the
+-- voided row raised P2002 "exists" forever; the only recovery was a manual
+-- admin schedule PUT). Two-step, create-before-drop: while both indexes
+-- exist every insert the partial index would reject is also rejected by the
+-- old full index, so there is no window with weaker enforcement — only a
+-- window where voided periods are still (harmlessly, briefly) blocked until
+-- 20260728000020 drops the old index in the same `migrate deploy` run.
+--
+-- Existing-row safety: the outgoing FULL unique index proves no duplicate
+-- (asset_id, frequency_scope, due_on) tuples exist at all, voided or not —
+-- so this CREATE UNIQUE cannot fail on existing data.
+--
+-- NOTE: this index is deliberately NOT a Prisma `@@unique` any more —
+-- Prisma's schema DSL cannot express partial unique indexes (same reason as
+-- INV-01's one-current-revision index, 20260723180000). Prisma still maps
+-- its violation to P2002, which `job-generation.service.ts` already handles.
+--
+-- CONCURRENTLY per M-06 (job is a large table); single statement so Prisma
+-- runs it outside a transaction.
+CREATE UNIQUE INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_not_voided_key"
+  ON "job"("asset_id", "frequency_scope", "due_on")
+  WHERE "status" <> 'voided';

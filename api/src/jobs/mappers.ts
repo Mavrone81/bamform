@@ -56,6 +56,11 @@ export function toJob(row: JobFullRow, today: Date = new Date()): Job {
   return {
     ...toJobSummary(row, today),
     draftVersion: row.draftVersion,
+    // Slice 17-VOID annotation — null until a job is voided. Never part of
+    // the signed canonical content (see canonical-job-record.ts's key pins).
+    voidReason: row.voidReason,
+    voidedBy: row.voidedBy,
+    voidedAt: row.voidedAt ? row.voidedAt.toISOString() : null,
     templateRevision: toTemplateRevision({
       ...row.templateRevision,
       items: row.templateRevision.items,

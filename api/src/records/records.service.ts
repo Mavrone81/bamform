@@ -37,6 +37,7 @@ export class RecordsService {
         archivedTo: query.archivedTo,
         technician: query.technician,
         approver: query.approver,
+        voided: query.voided,
         afterId: decodeCursor(query.cursor),
         take: limit + 1,
       },

@@ -183,6 +183,44 @@ describe('GET /records/{recordId}/pdf (E-11, PR-116/117/118)', () => {
     expect(afterText).not.toContain(beforeText.match(/[0-9a-f]{64}/)?.[0] ?? '__no_match__');
   }, 30_000);
 
+  it('I-VOID-11 (slice 17): a voided-archived record renders the VOID marking — reason, voider name and the footer void line — over the untouched content', async () => {
+    const { jobId, maintainerId } = await makeArchivedRecord();
+
+    const { userId: adminId } = await createLoginableUser({
+      email: `admin-${randomUUID()}@example.test`,
+      password: 'correct horse battery staple 3',
+      fullName: 'Ada Admin',
+      roleCodes: ['ADMIN'],
+    });
+    const adminToken = await mintAccessToken(app, adminId, ['ADMIN']);
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/void`)
+      .set(...authHeader(adminToken))
+      .send({ reason: 'Raised against the wrong machine entirely' })
+      .expect(200);
+
+    const token = await mintAccessToken(app, maintainerId, ['MAINTAINER']);
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/records/${jobId}/pdf`)
+      .set(...authHeader(token))
+      .expect(200);
+    expect(res.headers['content-type']).toContain('application/pdf');
+
+    const pdfText = await extractPdfText(Buffer.from(res.body as Buffer));
+    expect(pdfText).toContain('RECORD VOID');
+    expect(pdfText).toContain('Raised against the wrong machine entirely');
+    expect(pdfText).toContain('Ada Admin');
+    expect(pdfText).toContain('VOIDED');
+    // The untouched record content still renders (integrity digest of the
+    // most recent step — the void step — and the record id).
+    const stepRow = await adminPool.query(
+      `SELECT encode(content_hash, 'hex') AS hex FROM "approval_step" WHERE job_id = $1 ORDER BY acted_at DESC LIMIT 1`,
+      [jobId],
+    );
+    expect(pdfText).toContain(stepRow.rows[0].hex);
+    expect(pdfText).toContain(jobId);
+  }, 30_000);
+
   it('404s for a record that does not exist', async () => {
     const someone = await createUser('reader');
     await grantRole(someone, 'ADMIN');

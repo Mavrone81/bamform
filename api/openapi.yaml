@@ -1504,11 +1504,26 @@ paths:
       operationId: voidJob
       summary: Void a job. The record remains visible and queryable.
       description: |
-        PR-046/INV-12. TEAM_LEADER/ENGINEER/ADMIN. Reason required, >= 10
-        characters. Legal from SCHEDULED, ASSIGNED, IN_PROGRESS or SUBMITTED
-        - never from VERIFIED/ARCHIVED/VOIDED (PRD §5.1). This is NOT a
+        PR-046/INV-12. Reason required, >= 10 characters. This is NOT a
         delete (non-negotiable #7 - `bamform_app` holds no `DELETE` grant on
         any table); the job stays queryable with `status: VOIDED`.
+
+        Legal from SCHEDULED, ASSIGNED, IN_PROGRESS or SUBMITTED
+        (TEAM_LEADER/ENGINEER/ADMIN), and - since the owner's 2026-07-27
+        decision (slice 17) - from ARCHIVED, ADMIN-only (403 for any other
+        role). A post-archive void is an ANNOTATION, never a mutation: the
+        double-signed record content, drawn signatures, Ed25519 signatures,
+        content hashes and audit chain are byte-identical before and after
+        (DB-enforced); only `voidReason`/`voidedBy`/`voidedAt` and the
+        status change. Never legal from VERIFIED or VOIDED.
+
+        A voided job never satisfies its schedule period and never blocks
+        regeneration. Voiding an ARCHIVED job also recomputes the asset's
+        schedule in the same transaction, as if that completion never
+        happened: `next_due_on` re-derives from the most recent still-valid
+        completion, or reverts to the voided job's own due date if none
+        remains. Already-generated successor jobs are left untouched - the
+        recompute affects future generation only.
       requestBody:
         required: true
         content:
@@ -1524,6 +1539,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
+        '403':
+          description: '`/errors/forbidden` - voiding an ARCHIVED record is ADMIN-only'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
@@ -1697,7 +1717,11 @@ paths:
         document number, frequency, date range (`archivedFrom`/`archivedTo`),
         technician (submitter) and approver (a verifying `approval_step`
         actor). An archived record IS a `job` row with `status = ARCHIVED`
-        (this system has no separate `record` table). Area-scoped
+        (this system has no separate `record` table) - or, since slice 17, a
+        record voided AFTER archive (`status = VOIDED` with its untouched
+        `archivedAt` still set): those stay part of the archive by default
+        (an auditor must see voids, not lose them), filterable via
+        `voided`. Pre-archive voids are not archive records. Area-scoped
         (PR-API-10): a MAINTAINER sees only their own records; TEAM_LEADER/
         ENGINEER/DOC_CONTROLLER/ADMIN/AUDITOR see every archived record in
         area scope (API_SPECIFICATION.md §4.1 "View archive").
@@ -1728,6 +1752,10 @@ paths:
         - name: approver
           in: query
           schema: { type: string, format: uuid }
+        - name: voided
+          in: query
+          description: Omitted - whole archive INCLUDING voided-archived records; `true` - only voided-archived; `false` - exclude them.
+          schema: { type: boolean }
       responses:
         '200':
           description: Paginated archived records
@@ -2767,6 +2795,14 @@ components:
         - type: object
           properties:
             draftVersion: { type: integer }
+            voidReason:
+              type: [string, 'null']
+              description: Slice 17 - the void ANNOTATION (never part of the signed record content). Populated only once the job is VOIDED.
+            voidedBy: { type: [string, 'null'], format: uuid }
+            voidedAt:
+              type: [string, 'null']
+              format: date-time
+              description: Null for voids predating the slice-17 migration.
             templateRevision: { $ref: '#/components/schemas/TemplateRevision' }
             itemResults:
               type: array
@@ -3044,6 +3080,11 @@ components:
         recordId: { type: string, format: uuid }
         intact: { type: boolean }
         checkedAt: { type: string, format: date-time }
+        voided:
+          type: boolean
+          description: Slice 17 - `intact` speaks ONLY to cryptographic integrity (a voided record's untouched content still verifies); `voided` states the record's standing. Both are reported; neither masks the other.
+        voidReason: { type: [string, 'null'] }
+        voidedAt: { type: [string, 'null'], format: date-time }
         signatures:
           type: array
           items:
@@ -3126,6 +3167,9 @@ components:
             archivedTo: { type: string, format: date }
             technician: { type: string, format: uuid }
             approver: { type: string, format: uuid }
+            voided:
+              type: boolean
+              description: Slice 17 - same semantics as `GET /records`'s `voided` parameter (omitted = include voided-archived records).
 
     RecordExportStatus:
       type: object

@@ -17,6 +17,7 @@ import type {
   PdfRecordInput,
   PdfSignatureInput,
   PdfStandingContentInput,
+  PdfVoidNoticeInput,
 } from './pdf-html-template';
 
 /**
@@ -61,6 +62,7 @@ export class PdfRecordAssemblyService {
     }
 
     const signatures = await this.buildSignatures(job);
+    const voidNotice = await this.buildVoidNotice(job);
 
     return {
       recordId: job.id,
@@ -87,11 +89,45 @@ export class PdfRecordAssemblyService {
         contentType: a.contentType,
       })),
       signatures,
+      voidNotice,
       footer: {
         recordId: job.id,
         integrityDigestHex: Buffer.from(latestStep.contentHash).toString('hex'),
         renderedAt: new Date().toISOString(),
       },
+    };
+  }
+
+  /**
+   * Slice 17-VOID — the PDF must TELL THE TRUTH about a voided record: the
+   * untouched signed content renders exactly as before, under a VOID
+   * watermark/banner/footer line built from the annotation. The voiding
+   * ADMIN's name uses the same `decodeIdentityField` read path as the
+   * signature block.
+   */
+  private async buildVoidNotice(job: JobFullRow): Promise<PdfVoidNoticeInput | null> {
+    if (job.status !== 'voided') {
+      return null;
+    }
+    let voidedByName: string | null = null;
+    if (job.voidedBy) {
+      const user = await this.prisma.appUser.findUnique({
+        where: { id: job.voidedBy },
+        select: { id: true, fullNameCt: true, dekVersion: true },
+      });
+      voidedByName = user
+        ? decodeIdentityField(
+            user.fullNameCt,
+            user.dekVersion,
+            { column: 'full_name_ct', rowId: user.id },
+            this.fieldEncryption,
+          )
+        : job.voidedBy;
+    }
+    return {
+      reason: job.voidReason,
+      voidedAt: job.voidedAt ? job.voidedAt.toISOString() : null,
+      voidedByName,
     };
   }
 

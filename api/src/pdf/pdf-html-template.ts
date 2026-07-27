@@ -69,6 +69,19 @@ export interface PdfStandingContentInput {
   remarks?: string | null;
 }
 
+/**
+ * Slice 17-VOID — the void ANNOTATION, rendered as a diagonal watermark, a
+ * banner and a footer line. `null` for a live record. The record content
+ * below it is the untouched double-signed record (the annotation never
+ * modifies it); the PDF must therefore SAY the record is void while still
+ * showing the intact content — truth in both directions.
+ */
+export interface PdfVoidNoticeInput {
+  reason: string | null;
+  voidedAt: string | null;
+  voidedByName: string | null;
+}
+
 export interface PdfRecordInput {
   recordId: string;
   jobNumber: string;
@@ -86,6 +99,8 @@ export interface PdfRecordInput {
   partsUsed: PdfPartUsedInput[];
   attachments: PdfAttachmentInput[];
   signatures: PdfSignatureInput[];
+  /** Slice 17-VOID — present only for a VOIDED record. */
+  voidNotice?: PdfVoidNoticeInput | null;
   footer: {
     recordId: string;
     /** `approval_step.content_hash`, hex-encoded — PR-118 (see `job-include.ts#latestApprovalStep`). */
@@ -159,6 +174,24 @@ function renderAttachments(attachments: PdfAttachmentInput[]): string {
   return `<ul class="attachments">${items}</ul>`;
 }
 
+/** Slice 17-VOID — "RECORD VOID: <reason> (voided <at> by <name>)", shared by the banner and the footer line. */
+function voidLine(notice: PdfVoidNoticeInput): string {
+  const parts: string[] = [];
+  if (notice.voidedAt) parts.push(`voided ${esc(notice.voidedAt)}`);
+  if (notice.voidedByName) parts.push(`by ${esc(notice.voidedByName)}`);
+  const suffix = parts.length > 0 ? ` (${parts.join(' ')})` : '';
+  return `RECORD VOID: ${esc(notice.reason ?? '(no reason recorded)')}${suffix}`;
+}
+
+function renderVoidNotice(notice: PdfVoidNoticeInput | null | undefined): string {
+  if (!notice) return '';
+  // `position: fixed` repeats on every printed page in Chromium's print
+  // pipeline — the watermark marks ALL pages, not just the first.
+  return `
+  <div class="void-watermark" aria-hidden="true">VOID</div>
+  <div class="void-banner">${voidLine(notice)}</div>`;
+}
+
 function renderSignatures(signatures: PdfSignatureInput[]): string {
   if (signatures.length === 0) {
     return '<p class="muted">No approval actions recorded yet.</p>';
@@ -207,9 +240,12 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   .signature-block { display: inline-block; width: 45%; margin: 6px 2%; border: 1px solid #ccc; padding: 6px; vertical-align: top; }
   .drawn-signature { max-width: 180px; max-height: 80px; display: block; border-bottom: 1px solid #333; }
   .record-footer { margin-top: 24px; border-top: 1px solid #999; padding-top: 4px; font-size: 9px; color: #444; }
+  .void-watermark { position: fixed; top: 40%; left: 8%; font-size: 130px; font-weight: bold; color: rgba(176, 0, 32, 0.14); transform: rotate(-30deg); letter-spacing: 24px; pointer-events: none; z-index: 1000; }
+  .void-banner { border: 2px solid #b00020; color: #b00020; font-weight: bold; padding: 6px 8px; margin: 8px 0; }
 </style>
 </head>
 <body>
+  ${renderVoidNotice(input.voidNotice)}
   <div class="header-block">
     <div>
       <h1>${esc(input.documentTitle)}</h1>
@@ -255,7 +291,7 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   <p>${esc(input.standingContent.remarks) || '<span class="muted">None.</span>'}</p>
 
   <div class="record-footer">
-    Record ${esc(input.footer.recordId)} — Integrity digest (SHA-256): ${esc(input.footer.integrityDigestHex)} — Rendered ${esc(input.footer.renderedAt)}
+    Record ${esc(input.footer.recordId)} — Integrity digest (SHA-256): ${esc(input.footer.integrityDigestHex)} — Rendered ${esc(input.footer.renderedAt)}${input.voidNotice ? ` — ${voidLine(input.voidNotice)}` : ''}
   </div>
 </body>
 </html>`;

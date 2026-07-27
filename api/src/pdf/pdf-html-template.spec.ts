@@ -197,4 +197,49 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('No attachments.');
     expect(html).toContain('No approval actions recorded yet.');
   });
+
+  // ------------------------------------------------------- slice 17-VOID
+
+  it('U-VOID-04: a voided record renders the VOID watermark, banner and footer line — the PDF must tell the truth', () => {
+    const html = renderRecordHtml(
+      baseInput({
+        status: 'VOIDED',
+        voidNotice: {
+          reason: 'Raised against the wrong machine',
+          voidedAt: '2026-07-28T01:00:00.000Z',
+          voidedByName: 'Ada Admin',
+        },
+      }),
+    );
+    expect(html).toContain('void-watermark');
+    expect(html).toContain('RECORD VOID');
+    expect(html).toContain('Raised against the wrong machine');
+    expect(html).toContain('Ada Admin');
+    expect(html).toContain('2026-07-28T01:00:00.000Z');
+    // The footer carries the void line too (survives a single-page print of
+    // the last page alone).
+    expect(html).toMatch(/record-footer[\s\S]*RECORD VOID/);
+  });
+
+  it('U-VOID-05: a live record renders NO void marking (the stylesheet may define the class; no element uses it)', () => {
+    const html = renderRecordHtml(baseInput());
+    expect(html).not.toContain('class="void-watermark"');
+    expect(html).not.toContain('class="void-banner"');
+    expect(html).not.toContain('RECORD VOID');
+  });
+
+  it('U-VOID-06: the void reason is escaped — no markup injection through the annotation', () => {
+    const html = renderRecordHtml(
+      baseInput({
+        status: 'VOIDED',
+        voidNotice: {
+          reason: '<script>alert(9)</script>',
+          voidedAt: null,
+          voidedByName: null,
+        },
+      }),
+    );
+    expect(html).not.toContain('<script>alert(9)</script>');
+    expect(html).toContain('&lt;script&gt;alert(9)&lt;/script&gt;');
+  });
 });

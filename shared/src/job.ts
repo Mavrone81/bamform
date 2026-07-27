@@ -180,6 +180,12 @@ export type ApprovalStep = z.infer<typeof approvalStepSchema>;
 
 export const jobSchema = jobSummarySchema.extend({
   draftVersion: z.number().int().optional(),
+  // Slice 17-VOID — the void ANNOTATION (never part of the signed record
+  // content): populated only once a job is VOIDED. `voidedAt` is null for
+  // voids that predate the column (slice 17's migration adds it).
+  voidReason: z.string().nullable().optional(),
+  voidedBy: z.string().uuid().nullable().optional(),
+  voidedAt: z.string().nullable().optional(),
   templateRevision: templateRevisionSchema.optional(),
   itemResults: z.array(itemResultSchema).optional(),
   measurementResults: z.array(measurementResultSchema).optional(),
@@ -237,6 +243,13 @@ export const integrityResultSchema = z.object({
   recordId: z.string().uuid(),
   intact: z.boolean(),
   checkedAt: z.string(),
+  // Slice 17-VOID — the integrity surface must TELL THE TRUTH about a voided
+  // record: the signatures still verify (the content never changed) AND the
+  // record is void. `voided` is always populated; the reason/timestamp only
+  // when voided.
+  voided: z.boolean().optional(),
+  voidReason: z.string().nullable().optional(),
+  voidedAt: z.string().nullable().optional(),
   signatures: z
     .array(
       z.object({

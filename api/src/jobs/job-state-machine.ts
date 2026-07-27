@@ -33,12 +33,21 @@ const LEGAL_TRANSITIONS: Record<JobStatusT, readonly JobTransition[]> = {
   [JobStatusT.assigned]: ['ASSIGN', 'START', 'VOID'],
   [JobStatusT.in_progress]: ['ASSIGN', 'SUBMIT', 'VOID'],
   [JobStatusT.submitted]: ['VERIFY_ADVANCE', 'VERIFY_FINAL', 'RETURN', 'RECALL', 'VOID'],
-  // PR-041: ARCHIVED is terminal — no transition out of it exists in code.
   // VERIFIED never rests as a `job.status` value (PR-042) but is listed here,
   // empty, so the table stays total over every `JobStatusT` member (U-STM-03
-  // asserts this emptiness for both).
+  // asserts the terminal states' emptiness).
   [JobStatusT.verified]: [],
-  [JobStatusT.archived]: [],
+  // Slice 17-VOID — the owner's 2026-07-27 decision ("Void is also possible
+  // after the full process is completed") amends PR-041's "ARCHIVED is
+  // terminal": ARCHIVED's ONE exit is VOID. The transition is an ANNOTATION,
+  // never a mutation — the double-signed record content, signatures, content
+  // hash and audit chain are byte-identical before and after; only the void
+  // annotation fields (`status`/`void_reason`/`voided_by`/`voided_at`) change,
+  // enforced by the amended `job_archived_immutable_trg`. Post-archive void is
+  // ADMIN-only with a mandatory reason (`ApprovalTransitionsService#void_`).
+  [JobStatusT.archived]: ['VOID'],
+  // VOIDED is terminal and DB-immutable (`prevent_archived_job_update` also
+  // raises for OLD.status = 'voided' since slice 17 — the SYS-18 backstop).
   [JobStatusT.voided]: [],
 };
 

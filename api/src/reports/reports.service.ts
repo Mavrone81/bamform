@@ -124,8 +124,11 @@ export class ReportsService {
   /**
    * UR-067 — due vs. completed on time, grouped by area. "On time" =
    * archived at or before the due date; everything else in the window
-   * (never archived — voided, still open, or not yet due) counts as
-   * not-completed. SIMPLIFICATION, documented rather than hidden: a job due
+   * (still open, or not yet due) counts as not-completed — except VOIDED
+   * rows, which are excluded from the aggregation entirely (slice 17 review
+   * V-1: a voided period regenerates, so counting the voided row in any
+   * bucket double-counts the period; see the loop comment).
+   * SIMPLIFICATION, documented rather than hidden: a job due
    * later in the window than "now" but not yet actioned is counted as
    * not-completed even though it hasn't failed anything yet (it just hasn't
    * happened); this keeps the aggregation a single pass with no "is this
@@ -163,6 +166,20 @@ export class ReportsService {
       }
     >();
     for (const row of rows) {
+      // Slice 17-VOID (review V-1): a voided row is EXCLUDED from the
+      // aggregation entirely — the owner's rule is "the schedule behaves as
+      // if that PM never happened", and since slice 17 a voided period
+      // REGENERATES, so one logical period can be two rows (the voided one +
+      // its replacement). Counting the voided row at all — as due, completed
+      // OR notCompleted — double-counts the period forever (proved in
+      // I-VOID-12: due=2/completed=1/notCompleted=1 for one fully-completed
+      // period). The replacement row represents the period; between the void
+      // and the next tick the period is simply absent, faithful to "never
+      // happened". Note a post-archive-voided row keeps its untouched
+      // `archived_at`, so the status check (not the timestamp) is the guard.
+      if (row.status === 'voided') {
+        continue;
+      }
       const key = row.asset.areaId ?? '__none__';
       const bucket = byArea.get(key) ?? {
         areaId: row.asset.areaId,
@@ -177,7 +194,7 @@ export class ReportsService {
         if (row.archivedAt.getTime() <= row.dueOn.getTime()) bucket.onTime += 1;
         else bucket.late += 1;
       } else {
-        // Still open (voided, or overdue-and-incomplete as of `now`) — not completed for this period.
+        // Still open (overdue-and-incomplete as of `now`) — not completed for this period.
         bucket.notCompleted += 1;
       }
       byArea.set(key, bucket);

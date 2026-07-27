@@ -1,0 +1,17 @@
+-- Reversal: CREATE UNIQUE INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_key"
+--             ON "job"("asset_id", "frequency_scope", "due_on");
+--           CAUTION — the reversal FAILS if any voided row's period has
+--           since been regenerated (a voided and a live job then legitimately
+--           share (asset_id, frequency_scope, due_on), which the full index
+--           forbids). In that case the affected voided rows' periods must be
+--           re-examined by hand first; this is inherent to reversing a
+--           deliberate uniqueness weakening, not an accident. See
+--           20260728000010's header for the pairing.
+--
+-- Slice 17-VOID / SYS-19, step 2 of 2: the partial replacement
+-- ("..._not_voided_key", created by 20260728000010 earlier in this same
+-- `migrate deploy` run) is now in place, so the old FULL unique index —
+-- which made a VOIDED job block its period's regeneration forever — is
+-- retired. Single CONCURRENTLY statement, own migration, per M-06 and the
+-- one-statement-outside-a-transaction convention.
+DROP INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_key";

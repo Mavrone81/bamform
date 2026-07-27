@@ -120,4 +120,37 @@ describe('buildCanonicalJobRecord (PR-093/ADR-010, slice-3 HARD GATE resolution)
     const serialised = canonicalSerialiseToString(buildCanonicalJobRecord(input));
     expect(serialised).toContain('"quantity":2.5');
   });
+
+  // ------------------------------------------------- slice 17-VOID lockdown
+
+  it('U-VOID-03: the canonical serialisation contains NO void annotation fields — the exact key sets are pinned', () => {
+    // Slice 17's non-negotiable: void is an ANNOTATION, never a mutation.
+    // `void_reason`/`voided_by`/`voided_at` must NEVER enter the signed
+    // canonical content, or voiding an archived record would break every
+    // stored signature. This pins the canonical shape's exact key sets so a
+    // future edit that adds a void field (or anything else) to the signed
+    // content fails HERE, loudly, instead of silently invalidating the
+    // archive (the same failure class U-SIG-01's golden hash guards).
+    const canonical = buildCanonicalJobRecord(baseInput()) as Record<string, unknown>;
+    expect(Object.keys(canonical).sort()).toEqual([
+      'approvalSteps',
+      'attachments',
+      'itemResults',
+      'job',
+      'measurementResults',
+      'partsUsed',
+      'submitter',
+      'templateRevision',
+    ]);
+    expect(Object.keys(canonical.job as Record<string, unknown>).sort()).toEqual([
+      'assetId',
+      'frequency',
+      'id',
+      'jobNumber',
+      'status',
+      'templateRevisionId',
+    ]);
+    const serialised = canonicalSerialiseToString(buildCanonicalJobRecord(baseInput()));
+    expect(serialised.toLowerCase()).not.toContain('void');
+  });
 });
