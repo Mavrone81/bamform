@@ -64,22 +64,24 @@ test('O-03: outbox survives the tab being killed mid-drain and resumes on reopen
   // i.e. the same IndexedDB the outbox lives in).
   const page2 = await context.newPage();
   await server.install(page2); // route interception is per-page in Playwright
+  // Slice 16: session restore now triggers the resume drain ITSELF
+  // (App.tsx drains for the signed-in principal the moment the session is
+  // re-established — a device that stayed online would otherwise wait for
+  // an `online` transition that never comes). Register the wait before
+  // navigating so the automatic retry is captured.
+  const retryRequest = page2.waitForRequest('**/api/v1/sync/outbox');
   await page2.goto('/jobs');
   // A fresh page starts with no access token in memory (non-negotiable
   // #10 — it is never persisted) but silently re-authenticates via the
   // refresh cookie, exactly as a real reload would; the outbox itself is
   // entirely independent of auth state either way.
   await expect(page2.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
-  await page2.getByText('PM-2026-000431').click();
-
-  await expect(page2.getByText('Held on device')).toBeVisible();
-  const retryRequest = page2.waitForRequest('**/api/v1/sync/outbox');
-  await page2.evaluate(() => window.dispatchEvent(new Event('online')));
   const retry = await retryRequest;
   expect((retry.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id).toBe(
     mutationId,
   );
 
+  await page2.getByText('PM-2026-000431').click();
   await expect(page2.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
   expect(server.appliedCount.get(mutationId)).toBe(1); // still exactly once
 });
@@ -130,18 +132,18 @@ test('O-03 (true mid-send window): tab killed while the request is still in flig
 
   const page2 = await context.newPage();
   await server.install(page2);
-  await page2.goto('/jobs');
-  await expect(page2.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
-  await page2.getByText('PM-2026-000431').click();
-
   // Recovery must have already run (BamFormDB's `ready` handler, before
   // the first drain of this new session) — the row is reachable by
-  // listDrainable again, so the ordinary online-triggered drain sends it.
+  // listDrainable again, and slice 16's session-restore drain (App.tsx)
+  // sends it without needing an `online` transition. Register the wait
+  // before navigating so that automatic retry is captured.
   const retryRequest = page2.waitForRequest('**/api/v1/sync/outbox');
-  await page2.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page2.goto('/jobs');
+  await expect(page2.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
   const retry = await retryRequest;
   const mutationId = (retry.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id;
 
+  await page2.getByText('PM-2026-000431').click();
   await expect(page2.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
   expect(server.appliedCount.get(mutationId)).toBe(1); // applied exactly once, no duplicate
 });

@@ -8,6 +8,8 @@ import type { SyncTransport, OutboxMutation } from '../api/transport';
 export const MAX_BATCH_SIZE = 200;
 
 export interface AppendInput {
+  /** Server-returned id of the signed-in principal — see `OutboxEntry.userId`. */
+  userId: string;
   jobId: string;
   method: OutboxMethod;
   path: string;
@@ -65,6 +67,7 @@ export async function append(db: BamFormDB, input: AppendInput): Promise<AppendR
       const sequence = await nextSequence(db);
       const row: OutboxEntry = {
         id,
+        userId: input.userId,
         sequence,
         jobId: input.jobId,
         method: input.method,
@@ -79,7 +82,7 @@ export async function append(db: BamFormDB, input: AppendInput): Promise<AppendR
         lastResult: null,
       };
       await db.outbox.add(row);
-      const job = await db.jobs.get(input.jobId);
+      const job = await db.jobs.get([input.userId, input.jobId]);
       if (job) await db.jobs.put({ ...job, hasPendingOutbox: true });
       return row;
     });
@@ -92,26 +95,76 @@ export async function append(db: BamFormDB, input: AppendInput): Promise<AppendR
   }
 }
 
-/** Rows eligible to be sent on the next drain — never includes `conflict`
- * rows, which are retained but require an explicit technician decision
- * (PR-064) before they can be resent. */
-export async function listDrainable(db: BamFormDB, limit = MAX_BATCH_SIZE): Promise<OutboxEntry[]> {
-  const rows = await db.outbox.where('status').anyOf('pending', 'failed').sortBy('sequence');
+/** Rows eligible to be sent on the next drain, FOR THIS USER ONLY (SYS-6)
+ * — never includes `conflict` rows, which are retained but require an
+ * explicit technician decision (PR-064) before they can be resent. */
+export async function listDrainable(
+  db: BamFormDB,
+  userId: string,
+  limit = MAX_BATCH_SIZE,
+): Promise<OutboxEntry[]> {
+  const rows = await db.outbox
+    .where('[userId+status]')
+    .anyOf([
+      [userId, 'pending'],
+      [userId, 'failed'],
+    ])
+    .sortBy('sequence');
   return rows.slice(0, limit);
 }
 
-export async function pendingCountForJob(db: BamFormDB, jobId: string): Promise<number> {
-  return db.outbox.where('jobId').equals(jobId).count();
+/** ALL unacked rows for this user's copy of the job, whatever their status
+ * — this is the number the submit guard cares about (non-negotiable #2:
+ * submit only once every prior mutation is acknowledged). For technician-
+ * facing copy use `jobOutboxCounts`, which tells sendable rows apart from
+ * ones needing input (SYS-23). */
+export async function pendingCountForJob(
+  db: BamFormDB,
+  userId: string,
+  jobId: string,
+): Promise<number> {
+  return db.outbox.where('[userId+jobId]').equals([userId, jobId]).count();
 }
 
-export async function hasConflicts(db: BamFormDB, jobId: string): Promise<boolean> {
-  const rows = await db.outbox.where({ jobId, status: 'conflict' }).count();
+/** ALL unacked rows held for this user across every job — the number the
+ * sign-out warning shows (SYS-6: "they must be told, not silently
+ * stranded"). */
+export async function pendingCountForUser(db: BamFormDB, userId: string): Promise<number> {
+  return db.outbox.where('userId').equals(userId).count();
+}
+
+export interface JobOutboxCounts {
+  total: number;
+  /** pending / sending / failed — rows a future drain will (re)send. */
+  sendable: number;
+  /** 409-retained rows awaiting the technician's decision (PR-064). */
+  conflict: number;
+}
+
+/** SYS-23: the UI must not say "Sending N entries" about rows no drain will
+ * touch — this breakdown lets copy be honest about which is which. */
+export async function jobOutboxCounts(
+  db: BamFormDB,
+  userId: string,
+  jobId: string,
+): Promise<JobOutboxCounts> {
+  const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
+  const conflict = rows.filter((r) => r.status === 'conflict').length;
+  return { total: rows.length, sendable: rows.length - conflict, conflict };
+}
+
+export async function hasConflicts(db: BamFormDB, userId: string, jobId: string): Promise<boolean> {
+  const rows = await db.outbox
+    .where('[userId+jobId]')
+    .equals([userId, jobId])
+    .filter((r) => r.status === 'conflict')
+    .count();
   return rows > 0;
 }
 
-async function refreshJobPendingFlag(db: BamFormDB, jobId: string): Promise<void> {
-  const remaining = await pendingCountForJob(db, jobId);
-  const job = await db.jobs.get(jobId);
+async function refreshJobPendingFlag(db: BamFormDB, userId: string, jobId: string): Promise<void> {
+  const remaining = await pendingCountForJob(db, userId, jobId);
+  const job = await db.jobs.get([userId, jobId]);
   if (job) await db.jobs.put({ ...job, hasPendingOutbox: remaining > 0 });
 }
 
@@ -136,7 +189,11 @@ export interface DrainSummary {
  * non-2xx status, a 409 — leaves the row in the table for a later drain.
  * There is no code path that clears optimistically.
  */
-export async function drain(db: BamFormDB, transport: SyncTransport): Promise<DrainSummary> {
+export async function drain(
+  db: BamFormDB,
+  transport: SyncTransport,
+  userId: string,
+): Promise<DrainSummary> {
   // Select the batch AND mark it 'sending' inside ONE transaction. This is
   // not merely tidiness: `watchOnlineAndDrain`'s `online` listener and a
   // real browser's own `online` event can both fire independently for the
@@ -152,7 +209,7 @@ export async function drain(db: BamFormDB, transport: SyncTransport): Promise<Dr
   // reading until the first one's `bulkPut` has committed, at which point
   // `listDrainable` correctly excludes the now-'sending' rows.
   const batch = await db.transaction('rw', db.outbox, async () => {
-    const candidates = await listDrainable(db);
+    const candidates = await listDrainable(db, userId);
     if (candidates.length > 0) {
       await db.outbox.bulkPut(candidates.map((row) => ({ ...row, status: 'sending' as const })));
     }
@@ -242,7 +299,7 @@ export async function drain(db: BamFormDB, transport: SyncTransport): Promise<Dr
   }
 
   for (const jobId of touchedJobs) {
-    await refreshJobPendingFlag(db, jobId);
+    await refreshJobPendingFlag(db, userId, jobId);
   }
 
   return { attempted: batch.length, acked, conflicted, failed, networkError: false };
@@ -256,11 +313,12 @@ export async function drain(db: BamFormDB, transport: SyncTransport): Promise<Dr
 export async function drainAll(
   db: BamFormDB,
   transport: SyncTransport,
+  userId: string,
   maxIterations = 25,
 ): Promise<DrainSummary[]> {
   const summaries: DrainSummary[] = [];
   for (let i = 0; i < maxIterations; i++) {
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, userId);
     if (summary.attempted === 0) break;
     summaries.push(summary);
     if (summary.networkError) break; // no point hammering a dead network
@@ -271,20 +329,33 @@ export async function drainAll(
 
 /** The technician chooses to keep their local value and resend it (PR-064:
  * "the client shall present both values and require the technician to
- * choose"). Turns a `conflict` row back into `pending` so the next drain
- * retries it — with a FRESH id, because the original id's idempotency
- * record on the server already resolved to the conflicting response and
- * must not be replayed as if it were the same request. */
-export async function retryConflictWithNewId(db: BamFormDB, entryId: string): Promise<void> {
+ * choose"). Turns a retained `conflict` (or `failed`) row back into
+ * `pending` so the next drain retries it — with a FRESH id, because the
+ * original id definitively resolved server-side (a response WAS received,
+ * so this is provably not the O-15 ambiguity) and must not be replayed as
+ * if it were the same request.
+ *
+ * SYS-5 (review finding): replaying the row's own stale `ifMatch` would
+ * 409 forever — the server's version has moved past it, which is exactly
+ * why the row conflicted. Callers that know the server's CURRENT
+ * draftVersion (see conflict-recovery.ts) pass the corrected value via
+ * `opts.ifMatch`; omitting it keeps the stored value (only correct when
+ * the conflict was transient, e.g. a canned test conflict). */
+export async function retryConflictWithNewId(
+  db: BamFormDB,
+  entryId: string,
+  opts: { ifMatch?: number | null } = {},
+): Promise<void> {
   await db.transaction('rw', db.outbox, async () => {
     const row = await db.outbox.get(entryId);
-    if (!row || row.status !== 'conflict') return;
+    if (!row || (row.status !== 'conflict' && row.status !== 'failed')) return;
     await db.outbox.delete(row.id);
     const newId = uuidv7();
     await db.outbox.add({
       ...row,
       id: newId,
       status: 'pending',
+      ifMatch: 'ifMatch' in opts ? (opts.ifMatch ?? null) : row.ifMatch,
       lastResult: null,
       lastError: null,
     });
@@ -295,5 +366,5 @@ export async function retryConflictWithNewId(db: BamFormDB, entryId: string): Pr
 export async function discardConflict(db: BamFormDB, entryId: string): Promise<void> {
   const row = await db.outbox.get(entryId);
   await db.outbox.delete(entryId);
-  if (row) await refreshJobPendingFlag(db, row.jobId);
+  if (row) await refreshJobPendingFlag(db, row.userId, row.jobId);
 }

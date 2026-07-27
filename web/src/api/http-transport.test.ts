@@ -366,6 +366,140 @@ describe('HttpSyncTransport', () => {
 });
 
 /**
+ * Slice 16 (D-2b): `POST /jobs/{id}/attachments` rides XMLHttpRequest, the
+ * one transport in the platform that reports UPLOAD progress (fetch cannot)
+ * — a multi-MB photo on plant WiFi deserves a real progress bar, not a
+ * spinner. These tests drive a scripted fake XHR.
+ */
+describe('uploadAttachment', () => {
+  class FakeXHR {
+    static instances: FakeXHR[] = [];
+    static nextResponse: { status: number; body: string } = {
+      status: 201,
+      body: JSON.stringify({
+        id: 'att-1',
+        contentType: 'image/jpeg',
+        byteSize: 3,
+        uploadState: 'received',
+      }),
+    };
+    static failNextWithNetworkError = false;
+
+    method = '';
+    url = '';
+    headers: Record<string, string> = {};
+    withCredentials = false;
+    status = 0;
+    responseText = '';
+    sentBody: unknown = null;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    upload = { onprogress: null as ((e: ProgressEvent) => void) | null };
+
+    open(method: string, url: string) {
+      this.method = method;
+      this.url = url;
+      FakeXHR.instances.push(this);
+    }
+    setRequestHeader(name: string, value: string) {
+      this.headers[name.toLowerCase()] = value;
+    }
+    send(body: unknown) {
+      this.sentBody = body;
+      queueMicrotask(() => {
+        if (FakeXHR.failNextWithNetworkError) {
+          FakeXHR.failNextWithNetworkError = false;
+          this.onerror?.();
+          return;
+        }
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 } as ProgressEvent);
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 2, total: 2 } as ProgressEvent);
+        this.status = FakeXHR.nextResponse.status;
+        this.responseText = FakeXHR.nextResponse.body;
+        this.onload?.();
+      });
+    }
+  }
+
+  beforeEach(() => {
+    FakeXHR.instances = [];
+    FakeXHR.failNextWithNetworkError = false;
+    FakeXHR.nextResponse = {
+      status: 201,
+      body: JSON.stringify({
+        id: 'att-1',
+        contentType: 'image/jpeg',
+        byteSize: 3,
+        uploadState: 'received',
+      }),
+    };
+    vi.stubGlobal('XMLHttpRequest', FakeXHR as unknown as typeof XMLHttpRequest);
+  });
+
+  it('POSTs multipart form-data with bearer + REQUIRED Idempotency-Key, reporting upload progress', async () => {
+    setAccessToken('tok', 900);
+    const transport = new HttpSyncTransport();
+    const fractions: number[] = [];
+    const result = await transport.uploadAttachment(
+      'job-1',
+      new Blob(['abc'], { type: 'image/jpeg' }),
+      { idempotencyKey: 'key-1', onProgress: (f) => fractions.push(f) },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.attachment?.id).toBe('att-1');
+    const xhr = FakeXHR.instances[0];
+    expect(xhr.method).toBe('POST');
+    expect(xhr.url).toContain('/jobs/job-1/attachments');
+    expect(xhr.withCredentials).toBe(true);
+    expect(xhr.headers.authorization).toBe('Bearer tok');
+    expect(xhr.headers['idempotency-key']).toBe('key-1');
+    expect(xhr.sentBody).toBeInstanceOf(FormData);
+    expect(fractions).toEqual([0.5, 1]);
+  });
+
+  it('returns ok:false with the Problem body on a 422 magic-byte rejection — a failure state the UI can show honestly', async () => {
+    setAccessToken('tok', 900);
+    FakeXHR.nextResponse = {
+      status: 422,
+      body: JSON.stringify({
+        type: 'https://form.bevorasg.com/errors/attachment-rejected',
+        title: 'Not a supported image',
+        status: 422,
+      }),
+    };
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-2',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(422);
+    expect((result.problem as { title?: string })?.title).toBe('Not a supported image');
+  });
+
+  it('rejects with a TransportError when the connection dies mid-upload (caller shows the retry affordance)', async () => {
+    setAccessToken('tok', 900);
+    FakeXHR.failNextWithNetworkError = true;
+    const transport = new HttpSyncTransport();
+    await expect(
+      transport.uploadAttachment('job-1', new Blob(['x']), { idempotencyKey: 'key-3' }),
+    ).rejects.toThrow('uploadAttachment failed');
+  });
+
+  it('passes itemResultId through in the form body when supplied', async () => {
+    setAccessToken('tok', 900);
+    const transport = new HttpSyncTransport();
+    await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-4',
+      itemResultId: 'ir-9',
+    });
+    const form = FakeXHR.instances[0].sentBody as FormData;
+    expect(form.get('itemResultId')).toBe('ir-9');
+  });
+});
+
+/**
  * U-TRANS-01 — brief §2.3: the forced-password-change 403 is detected once,
  * centrally, in the transport layer, "not scattered across screens". Every
  * authenticated request in this app goes through `authorizedFetch`, so these

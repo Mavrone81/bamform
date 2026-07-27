@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getServices } from '../state/services';
+import { getServices, getSyncUserId } from '../state/services';
 import {
   bootstrap,
   listCachedJobs,
@@ -8,6 +8,7 @@ import {
   type JobSyncState,
   type ClockSkewRecord,
 } from '../offline/sync-engine';
+import { getStoragePersistence } from '../offline/persistence';
 import { onSynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { SyncStatusChip } from '../components/SyncStatusChip';
@@ -41,12 +42,20 @@ export function JobList() {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [clockSkew, setClockSkew] = useState<ClockSkewRecord | null>(null);
+  const [storageUnprotected, setStorageUnprotected] = useState(false);
 
   const refresh = useCallback(async () => {
     const { db } = getServices();
-    const jobs = await listCachedJobs(db);
+    const userId = getSyncUserId();
+    if (!userId) return; // signed out mid-flight — nothing to show
+    // SYS-15: re-read on every refresh — App's sign-in request may resolve
+    // after this screen first mounted (it notifies via sync-events).
+    void getStoragePersistence(db).then((outcome) => {
+      setStorageUnprotected(Boolean(outcome && !outcome.persisted));
+    });
+    const jobs = await listCachedJobs(db, userId);
     const withState = await Promise.all(
-      jobs.map(async (job) => ({ job, syncState: await jobSyncState(db, job.id) })),
+      jobs.map(async (job) => ({ job, syncState: await jobSyncState(db, userId, job.id) })),
     );
     withState.sort((a, b) => {
       const aOverdue = a.job.job.overdue ? 0 : 1;
@@ -125,6 +134,13 @@ export function JobList() {
         </p>
       )}
       {clockSkew && <ClockSkewBanner skew={clockSkew} />}
+      {storageUnprotected && (
+        <p className="banner" data-tone="attention">
+          <span aria-hidden="true">⚠</span> This browser has not protected BamForm's offline storage
+          — records held on this device could be evicted if it runs low on space or sits unused.
+          Installing the app (Add to Home Screen) protects them.
+        </p>
+      )}
 
       {rows === null && (
         <p className="loading-state">

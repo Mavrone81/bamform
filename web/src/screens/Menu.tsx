@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from '../router';
-import { getCurrentUser, onCurrentUserChange } from '../auth';
+import { getCurrentUser, onCurrentUserChange, logout } from '../auth';
 import { rolesGetQueueTab } from '../components/NavShell';
+import { getServices, getSyncUserId } from '../state/services';
+import { pendingCountForUser } from '../offline/outbox';
 
 /**
  * The shell's third tab (slice 14-DESIGN §3.2): everything that is not a
@@ -16,7 +18,36 @@ import { rolesGetQueueTab } from '../components/NavShell';
 export function Menu() {
   const { navigate } = useRouter();
   const [user, setUser] = useState(() => getCurrentUser());
+  const [pendingCount, setPendingCount] = useState(0);
+  const [signingOut, setSigningOut] = useState(false);
+  const warnDialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => onCurrentUserChange(setUser), []);
+
+  async function doSignOut() {
+    setSigningOut(true);
+    try {
+      // The outbox is deliberately NOT touched (SYS-6: clearing it on
+      // sign-out would destroy unsent work). The rows stay keyed under
+      // this user's server-returned id; no other account can see or drain
+      // them, and they resume sending when this user signs back in.
+      await logout();
+      // App's token listener flips to the sign-in screen from here.
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
+  async function onSignOutTapped() {
+    const userId = getSyncUserId();
+    const count = userId ? await pendingCountForUser(getServices().db, userId) : 0;
+    if (count > 0) {
+      // SYS-6: they must be TOLD their work has not been transmitted yet.
+      setPendingCount(count);
+      warnDialogRef.current?.showModal();
+      return;
+    }
+    await doSignOut();
+  }
 
   const hasQueueTab = rolesGetQueueTab(user?.roles);
   const isAdmin = user?.roles.includes('ADMIN') ?? false;
@@ -57,6 +88,48 @@ export function Menu() {
           ))}
         </ul>
       </nav>
+
+      <div style={{ marginTop: 'var(--space-5)' }}>
+        <button
+          type="button"
+          className="btn-block"
+          disabled={signingOut}
+          onClick={() => void onSignOutTapped()}
+        >
+          {signingOut ? 'Signing out…' : 'Sign out'}
+        </button>
+      </div>
+
+      <dialog ref={warnDialogRef} className="dialog" aria-labelledby="signout-warn-heading">
+        <h2 id="signout-warn-heading">
+          <span aria-hidden="true">⚠</span> {pendingCount} unsent entr
+          {pendingCount === 1 ? 'y' : 'ies'} on this device
+        </h2>
+        <p>
+          Work you recorded has not reached the server yet. Signing out keeps it safely stored on
+          this device under your account — nobody else can see or send it — but it will NOT be
+          transmitted until you sign back in on this device with a connection.
+        </p>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => warnDialogRef.current?.close()}
+          >
+            Stay signed in
+          </button>
+          <button
+            type="button"
+            disabled={signingOut}
+            onClick={() => {
+              warnDialogRef.current?.close();
+              void doSignOut();
+            }}
+          >
+            Sign out anyway
+          </button>
+        </div>
+      </dialog>
     </main>
   );
 }

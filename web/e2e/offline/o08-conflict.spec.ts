@@ -37,7 +37,11 @@ test('O-08: a 409 on one mutation is retained, the rest of the batch applies, an
   expect(server.appliedCount.get(id1)).toBe(1);
 
   // Submit is blocked while a conflict is outstanding (non-negotiable #2's
-  // guard: submitJob refuses while any outbox row remains, conflicted or not).
-  const submitButton = page.getByRole('button', { name: /Submit|Sending/ });
+  // guard: submitJob refuses while any outbox row remains, conflicted or
+  // not) — since slice 16 the button says WHY (SYS-23 honesty) and the
+  // recovery panel offers the way out (o20-conflict-recovery.spec.ts).
+  const submitButton = page.getByRole('button', {
+    name: /Submit|Sending|Resolve the conflict/,
+  });
   await expect(submitButton).toBeDisabled();
 });

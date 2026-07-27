@@ -20,6 +20,9 @@ import type {
   VerifyJobRequest,
   CreateDelegationRequest,
   Problem,
+  Attachment,
+  AttachmentUploadOptions,
+  AttachmentUploadResult,
 } from './transport';
 
 async function authorizedFetch(
@@ -167,6 +170,57 @@ export class HttpSyncTransport implements SyncTransport {
     }
     const problem: Problem | undefined = await res.json().catch(() => undefined);
     return { status: res.status, ok: false, problem };
+  }
+
+  /**
+   * XMLHttpRequest, deliberately: it is the only platform transport that
+   * reports UPLOAD progress (fetch reports download only), and a multi-MB
+   * photo over plant WiFi needs a truthful progress bar. Zero-dependency,
+   * same-origin, same cookie semantics (`withCredentials`). The bearer is
+   * pre-flighted through `ensureFreshToken` (XHR cannot reuse
+   * `authorizedFetch`'s 401-retry; the proactive refresh covers the same
+   * window in practice).
+   */
+  async uploadAttachment(
+    jobId: string,
+    file: Blob,
+    opts: AttachmentUploadOptions,
+  ): Promise<AttachmentUploadResult> {
+    const token = getAccessToken() ?? (await ensureFreshToken());
+    return new Promise<AttachmentUploadResult>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/jobs/${encodeURIComponent(jobId)}/attachments`);
+      xhr.withCredentials = true;
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('Idempotency-Key', opts.idempotencyKey);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          opts.onProgress?.(event.loaded / event.total);
+        }
+      };
+      xhr.onload = () => {
+        let body: unknown;
+        try {
+          body = JSON.parse(xhr.responseText) as unknown;
+        } catch {
+          body = undefined;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ status: xhr.status, ok: true, attachment: body as Attachment });
+        } else {
+          resolve({ status: xhr.status, ok: false, problem: body as Problem });
+        }
+      };
+      xhr.onerror = () =>
+        reject(new TransportError('uploadAttachment failed: network error before any response'));
+      xhr.onabort = () => reject(new TransportError('uploadAttachment failed: aborted'));
+
+      const form = new FormData();
+      const filename = file instanceof File ? file.name : 'photo.jpg';
+      form.append('file', file, filename);
+      if (opts.itemResultId) form.append('itemResultId', opts.itemResultId);
+      xhr.send(form);
+    });
   }
 
   async getDelegations(): Promise<DelegationsPage> {

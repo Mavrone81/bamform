@@ -55,6 +55,18 @@ export interface SeedJob {
   submittedBy?: string;
   submittedAt?: string;
   currentStageOrdinal?: 1 | 2;
+  /** Slice 16 (D-2a): pre-seeded approval history, so a spec can present a
+   * job ALREADY returned by a verifier without walking the whole
+   * submit→return journey first (e03 covers that journey end-to-end). */
+  approvalSteps?: Array<{
+    stageOrdinal: number;
+    stageLabel: string;
+    action: 'SUBMITTED' | 'VERIFIED' | 'RETURNED' | 'RECALLED' | 'VOIDED';
+    actorId: string;
+    actorName: string;
+    reason?: string | null;
+    actedAt: string;
+  }>;
 }
 
 interface OutboxResultLike {
@@ -283,6 +295,12 @@ export class FakeServer {
     if (job.submittedBy) this.jobSubmittedBy.set(job.id, job.submittedBy);
     if (job.submittedAt) this.jobSubmittedAt.set(job.id, job.submittedAt);
     if (!this.approvalSteps.has(job.id)) this.approvalSteps.set(job.id, []);
+    if (job.approvalSteps?.length) {
+      this.approvalSteps.set(
+        job.id,
+        job.approvalSteps.map((step) => ({ id: `step-${++this.approvalStepSeq}`, ...step })),
+      );
+    }
   }
 
   /** Grants a delegation directly (bypassing `POST /delegations`) so a test
@@ -399,7 +417,7 @@ export class FakeServer {
       })),
       measurementResults: [],
       partsUsed: [],
-      attachments: [],
+      attachments: this.attachments.get(job.id) ?? [],
       approvalSteps: this.approvalSteps.get(job.id) ?? [],
     };
   }
@@ -815,12 +833,17 @@ export class FakeServer {
   }
 
   private async handleBootstrap(route: Route) {
+    // Slice 16 (SYS-6): the bootstrap payload's `user` is the AUTHENTICATED
+    // principal, exactly as the real endpoint derives it from the bearer —
+    // the client keys its whole offline partition on this id, so echoing a
+    // hardcoded user here would silently undo the multi-user tests.
+    const requester = await this.currentUser(route);
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         serverTime: this.serverTime,
-        user: { id: 'user-1', fullName: 'Test Technician', roles: ['MAINTAINER'] },
+        user: { id: requester.id, fullName: requester.fullName, roles: requester.roles },
         jobs: Array.from(this.jobs.values()).map((j) => this.toApiJob(j)),
         deletedJobIds: Array.from(this.deletedJobIds),
         syncToken: `tok-${this.jobs.size}`,
@@ -965,6 +988,74 @@ export class FakeServer {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(body),
+    });
+  }
+
+  // ---- Slice 16 (D-2b): attachments — online-only upload ----
+
+  attachments = new Map<string, Array<{ id: string; originalFilename: string }>>();
+  private attachmentIdempotency = new Map<string, unknown>();
+  private attachmentSeq = 0;
+  private uploadRejectionOnce: { status: number; title: string } | null = null;
+
+  /** The NEXT upload is refused with this Problem (e.g. magic-byte 422). */
+  forceNextUploadRejectionOnce(status: number, title: string): void {
+    this.uploadRejectionOnce = { status, title };
+  }
+
+  private async handleUploadAttachment(route: Route, jobId: string) {
+    if (this.networkDown) {
+      await route.abort('internetdisconnected');
+      return;
+    }
+    const key = await route.request().headerValue('idempotency-key');
+    if (!key) {
+      // The contract REQUIRES the header — a client that forgets it must
+      // fail loudly in the suite, not silently pass.
+      await route.fulfill({
+        status: 422,
+        contentType: 'application/problem+json',
+        body: JSON.stringify(this.problem(422, 'Idempotency-Key is required')),
+      });
+      return;
+    }
+    const replay = this.attachmentIdempotency.get(key);
+    if (replay) {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify(replay),
+      });
+      return;
+    }
+    if (this.uploadRejectionOnce) {
+      const { status, title } = this.uploadRejectionOnce;
+      this.uploadRejectionOnce = null;
+      await route.fulfill({
+        status,
+        contentType: 'application/problem+json',
+        body: JSON.stringify(
+          this.problem(status, title, 'https://form.bevorasg.com/errors/attachment-rejected'),
+        ),
+      });
+      return;
+    }
+    const attachment = {
+      id: `att-${++this.attachmentSeq}`,
+      itemResultId: null,
+      originalFilename: `photo-${this.attachmentSeq}.jpg`,
+      contentType: 'image/jpeg',
+      byteSize: route.request().postDataBuffer()?.length ?? 0,
+      uploadState: 'received',
+    };
+    const list = this.attachments.get(jobId) ?? [];
+    list.push(attachment);
+    this.attachments.set(jobId, list);
+    this.attachmentIdempotency.set(key, attachment);
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify(attachment),
     });
   }
 
@@ -1373,6 +1464,16 @@ export class FakeServer {
           .url()
           .match(/\/jobs\/([^/]+)\/submit/);
         return this.handleSubmit(route, match ? match[1] : 'unknown');
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/jobs\/([^/]+)\/attachments$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/jobs\/([^/]+)\/attachments$/);
+        return this.handleUploadAttachment(route, match ? match[1] : 'unknown');
       }),
     );
     await page.route(

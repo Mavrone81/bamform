@@ -1,6 +1,7 @@
 import type { components } from './generated/openapi-types';
 
 export type OutboxMutation = components['schemas']['OutboxMutation'];
+export type Attachment = components['schemas']['Attachment'];
 export type OutboxResult = components['schemas']['OutboxResult'];
 export type SyncBootstrap = components['schemas']['SyncBootstrap'];
 export type Problem = components['schemas']['Problem'];
@@ -59,6 +60,22 @@ export interface DelegationActionResponse {
   problem?: Problem;
 }
 
+export interface AttachmentUploadResult {
+  status: number;
+  ok: boolean;
+  attachment?: Attachment;
+  problem?: Problem;
+}
+
+export interface AttachmentUploadOptions {
+  /** REQUIRED by the contract (openapi `/jobs/{jobId}/attachments`). */
+  idempotencyKey: string;
+  /** Ties the photo to a specific item result, when known. */
+  itemResultId?: string;
+  /** Upload progress, 0..1 — real bytes-on-the-wire progress. */
+  onProgress?: (fraction: number) => void;
+}
+
 /**
  * The transport seam (brief requirement: "keep the transport layer behind
  * an interface so real endpoints wire in without rewriting screens"). Every
@@ -111,6 +128,24 @@ export interface SyncTransport {
   /** POST /jobs/{jobId}/return — slice 7. `reason` must be >= 10 characters
    * (INV-13); the server re-validates and rejects 422 regardless. */
   returnJob(jobId: string, reason: string, idempotencyKey?: string): Promise<JobActionResponse>;
+
+  /**
+   * POST /jobs/{jobId}/attachments — slice 6 endpoint, first UI in slice 16
+   * (D-2b). ONLINE-ONLY BY DESIGN (v1): attachments are never queued in the
+   * offline outbox. Queueing multi-MB binary blobs into IndexedDB has real
+   * quota consequences (PR-069 unresolved) — a full quota would start
+   * refusing the CHECKLIST writes the outbox exists to protect. The screen
+   * tells the technician to reconnect instead of pretending (see
+   * RecordCapture's photo section, and the O-06/O-07 status notes in
+   * docs/TEST_PLAN.md). Rejects (throws TransportError) when the network
+   * dies mid-upload; resolves ok:false with the server's Problem on an
+   * explicit rejection (magic-byte/size/count caps).
+   */
+  uploadAttachment(
+    jobId: string,
+    file: Blob,
+    opts: AttachmentUploadOptions,
+  ): Promise<AttachmentUploadResult>;
 
   /** GET /delegations — slice 11a. The caller's own delegation grants, plus
    * grants made TO them, either direction. */

@@ -9,27 +9,17 @@ import { test } from '@playwright/test';
  * o16-batch-cap.
  */
 
-test.fixme('O-06: submit while attachments still uploading — record submits, attachments flagged pending', async () => {
-  // Requires an attachment-capture UI (photo upload widget on the
-  // record-capture screen, wired to POST /jobs/{id}/attachments) and an
-  // "attachments pending" indicator on the record. This foundation pass
-  // deliberately scoped to the core outbox/sync machinery + checklist/
-  // measurement capture (the highest-risk surface, RK-01) and did not
-  // build attachment capture — PR-067's queuing/pending semantics exist
-  // at the contract and type level (Attachment.uploadState
-  // pending|received in the generated OpenAPI types) but nothing in
-  // src/screens/RecordCapture.tsx calls the upload endpoint yet.
-  // Follow-up: add the capture widget, then this is a straightforward
-  // extension of the O-01/O-08 patterns already proven in this suite.
-});
-
-test.fixme('O-07: a record is not verifiable while attachments are pending — verify blocked until received', async () => {
-  // Same prerequisite as O-06: no attachment capture UI exists yet to
-  // put a record into the "attachments pending" state in the first
-  // place. Verification itself (PR-041..046) is also a later slice
-  // (api/src has no jobs/approval module on `main` at the time of this
-  // branch), so there is no verify endpoint to call regardless.
-});
+// O-06 / O-07 — RESOLVED by design in slice 16 (D-2b), not by tests:
+// attachment capture shipped ONLINE-ONLY. Photos are never queued in the
+// offline outbox; an upload either completes or visibly fails before
+// Submit (a staged or in-flight photo BLOCKS Submit), so the "attachments
+// still uploading at submit" / "attachments pending at verify" states
+// these two scenarios describe cannot be reached. Their protective intent
+// — a record never silently rides ahead of its evidence — is covered by
+// the passing O-21 specs (o21-attachments.spec.ts). If offline-queued
+// attachments are ever built (PR-069 quota work), O-06/O-07 become real
+// targets again and belong back here as fixmes until proven. See
+// docs/TEST_PLAN.md §8 status note and the slice-16 report's defence.
 
 test.fixme('O-12: service worker updated mid-session — cache versioned, no mismatched code against a newer API', async () => {
   // Implemented in production code: src/sw.ts names its cache

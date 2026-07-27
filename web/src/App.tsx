@@ -21,9 +21,10 @@ import {
   getPendingRecoveryCodes,
   onPendingRecoveryCodesChange,
 } from './auth';
-import { watchOnlineAndDrain } from './offline/sync-engine';
+import { watchOnlineAndDrain, triggerDrainIfOnline } from './offline/sync-engine';
+import { ensurePersistentStorage } from './offline/persistence';
 import { notifySynced } from './offline/sync-events';
-import { getServices } from './state/services';
+import { getServices, getSyncUserId } from './state/services';
 import './styles/global.css';
 
 function Screens() {
@@ -57,6 +58,27 @@ function Screens() {
     if (!checkingSession && !authed && path !== '/sign-in') navigate('/sign-in');
     if (!checkingSession && authed && path === '/sign-in') navigate('/jobs');
   }, [authed, checkingSession, path, navigate]);
+
+  // SYS-15: ask the browser to protect this origin's IndexedDB from
+  // eviction, once, at sign-in — unsent records live there, and iOS wipes
+  // non-persisted storage after 7 days of absence. Fire-and-forget: the
+  // outcome is recorded in `meta` and surfaced by the job list's sync area.
+  useEffect(() => {
+    if (!authed) return;
+    void ensurePersistentStorage(getServices().db)
+      // The job list surfaces a refusal in its sync area; it may already
+      // have mounted and read the (not-yet-recorded) outcome, so tell it.
+      .then(() => notifySynced())
+      .catch(() => {
+        /* never allowed to break sign-in */
+      });
+    // SYS-6: work held for THIS user resumes sending the moment they sign
+    // back in — without this, rows preserved across a sign-out would wait
+    // for the next `online` TRANSITION event, which never fires for a
+    // device that stayed online the whole time.
+    const { db, transport } = getServices();
+    triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
+  }, [authed]);
 
   if (checkingSession) {
     return (
@@ -110,8 +132,11 @@ export function App() {
     // resulting drain must be reflected wherever they are, not only on the
     // job list. Screens subscribe via offline/sync-events instead of each
     // wiring their own `online` listener.
+    // SYS-6: the drain resolves the signed-in principal AT EVENT TIME
+    // (`getSyncUserId`), so reconnecting while user B is signed in drains
+    // exactly B's rows — never the whole device's.
     const { db, transport } = getServices();
-    return watchOnlineAndDrain(db, transport, () => notifySynced());
+    return watchOnlineAndDrain(db, transport, getSyncUserId, () => notifySynced());
   }, []);
 
   return (
