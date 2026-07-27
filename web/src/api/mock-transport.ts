@@ -69,6 +69,13 @@ export class MockSyncTransport implements SyncTransport {
     this.jobStore.set(job.id, job);
   }
 
+  /** Models the job being reassigned away / removed server-side: `getJob`
+   * then throws a TransportError carrying status 404, exactly as
+   * `HttpSyncTransport.getJob` does for a non-OK response. */
+  removeJob(jobId: string): void {
+    this.jobStore.delete(jobId);
+  }
+
   seedQueueEntry(entry: QueueEntry): void {
     this.queueEntries.set(entry.id, entry);
   }
@@ -196,7 +203,7 @@ export class MockSyncTransport implements SyncTransport {
   async getJob(jobId: string): Promise<Job> {
     if (this.networkDown) throw new TransportError('mock: network down');
     const job = this.jobStore.get(jobId);
-    if (!job) throw new TransportError(`mock: job ${jobId} not found`);
+    if (!job) throw new TransportError(`mock: job ${jobId} not found`, undefined, 404);
     return job;
   }
 

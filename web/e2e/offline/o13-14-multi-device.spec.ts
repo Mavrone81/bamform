@@ -115,5 +115,10 @@ test('O-14: a job reassigned server-side is flagged on the original device and b
 
   await page.getByText(JOB.jobNumber).click();
   await expect(page.getByText(/reassigned or removed on the server/i)).toBeVisible();
-  await expect(page.getByRole('button', { name: /Submit|Sending/ })).toBeDisabled();
+  // Since slice 16 the refused (`failed`) rows ALSO summon the recovery
+  // panel here (H-3) and the disabled submit button says why — the O-14
+  // guarantee itself is unchanged: submit is blocked.
+  await expect(
+    page.getByRole('button', { name: /Submit|Sending|Resolve the sync problem/ }),
+  ).toBeDisabled();
 });

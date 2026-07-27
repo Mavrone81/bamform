@@ -55,7 +55,12 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   const [itemResults, setItemResults] = useState<Record<string, ItemStatus>>({});
   const [readings, setReadings] = useState<Record<string, string>>({});
   const [syncState, setSyncState] = useState<JobSyncState>('held-on-device');
-  const [counts, setCounts] = useState<JobOutboxCounts>({ total: 0, sendable: 0, conflict: 0 });
+  const [counts, setCounts] = useState<JobOutboxCounts>({
+    total: 0,
+    sendable: 0,
+    failed: 0,
+    conflict: 0,
+  });
   const [locallyEdited, setLocallyEdited] = useState<Record<string, boolean>>({});
   /** D-2a: items edited during THIS screen session. `locallyEdited` (from
    * the outbox) empties the moment an edit is acknowledged, but the cached
@@ -71,6 +76,11 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   const [photos, setPhotos] = useState<StagedPhoto[]>([]);
   const debounceRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** H-7: staged/uploading photos are screen-local — leaving discards
+   * them. The Back button confirms first instead of silently binning the
+   * evidence the technician believed was attached. (Tab-bar navigation is
+   * outside this screen's reach — see the report's stated limitation.) */
+  const leaveConfirmRef = useRef<HTMLDialogElement>(null);
 
   const loadCached = useCallback(async () => {
     const { db } = getServices();
@@ -203,14 +213,20 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       const result = await recoverJobConflicts(db, transport, userId, jobId, choice);
       if (!result.ok) {
         setRecoveryBanner(
-          'Recovery needs a connection — the server’s current version of this job must be fetched first. Reconnect and try again. Nothing was changed or lost.',
+          result.reason === 'job-inaccessible'
+            ? // H-3: the server ANSWERED — saying "reconnect" here would be
+              // a lie an online technician can never escape.
+              'This job is no longer available to you on the server — it may have been reassigned or removed. Sending your entries again cannot succeed. “Discard mine” is the way out; your other jobs are unaffected.'
+            : 'Recovery needs a connection — the server’s current version of this job must be fetched first. Reconnect and try again. Nothing was changed or lost.',
         );
         return;
       }
       setRecoveryBanner(
         result.action === 'kept-mine'
           ? 'Your entries were re-queued against the server’s current version and are being resent.'
-          : 'Your conflicting entries were discarded and this job now shows the server’s version.',
+          : result.jobInaccessible
+            ? 'Your unsent entries were discarded. This job is no longer available to you on the server (reassigned or removed), so nothing further can be sent for it from this device.'
+            : 'Your conflicting entries were discarded and this job now shows the server’s version.',
       );
       await loadCached();
       notifySynced();
@@ -357,10 +373,14 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   const uploadsInFlight = photos.some((p) => p.state === 'uploading');
   const photosAwaitingAction = photos.some((p) => p.state === 'staged' || p.state === 'failed');
   const hasConflict = counts.conflict > 0;
+  // H-3: `failed` rows (non-409 refusals — e.g. the job was reassigned
+  // away) are as much a dead end as conflicts: drains re-send them into
+  // the same refusal forever. Both classes get the recovery panel.
+  const needsRecovery = counts.conflict + counts.failed > 0;
   const canSubmit =
     counts.total === 0 &&
     !cached.serverRemoved &&
-    !hasConflict &&
+    !needsRecovery &&
     !uploadsInFlight &&
     !photosAwaitingAction;
   const recordedCount = items.filter((item) => itemResults[item.id] != null).length;
@@ -378,10 +398,20 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     return !Number.isNaN(recordedMs) && recordedMs > returnedAtMs;
   }
 
+  const pendingPhotoCount = photos.filter((p) => p.state !== 'uploaded').length;
+
+  function handleBack() {
+    if (pendingPhotoCount > 0) {
+      leaveConfirmRef.current?.showModal();
+      return;
+    }
+    navigate('/jobs');
+  }
+
   return (
     <main className="app-shell" aria-labelledby="record-heading">
       <header className="screen-header">
-        <button type="button" className="back-link btn-quiet" onClick={() => navigate('/jobs')}>
+        <button type="button" className="back-link btn-quiet" onClick={handleBack}>
           <span aria-hidden="true">‹</span> Back to your jobs
         </button>
         <div className="card-row">
@@ -454,19 +484,33 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         </p>
       )}
 
-      {hasConflict && (
+      {needsRecovery && (
         <section className="dialog" aria-labelledby="conflict-heading" data-testid="conflict-panel">
           <h2 id="conflict-heading">
-            <span aria-hidden="true">⚠</span> {counts.conflict} entr
-            {counts.conflict === 1 ? 'y' : 'ies'} could not be applied
+            <span aria-hidden="true">⚠</span> {counts.conflict + counts.failed} entr
+            {counts.conflict + counts.failed === 1 ? 'y' : 'ies'} could not be applied
           </h2>
-          <p>
-            The server has a newer version of this job than this device did when these entries were
-            made — usually because it was edited elsewhere, or its state changed (returned, voided
-            or verified) while this device was offline. Nothing has been lost: the entries are held
-            on this device, but they cannot be sent as-is, and Submit stays blocked until you
-            decide.
-          </p>
+          {hasConflict ? (
+            <p>
+              The server has a newer version of this job than this device did when these entries
+              were made — usually because it was edited elsewhere, or its state changed (returned,
+              voided or verified) while this device was offline. Nothing has been lost: the entries
+              are held on this device, but they cannot be sent as-is, and Submit stays blocked until
+              you decide.
+            </p>
+          ) : (
+            // H-3: the non-409 class — the server REFUSED these entries
+            // (e.g. this job is no longer assigned to you, or an entry was
+            // rejected as invalid). Sending them again unchanged cannot
+            // succeed.
+            <p>
+              The server refused {counts.failed === 1 ? 'this entry' : 'these entries'} — for
+              example because this job is no longer assigned to you, or an entry was rejected as
+              invalid. Nothing has been lost: {counts.failed === 1 ? 'it is' : 'they are'} held on
+              this device, but re-sending unchanged cannot succeed, and Submit stays blocked until
+              you decide.
+            </p>
+          )}
           {recoveryBanner && (
             <p className="banner" data-tone="info" role="status">
               <span aria-hidden="true">ℹ</span> {recoveryBanner}
@@ -497,7 +541,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
           )}
         </section>
       )}
-      {!hasConflict && recoveryBanner && (
+      {!needsRecovery && recoveryBanner && (
         <p className="banner" data-tone="good" role="status">
           <span aria-hidden="true">✓</span> {recoveryBanner}
         </p>
@@ -688,13 +732,42 @@ export function RecordCapture({ jobId }: { jobId: string }) {
             ? 'Submitting…'
             : uploadsInFlight
               ? 'Uploading photo…'
-              : hasConflict
-                ? 'Resolve the conflict above to submit'
+              : needsRecovery
+                ? 'Resolve the sync problem above to submit'
                 : counts.sendable > 0
                   ? `Sending ${counts.sendable} entr${counts.sendable === 1 ? 'y' : 'ies'}…`
                   : 'Submit'}
         </button>
       </div>
+
+      <dialog ref={leaveConfirmRef} className="dialog" aria-labelledby="leave-confirm-heading">
+        <h2 id="leave-confirm-heading">
+          <span aria-hidden="true">⚠</span> {pendingPhotoCount} photo
+          {pendingPhotoCount === 1 ? '' : 's'} not uploaded
+        </h2>
+        <p>
+          Photos are not held offline — leaving this screen discards the ones that have not been
+          uploaded. Your checklist entries are unaffected.
+        </p>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => leaveConfirmRef.current?.close()}
+          >
+            Stay on this record
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              leaveConfirmRef.current?.close();
+              navigate('/jobs');
+            }}
+          >
+            Leave and discard
+          </button>
+        </div>
+      </dialog>
     </main>
   );
 }

@@ -103,3 +103,26 @@ test('O-21d: offline, photo capture is refused with a clear message — and NOTH
     0,
   );
 });
+
+test('O-21e (H-7): leaving with a not-yet-uploaded photo asks first — staying keeps it, leaving discards it knowingly', async ({
+  signedInPage: page,
+  server,
+}) => {
+  await page.getByText(DEFAULT_JOB.jobNumber).click();
+  await page.getByLabel('Add a photo (camera or gallery)').setInputFiles(PHOTO);
+  await expect(page.getByTestId('staged-photo')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Back to your jobs' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('1 photo not uploaded')).toBeVisible();
+
+  // Staying keeps the photo staged.
+  await dialog.getByRole('button', { name: 'Stay on this record' }).click();
+  await expect(page.getByTestId('staged-photo')).toBeVisible();
+
+  // Leaving is an informed choice, and nothing was ever uploaded.
+  await page.getByRole('button', { name: 'Back to your jobs' }).click();
+  await dialog.getByRole('button', { name: 'Leave and discard' }).click();
+  await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
+  expect(server.attachments.get(DEFAULT_JOB.id) ?? []).toHaveLength(0);
+});

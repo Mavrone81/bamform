@@ -75,6 +75,7 @@ async function wedge(transport: MockSyncTransport): Promise<[string, string]> {
   expect(await jobOutboxCounts(db, 'user-1', 'job-1')).toEqual({
     total: 2,
     sendable: 0,
+    failed: 0,
     conflict: 2,
   });
   return [a.entry.id, b.entry.id];
@@ -185,6 +186,183 @@ describe('recoverJobConflicts — SYS-5: the wedge is recoverable through code, 
     // half-rebuilt.
     expect((await db.outbox.get(oldA))?.status).toBe('conflict');
     expect((await db.outbox.get(oldB))?.status).toBe('conflict');
+  });
+
+  it('H-3: keep-mine against a job the server no longer grants (404 — reassigned away) reports job-inaccessible, NOT offline, and touches nothing', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: 7 }));
+    const [oldA, oldB] = await wedge(transport);
+    transport.removeJob('job-1'); // reassigned/removed server-side
+
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'keep-mine');
+    expect(result).toEqual({ ok: false, reason: 'job-inaccessible', status: 404 });
+
+    // Nothing half-rebuilt: the rows are exactly as they were.
+    expect((await db.outbox.get(oldA))?.status).toBe('conflict');
+    expect((await db.outbox.get(oldB))?.status).toBe('conflict');
+  });
+
+  it('H-3: accept-server against a gone job STILL discards — the only correct exit for a reassigned-away wedge — and flags the job server-removed', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: 7 }));
+    await wedge(transport);
+    transport.removeJob('job-1');
+
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'accept-server');
+    expect(result).toEqual({
+      ok: true,
+      action: 'accepted-server',
+      retried: 0,
+      discarded: 2,
+      jobInaccessible: true,
+    });
+
+    expect(await pendingCountForJob(db, 'user-1', 'job-1')).toBe(0);
+    const cached = await getCachedJob(db, 'user-1', 'job-1');
+    expect(cached?.serverRemoved).toBe(true); // honest: cannot be submitted from here
+    expect(cached?.hasPendingOutbox).toBe(false);
+  });
+
+  it('reports offline when the FLUSH drain itself dies on the network (still-sendable rows present)', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: 7 }));
+    const [oldA, oldB] = await wedge(transport);
+    // A still-sendable row is queued alongside the conflicts…
+    await append(db, input({ path: '/jobs/job-1/items/item-3', ifMatch: 3 }));
+    // …and the network dies before recovery can settle it.
+    transport.networkDown = true;
+
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'keep-mine');
+    expect(result).toEqual({ ok: false, reason: 'offline' });
+    expect((await db.outbox.get(oldA))?.status).toBe('conflict');
+    expect((await db.outbox.get(oldB))?.status).toBe('conflict');
+  });
+
+  it('treats a NON-transport getJob throw (no status) as offline, never as job-inaccessible', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: 7 }));
+    await wedge(transport);
+    transport.getJob = async () => {
+      throw new Error('something unexpected'); // not a TransportError at all
+    };
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'keep-mine');
+    expect(result).toEqual({ ok: false, reason: 'offline' });
+  });
+
+  it('keep-mine handles rows with NO ifMatch (null) and a server job with NO draftVersion — the chain skips unversioned rows', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: undefined }));
+    const unversioned = (await append(db, input({ ifMatch: null }))) as {
+      ok: true;
+      entry: { id: string };
+    };
+    transport.forceConflict(unversioned.entry.id);
+    await drain(db, transport, 'user-1');
+
+    // Block the resend so the rebuilt row is observable.
+    transport.drainOutbox = async () => {
+      throw new Error('offline again');
+    };
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'keep-mine');
+    expect(result.ok).toBe(true);
+
+    const rows = await db.outbox.where('[userId+jobId]').equals(['user-1', 'job-1']).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ifMatch).toBeNull(); // unversioned stays unversioned
+    const cached = await getCachedJob(db, 'user-1', 'job-1');
+    expect(cached?.predictedDraftVersion).toBe(1); // server default 1 + 0 versioned rows
+  });
+
+  it('keep-mine leaves a stuck `sending` row alone — only retained (conflict/failed) rows are rebuilt', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: 7 }));
+    await wedge(transport);
+    // A row claimed by a drain whose session died — recoverStuckSendingRows
+    // territory, not recovery's.
+    await db.outbox.add({
+      id: 'stuck-sending',
+      userId: 'user-1',
+      sequence: 99,
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-9',
+      body: {},
+      ifMatch: 9,
+      clientRecordedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      status: 'sending',
+      attempts: 1,
+      lastError: null,
+      lastResult: null,
+    });
+
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'keep-mine');
+    expect(result.ok).toBe(true);
+    const stuck = await db.outbox.get('stuck-sending');
+    expect(stuck?.status).toBe('sending'); // untouched
+    expect(stuck?.ifMatch).toBe(9); // not re-chained
+  });
+
+  it('recovery for rows whose cached job row is MISSING still re-baselines a fresh cached copy from the server', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: 7 }));
+    await wedge(transport);
+    await db.jobs.delete(['user-1', 'job-1']); // cache lost (e.g. partial wipe)
+
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'accept-server');
+    expect(result.ok).toBe(true);
+    const cached = await getCachedJob(db, 'user-1', 'job-1');
+    expect(cached?.job.draftVersion).toBe(7);
+    expect(cached?.submitState).toBe('none');
+    expect(cached?.submitIdempotencyKey).toBeNull();
+  });
+
+  it('gone-job discard skips non-retained rows and copes with a missing cached job row', async () => {
+    const transport = new MockSyncTransport();
+    transport.seedJob(makeJob({ draftVersion: 7 }));
+    const a = (await append(db, input())) as { ok: true; entry: { id: string } };
+    // Make the row terminally failed and KEEP the server refusing it, so
+    // recovery's flush cannot quietly ack it first.
+    transport.drainOutbox = async (mutations) =>
+      Promise.resolve({
+        results: mutations.map((m) => ({
+          id: m.id,
+          status: 404,
+          applied: false,
+          problem: { type: 'about:blank', title: 'job not found (reassigned)', status: 404 },
+        })),
+      });
+    await drain(db, transport, 'user-1');
+    expect((await db.outbox.get(a.entry.id))?.status).toBe('failed');
+    await db.outbox.add({
+      id: 'stuck-sending-2',
+      userId: 'user-1',
+      sequence: 98,
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-8',
+      body: {},
+      ifMatch: 8,
+      clientRecordedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      status: 'sending',
+      attempts: 1,
+      lastError: null,
+      lastResult: null,
+    });
+    await db.jobs.delete(['user-1', 'job-1']);
+    transport.removeJob('job-1');
+
+    const result = await recoverJobConflicts(db, transport, 'user-1', 'job-1', 'accept-server');
+    expect(result).toEqual({
+      ok: true,
+      action: 'accepted-server',
+      retried: 0,
+      discarded: 1,
+      jobInaccessible: true,
+    });
+    expect(await db.outbox.get(a.entry.id)).toBeUndefined(); // failed row discarded
+    expect((await db.outbox.get('stuck-sending-2'))?.status).toBe('sending'); // untouched
   });
 
   it("never touches another user's rows for the same job", async () => {

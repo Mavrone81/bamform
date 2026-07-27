@@ -144,27 +144,47 @@ export function userMetaKey(userId: string, key: string): string {
 export const LEGACY_USER_ID = '@legacy';
 
 /**
- * Re-keys every legacy-owned row to `userId` — the id the SERVER returned
- * for the currently authenticated principal (bootstrap `user.id`). Called
- * from `bootstrap()` on every run; a no-op unless legacy rows exist, so in
- * practice it fires exactly once, on the first authenticated sync after the
- * upgrade.
+ * Re-keys legacy-owned rows to `userId` — the id the SERVER returned for
+ * the currently authenticated principal (bootstrap `user.id`). Called from
+ * `bootstrap()` on every run; a no-op unless legacy rows exist.
  *
- * Honesty note (argued in the slice report): attributing the legacy rows to
- * the first server-confirmed principal is exactly what the PRE-slice-16 code
- * did implicitly on every drain (the whole outbox went out under whatever
- * bearer was present). This claim is therefore never WORSE than the
- * behaviour it replaces, it is bounded to the single upgrade moment, and it
- * is overwhelmingly correct in practice because the refresh cookie that
- * authenticates the first post-upgrade session belongs to the same user who
- * queued the work. Refusing to claim at all would strand unsent records
- * forever — the one unforgivable outcome.
+ * Ownership rule (H-4, review-adopted): the legacy cached job carries the
+ * SERVER-attested `Job.assignedTo` from the device's last pre-upgrade
+ * bootstrap, and result capture requires assignment-to-self — so a queued
+ * edit's owner is the job's assignee, on the server's own say-so. Rows
+ * whose job's `assignedTo` MATCHES the signing-in principal are claimed;
+ * rows attested to a DIFFERENT user are QUARANTINED (left `@legacy`, never
+ * drained, surfaced by the job list — see `legacyHoldSummary`) until that
+ * user signs in. Only rows with no surviving job or no recorded assignee
+ * fall back to first-principal claim — for those the owner genuinely is
+ * unrecorded, and that fallback is never WORSE than the pre-slice-16 code,
+ * which drained the whole outbox under whatever bearer was present.
+ * Refusing to claim those at all would strand unsent records forever — the
+ * one unforgivable outcome.
  */
 export async function claimLegacyRows(db: BamFormDB, userId: string): Promise<void> {
   await db.transaction('rw', db.outbox, db.jobs, async () => {
-    await db.outbox.where('userId').equals(LEGACY_USER_ID).modify({ userId });
     const legacyJobs = await db.jobs.where('userId').equals(LEGACY_USER_ID).toArray();
+    // Owner hints, captured BEFORE any job is re-keyed.
+    const hintByJobId = new Map<string, string | null>(
+      legacyJobs.map((row) => [row.id, row.job.assignedTo ?? null]),
+    );
+
+    await db.outbox
+      .where('userId')
+      .equals(LEGACY_USER_ID)
+      .modify((row: OutboxEntry) => {
+        const hint = hintByJobId.get(row.jobId);
+        // hint === undefined: no surviving job → unrecorded owner → fallback.
+        // hint === null: job survives but carries no assignee → fallback.
+        // hint === userId: server-attested match → claim.
+        // hint === someone else: quarantine — do not touch.
+        if (hint == null || hint === userId) row.userId = userId;
+      });
+
     for (const row of legacyJobs) {
+      const hint = hintByJobId.get(row.id);
+      if (hint != null && hint !== userId) continue; // quarantined for its own user
       // Delete-then-add (not put) because the primary key [userId+id]
       // itself changes; `add` (not put) so an existing row already owned by
       // this user is never silently overwritten — the legacy copy is kept
@@ -174,6 +194,33 @@ export async function claimLegacyRows(db: BamFormDB, userId: string): Promise<vo
       if (!alreadyClaimed) await db.jobs.add({ ...row, userId });
     }
   });
+}
+
+/**
+ * H-4 visibility: what the device is holding in quarantine for OTHER users
+ * — so the job list can say so instead of the rows sitting invisibly.
+ */
+export interface LegacyHoldSummary {
+  /** Quarantined (still `@legacy`) unsent outbox rows on this device. */
+  count: number;
+  /** Server-attested display names of the users the held work belongs to
+   * (from the legacy jobs' `assignedToName`), where known. */
+  names: string[];
+}
+
+export async function legacyHoldSummary(db: BamFormDB): Promise<LegacyHoldSummary> {
+  const rows = await db.outbox.where('userId').equals(LEGACY_USER_ID).toArray();
+  if (rows.length === 0) return { count: 0, names: [] };
+  const legacyJobs = await db.jobs.where('userId').equals(LEGACY_USER_ID).toArray();
+  const nameByJobId = new Map(legacyJobs.map((j) => [j.id, j.job.assignedToName ?? null]));
+  const names = [
+    ...new Set(
+      rows
+        .map((r) => nameByJobId.get(r.jobId))
+        .filter((n): n is string => typeof n === 'string' && n.length > 0),
+    ),
+  ];
+  return { count: rows.length, names };
 }
 
 /**

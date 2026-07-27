@@ -5,11 +5,13 @@ import {
   listCachedJobs,
   jobSyncState,
   getClockSkew,
+  triggerDrainIfOnline,
   type JobSyncState,
   type ClockSkewRecord,
 } from '../offline/sync-engine';
 import { getStoragePersistence } from '../offline/persistence';
-import { onSynced } from '../offline/sync-events';
+import { onSynced, notifySynced } from '../offline/sync-events';
+import { legacyHoldSummary, type LegacyHoldSummary } from '../offline/db';
 import type { CachedJob } from '../offline/db';
 import { SyncStatusChip } from '../components/SyncStatusChip';
 import { InstallHint } from '../components/InstallHint';
@@ -43,6 +45,7 @@ export function JobList() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [clockSkew, setClockSkew] = useState<ClockSkewRecord | null>(null);
   const [storageUnprotected, setStorageUnprotected] = useState(false);
+  const [legacyHold, setLegacyHold] = useState<LegacyHoldSummary | null>(null);
 
   const refresh = useCallback(async () => {
     const { db } = getServices();
@@ -52,6 +55,11 @@ export function JobList() {
     // after this screen first mounted (it notifies via sync-events).
     void getStoragePersistence(db).then((outcome) => {
       setStorageUnprotected(Boolean(outcome && !outcome.persisted));
+    });
+    // H-4: pre-upgrade work quarantined for OTHER users must be visible,
+    // not silently parked in IndexedDB.
+    void legacyHoldSummary(db).then((summary) => {
+      setLegacyHold(summary.count > 0 ? summary : null);
     });
     const jobs = await listCachedJobs(db, userId);
     const withState = await Promise.all(
@@ -87,6 +95,15 @@ export function JobList() {
       })
       .finally(() => {
         if (!cancelled) void refresh();
+        // H-2: bootstrap may have just CLAIMED pre-upgrade legacy rows for
+        // this principal (claimLegacyRows runs inside bootstrap). App's
+        // sign-in drain fired before that claim, and on an always-online
+        // device no further `online` transition will ever come — so the
+        // claimed work would sit untransmitted all session. Drain now,
+        // after the claim, unconditionally (a no-op when nothing is
+        // drainable).
+        const { db: drainDb, transport: drainTransport } = getServices();
+        triggerDrainIfOnline(drainDb, drainTransport, getSyncUserId, () => notifySynced());
       });
     // Covers the case where a skew was recorded on an earlier bootstrap
     // this session and the banner should still be visible on remount.
@@ -134,6 +151,15 @@ export function JobList() {
         </p>
       )}
       {clockSkew && <ClockSkewBanner skew={clockSkew} />}
+      {legacyHold && (
+        <p className="banner" data-tone="info">
+          <span aria-hidden="true">◍</span> {legacyHold.count} unsent entr
+          {legacyHold.count === 1 ? 'y' : 'ies'} recorded before the app update
+          {legacyHold.names.length > 0 ? ` belong to ${legacyHold.names.join(', ')} and` : ''} will
+          be sent when the matching user signs in on this device. They are held safely and are not
+          part of your work.
+        </p>
+      )}
       {storageUnprotected && (
         <p className="banner" data-tone="attention">
           <span aria-hidden="true">⚠</span> This browser has not protected BamForm's offline storage

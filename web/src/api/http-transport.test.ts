@@ -383,6 +383,9 @@ describe('uploadAttachment', () => {
         uploadState: 'received',
       }),
     };
+    /** When non-empty, each send() consumes the next scripted response —
+     * lets a test serve 401-then-201 across the retry (H-5). */
+    static responseQueue: Array<{ status: number; body: string }> = [];
     static failNextWithNetworkError = false;
 
     method = '';
@@ -415,8 +418,9 @@ describe('uploadAttachment', () => {
         }
         this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 } as ProgressEvent);
         this.upload.onprogress?.({ lengthComputable: true, loaded: 2, total: 2 } as ProgressEvent);
-        this.status = FakeXHR.nextResponse.status;
-        this.responseText = FakeXHR.nextResponse.body;
+        const scripted = FakeXHR.responseQueue.shift() ?? FakeXHR.nextResponse;
+        this.status = scripted.status;
+        this.responseText = scripted.body;
         this.onload?.();
       });
     }
@@ -424,6 +428,7 @@ describe('uploadAttachment', () => {
 
   beforeEach(() => {
     FakeXHR.instances = [];
+    FakeXHR.responseQueue = [];
     FakeXHR.failNextWithNetworkError = false;
     FakeXHR.nextResponse = {
       status: 201,
@@ -496,6 +501,89 @@ describe('uploadAttachment', () => {
     });
     const form = FakeXHR.instances[0].sentBody as FormData;
     expect(form.get('itemResultId')).toBe('ir-9');
+  });
+
+  it('H-5: a 401 refreshes the session once and retries once with the NEW token — the upload succeeds', async () => {
+    setAccessToken('stale-tok', 900);
+    // `refresh()` posts /auth/refresh through fetch (still globally mocked).
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        accessToken: 'fresh-tok',
+        expiresIn: 900,
+        user: { id: 'u1', fullName: 'A', roles: [] },
+      }),
+    );
+    FakeXHR.responseQueue = [
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+      {
+        status: 201,
+        body: JSON.stringify({
+          id: 'att-9',
+          contentType: 'image/jpeg',
+          byteSize: 1,
+          uploadState: 'received',
+        }),
+      },
+    ];
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-5',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.attachment?.id).toBe('att-9');
+    expect(FakeXHR.instances).toHaveLength(2);
+    expect(FakeXHR.instances[0].headers.authorization).toBe('Bearer stale-tok');
+    expect(FakeXHR.instances[1].headers.authorization).toBe('Bearer fresh-tok');
+    // Same idempotency key both attempts — the retry is a replay, never a
+    // second upload.
+    expect(FakeXHR.instances[1].headers['idempotency-key']).toBe('key-5');
+    const refreshCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).includes('/auth/refresh'));
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('H-5: a second 401 after the refresh fails honestly — exactly one retry, never a loop', async () => {
+    setAccessToken('stale-tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        accessToken: 'fresh-tok',
+        expiresIn: 900,
+        user: { id: 'u1', fullName: 'A', roles: [] },
+      }),
+    );
+    FakeXHR.responseQueue = [
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+    ];
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-6',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(401);
+    expect(FakeXHR.instances).toHaveLength(2); // one retry, then honest failure
+  });
+
+  it('H-5: a 401 with a DEAD refresh session fails honestly without retrying', async () => {
+    setAccessToken('stale-tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, false, 401)); // refresh refused
+    FakeXHR.responseQueue = [
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+    ];
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-7',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(401);
+    expect(FakeXHR.instances).toHaveLength(1); // no pointless replay with no new token
   });
 });
 

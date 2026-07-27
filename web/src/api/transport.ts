@@ -163,6 +163,11 @@ export class TransportError extends Error {
   constructor(
     message: string,
     public readonly cause?: unknown,
+    /** HTTP status when a response WAS received (absent for a dead
+     * network) — lets callers tell "the server refused" apart from "the
+     * server is unreachable" instead of collapsing both into one message
+     * (review H-3: a 404'd recovery must not claim "you're offline"). */
+    public readonly status?: number,
   ) {
     super(message);
     this.name = 'TransportError';

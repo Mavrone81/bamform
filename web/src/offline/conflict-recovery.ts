@@ -1,5 +1,5 @@
 import type { BamFormDB } from './db';
-import type { SyncTransport, Job } from '../api/transport';
+import { TransportError, type SyncTransport, type Job } from '../api/transport';
 import { drainAll, retryConflictWithNewId } from './outbox';
 
 /**
@@ -27,8 +27,22 @@ import { drainAll, retryConflictWithNewId } from './outbox';
 export type ConflictRecoveryChoice = 'keep-mine' | 'accept-server';
 
 export type ConflictRecoveryResult =
-  | { ok: true; action: 'kept-mine' | 'accepted-server'; retried: number; discarded: number }
-  | { ok: false; reason: 'offline' };
+  | {
+      ok: true;
+      action: 'kept-mine' | 'accepted-server';
+      retried: number;
+      discarded: number;
+      /** Set when the server refused `GET /jobs/{id}` (403/404 — the job
+       * was reassigned away or removed): the discard proceeded and the
+       * cached job is flagged server-removed. */
+      jobInaccessible?: true;
+    }
+  | { ok: false; reason: 'offline' }
+  /** The server ANSWERED and refused the job (H-3): resending can never
+   * succeed, so keep-mine is impossible — but discard remains available
+   * and is the correct exit. Distinct from 'offline' because telling an
+   * online technician to "reconnect" would be a lie with no way out. */
+  | { ok: false; reason: 'job-inaccessible'; status: number };
 
 export async function recoverJobConflicts(
   db: BamFormDB,
@@ -49,8 +63,17 @@ export async function recoverJobConflicts(
   let serverJob: Job;
   try {
     serverJob = await transport.getJob(jobId);
-  } catch {
-    return { ok: false, reason: 'offline' };
+  } catch (error) {
+    // H-3: a response WITH a status is the server REFUSING the job
+    // (reassigned away since slice 15's /assign, or removed) — calling
+    // that "offline" would strand an online technician behind a lying
+    // message. Resend can never succeed; only discard can. A throw
+    // without a status genuinely is "server unreachable".
+    const status = error instanceof TransportError ? error.status : undefined;
+    if (status == null) return { ok: false, reason: 'offline' };
+    if (choice === 'keep-mine') return { ok: false, reason: 'job-inaccessible', status };
+    const discarded = await discardRetainedForGoneJob(db, userId, jobId);
+    return { ok: true, action: 'accepted-server', retried: 0, discarded, jobInaccessible: true };
   }
   const serverVersion = serverJob.draftVersion ?? 1;
 
@@ -108,4 +131,35 @@ export async function recoverJobConflicts(
     return { ok: true, action: 'kept-mine', retried, discarded: 0 };
   }
   return { ok: true, action: 'accepted-server', retried: 0, discarded };
+}
+
+/** The accept-server exit when the job itself is gone from the caller's
+ * view: discard the retained rows and flag the cached copy server-removed
+ * (O-14's language — visible, unsubmittable, cleaned up by a later
+ * bootstrap once no pending work remains). */
+async function discardRetainedForGoneJob(
+  db: BamFormDB,
+  userId: string,
+  jobId: string,
+): Promise<number> {
+  let discarded = 0;
+  await db.transaction('rw', db.outbox, db.jobs, async () => {
+    const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
+    for (const row of rows) {
+      if (row.status === 'conflict' || row.status === 'failed') {
+        await db.outbox.delete(row.id);
+        discarded++;
+      }
+    }
+    const remaining = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).count();
+    const cached = await db.jobs.get([userId, jobId]);
+    if (cached) {
+      await db.jobs.put({
+        ...cached,
+        serverRemoved: true,
+        hasPendingOutbox: remaining > 0,
+      });
+    }
+  });
+  return discarded;
 }

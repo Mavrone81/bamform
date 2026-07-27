@@ -32,7 +32,7 @@ test('O-20a: wedge → “Keep my entries and resend” → conflict clears with
   const panel = page.getByTestId('conflict-panel');
   await expect(panel).toBeVisible();
   await expect(panel.getByText(/server has a newer version/i)).toBeVisible();
-  await expect(page.getByRole('button', { name: /Resolve the conflict/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /Resolve the sync problem/ })).toBeDisabled();
 
   // Recover, keeping the technician's entries.
   await panel.getByRole('button', { name: 'Keep my entries and resend' }).click();
@@ -104,4 +104,45 @@ test('O-20c: recovery while offline says so and changes nothing — no half-reco
   // Reconnect: the conflict is still there, still recoverable.
   await page.context().setOffline(false);
   await expect(panel.getByRole('button', { name: 'Keep my entries and resend' })).toBeEnabled();
+});
+
+test('O-20d (H-3): job reassigned away while edits were offline — non-409 failures get the recovery panel, and discard is a working exit while fully online', async ({
+  signedInPage: page,
+  server,
+}) => {
+  await page.getByText(DEFAULT_JOB.jobNumber).click();
+  await expect(page.getByRole('heading', { name: DEFAULT_JOB.jobNumber })).toBeVisible();
+
+  // Technician edits offline; meanwhile the job is reassigned away
+  // server-side (slice 15's /assign made this a real flow).
+  await page.context().setOffline(true);
+  const items = page.locator('.checklist-item');
+  await items.nth(0).getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(items.nth(0).getByRole('button', { name: 'Done', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  server.removeJob(DEFAULT_JOB.id);
+
+  // Reconnect: the drain's mutation is refused 404 → a `failed` row, the
+  // class that previously wedged forever with NO recovery UI (SYS-5
+  // reborn). The panel must appear, with the refusal copy, not the
+  // newer-version copy.
+  await page.context().setOffline(false);
+  const panel = page.getByTestId('conflict-panel');
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  await expect(panel.getByText(/The server refused/)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Resolve the sync problem/ })).toBeDisabled();
+
+  // The technician is ONLINE — discard must work, not claim "reconnect".
+  await panel.getByRole('button', { name: 'Discard mine, use the server’s' }).click();
+  await expect(panel).toBeHidden({ timeout: 10_000 });
+  await expect(page.getByText(/no longer available to you on the server/)).toBeVisible();
+  // The job is honestly flagged: kept visible, but never submittable here.
+  await expect(page.getByText(/reassigned or removed on the server/)).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /Submit|Sending|Resolve the sync problem/ }),
+  ).toBeDisabled();
+  // Nothing was ever applied server-side for the refused mutation.
+  expect(Array.from(server.appliedCount.values())).toHaveLength(0);
 });

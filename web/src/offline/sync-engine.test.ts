@@ -439,6 +439,63 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
   });
 });
 
+describe('drain triggers — a signed-out device (null principal) drains NOTHING (SYS-6)', () => {
+  it('triggerDrainIfOnline is a no-op when getUserId returns null', async () => {
+    await append(db, {
+      userId: 'user-1',
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/x',
+      body: {},
+      ifMatch: 1,
+      clientRecordedAt: new Date().toISOString(),
+    });
+    const transport = new MockSyncTransport();
+    const drainSpy = vi.spyOn(transport, 'drainOutbox');
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    triggerDrainIfOnline(db, transport, () => null);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(drainSpy).not.toHaveBeenCalled();
+    expect(await pendingCountForJob(db, 'user-1', 'job-1')).toBe(1); // untouched
+  });
+
+  it('watchOnlineAndDrain ignores an online event that fires while signed out', async () => {
+    await append(db, {
+      userId: 'user-1',
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/x',
+      body: {},
+      ifMatch: 1,
+      clientRecordedAt: new Date().toISOString(),
+    });
+    const transport = new MockSyncTransport();
+    const drainSpy = vi.spyOn(transport, 'drainOutbox');
+    const unsubscribe = watchOnlineAndDrain(db, transport, () => null);
+    window.dispatchEvent(new Event('online'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(drainSpy).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+});
+
+describe('submitJob — outcomes for a job absent from the local cache', () => {
+  it('a network throw for an uncached job still returns reason network without crashing', async () => {
+    const transport = new MockSyncTransport();
+    transport.networkDown = true;
+    const result = await submitJob(db, transport, 'user-1', 'ghost-job');
+    expect(result).toEqual({ ok: false, reason: 'network' });
+  });
+
+  it('an explicit rejection for an uncached job still surfaces the problem without crashing', async () => {
+    const transport = new MockSyncTransport();
+    const problem = { type: 'about:blank', title: 'nope', status: 422 };
+    transport.submitJob = async () => ({ status: 422, ok: false, problem });
+    const result = await submitJob(db, transport, 'user-1', 'ghost-job');
+    expect(result).toEqual({ ok: false, reason: 'server-rejected', status: 422, problem });
+  });
+});
+
 describe('jobSyncState — the three technician-facing labels (PR-066) plus conflict', () => {
   beforeEach(async () => {
     await db.jobs.put({

@@ -135,14 +135,19 @@ export async function pendingCountForUser(db: BamFormDB, userId: string): Promis
 
 export interface JobOutboxCounts {
   total: number;
-  /** pending / sending / failed — rows a future drain will (re)send. */
+  /** pending / sending — rows genuinely on their way. */
   sendable: number;
+  /** Rows the server explicitly REFUSED with a non-409 (or that were
+   * missing from a response): drains re-send them, but an unchanged
+   * resend cannot succeed — they need the technician's decision just as
+   * conflicts do (review H-3). */
+  failed: number;
   /** 409-retained rows awaiting the technician's decision (PR-064). */
   conflict: number;
 }
 
-/** SYS-23: the UI must not say "Sending N entries" about rows no drain will
- * touch — this breakdown lets copy be honest about which is which. */
+/** SYS-23: the UI must not say "Sending N entries" about rows no drain can
+ * ever land — this breakdown lets copy be honest about which is which. */
 export async function jobOutboxCounts(
   db: BamFormDB,
   userId: string,
@@ -150,7 +155,8 @@ export async function jobOutboxCounts(
 ): Promise<JobOutboxCounts> {
   const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
   const conflict = rows.filter((r) => r.status === 'conflict').length;
-  return { total: rows.length, sendable: rows.length - conflict, conflict };
+  const failed = rows.filter((r) => r.status === 'failed').length;
+  return { total: rows.length, sendable: rows.length - conflict - failed, failed, conflict };
 }
 
 export async function hasConflicts(db: BamFormDB, userId: string, jobId: string): Promise<boolean> {

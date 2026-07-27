@@ -5,6 +5,7 @@ import {
   getDB,
   recoverStuckSendingRows,
   claimLegacyRows,
+  legacyHoldSummary,
   LEGACY_USER_ID,
   type OutboxEntry,
 } from './db';
@@ -256,6 +257,230 @@ describe('BamFormDB', () => {
       expect((await db.outbox.get('legacy-mutation-1'))?.userId).toBe('user-1');
       expect(await db.jobs.get(['user-1', 'job-1'])).toBeDefined();
       expect(await db.jobs.get(['user-2', 'job-1'])).toBeUndefined();
+      await db.delete();
+    });
+
+    it('H-4: claims only rows whose job carries a MATCHING server-attested assignedTo; quarantines the rest for the matching user', async () => {
+      const db = createTestDB(`db-test-hint-${Math.random()}`);
+      const baseJob = {
+        cachedAt: new Date().toISOString(),
+        hasPendingOutbox: true,
+        submitState: 'none' as const,
+        serverRemoved: false,
+        predictedDraftVersion: 1,
+      };
+      await db.jobs.bulkAdd([
+        {
+          ...baseJob,
+          userId: LEGACY_USER_ID,
+          id: 'job-a',
+          job: { id: 'job-a', assignedTo: 'user-1' } as never,
+        },
+        {
+          ...baseJob,
+          userId: LEGACY_USER_ID,
+          id: 'job-b',
+          job: { id: 'job-b', assignedTo: 'user-2', assignedToName: 'Other Tech' } as never,
+        },
+      ]);
+      const baseRow = {
+        method: 'PUT' as const,
+        body: {},
+        ifMatch: 1,
+        clientRecordedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        status: 'pending' as const,
+        attempts: 0,
+        lastError: null,
+        lastResult: null,
+      };
+      await db.outbox.bulkAdd([
+        {
+          ...baseRow,
+          id: 'row-a',
+          userId: LEGACY_USER_ID,
+          sequence: 1,
+          jobId: 'job-a',
+          path: '/jobs/job-a/items/x',
+        },
+        {
+          ...baseRow,
+          id: 'row-b',
+          userId: LEGACY_USER_ID,
+          sequence: 2,
+          jobId: 'job-b',
+          path: '/jobs/job-b/items/x',
+        },
+      ]);
+
+      await claimLegacyRows(db, 'user-1');
+
+      // user-1 gets exactly the work the SERVER says was theirs…
+      expect((await db.outbox.get('row-a'))?.userId).toBe('user-1');
+      expect(await db.jobs.get(['user-1', 'job-a'])).toBeDefined();
+      // …and user-2's work is QUARANTINED, not claimed: still legacy-owned,
+      // untouched, waiting for user-2.
+      expect((await db.outbox.get('row-b'))?.userId).toBe(LEGACY_USER_ID);
+      expect(await db.jobs.get([LEGACY_USER_ID, 'job-b'])).toBeDefined();
+      expect(await db.jobs.get(['user-1', 'job-b'])).toBeUndefined();
+
+      // The matching user's later sign-in claims the quarantined rows.
+      await claimLegacyRows(db, 'user-2');
+      expect((await db.outbox.get('row-b'))?.userId).toBe('user-2');
+      expect(await db.jobs.get(['user-2', 'job-b'])).toBeDefined();
+      expect(await db.jobs.get([LEGACY_USER_ID, 'job-b'])).toBeUndefined();
+      await db.delete();
+    });
+
+    it('H-4: falls back to first-principal ONLY for rows with no surviving job or no assignee', async () => {
+      const db = createTestDB(`db-test-hint-fallback-${Math.random()}`);
+      await db.outbox.add({
+        id: 'orphan-row',
+        userId: LEGACY_USER_ID,
+        sequence: 1,
+        jobId: 'ghost-job', // no cached job survives for it
+        method: 'PUT',
+        path: '/jobs/ghost-job/items/x',
+        body: {},
+        ifMatch: 1,
+        clientRecordedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        lastResult: null,
+      });
+      await claimLegacyRows(db, 'user-9');
+      expect((await db.outbox.get('orphan-row'))?.userId).toBe('user-9');
+      await db.delete();
+    });
+
+    it('H-4/claim-collision: a legacy job copy never overwrites a copy the user already claimed', async () => {
+      const db = createTestDB(`db-test-collision-${Math.random()}`);
+      const base = {
+        id: 'job-1',
+        cachedAt: new Date().toISOString(),
+        hasPendingOutbox: false,
+        submitState: 'none' as const,
+        serverRemoved: false,
+      };
+      await db.jobs.bulkAdd([
+        {
+          ...base,
+          userId: 'user-1',
+          job: { id: 'job-1', assignedTo: 'user-1' } as never,
+          predictedDraftVersion: 9, // the live, claimed copy
+        },
+        {
+          ...base,
+          userId: LEGACY_USER_ID,
+          job: { id: 'job-1', assignedTo: 'user-1' } as never,
+          predictedDraftVersion: 2, // stale legacy duplicate
+        },
+      ]);
+      await claimLegacyRows(db, 'user-1');
+      expect((await db.jobs.get(['user-1', 'job-1']))?.predictedDraftVersion).toBe(9);
+      expect(await db.jobs.get([LEGACY_USER_ID, 'job-1'])).toBeUndefined();
+      await db.delete();
+    });
+
+    it('H-4: legacyHoldSummary reports quarantined work (count + attested owner names) and empty when clean', async () => {
+      const db = createTestDB(`db-test-holdsummary-${Math.random()}`);
+      expect(await legacyHoldSummary(db)).toEqual({ count: 0, names: [] });
+
+      await db.jobs.add({
+        userId: LEGACY_USER_ID,
+        id: 'job-b',
+        job: { id: 'job-b', assignedTo: 'user-2', assignedToName: 'Other Tech' } as never,
+        cachedAt: new Date().toISOString(),
+        hasPendingOutbox: true,
+        submitState: 'none',
+        serverRemoved: false,
+        predictedDraftVersion: 1,
+      });
+      await db.outbox.bulkAdd(
+        [1, 2].map((n) => ({
+          id: `held-${n}`,
+          userId: LEGACY_USER_ID,
+          sequence: n,
+          jobId: 'job-b',
+          method: 'PUT' as const,
+          path: `/jobs/job-b/items/item-${n}`,
+          body: {},
+          ifMatch: n,
+          clientRecordedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          status: 'pending' as const,
+          attempts: 0,
+          lastError: null,
+          lastResult: null,
+        })),
+      );
+      // A quarantined row whose legacy job carries NO display name still
+      // counts — the banner just cannot name its owner.
+      await db.jobs.add({
+        userId: LEGACY_USER_ID,
+        id: 'job-c',
+        job: { id: 'job-c', assignedTo: 'user-3' } as never,
+        cachedAt: new Date().toISOString(),
+        hasPendingOutbox: true,
+        submitState: 'none',
+        serverRemoved: false,
+        predictedDraftVersion: 1,
+      });
+      await db.outbox.add({
+        id: 'held-3',
+        userId: LEGACY_USER_ID,
+        sequence: 3,
+        jobId: 'job-c',
+        method: 'PUT' as const,
+        path: '/jobs/job-c/items/item-1',
+        body: {},
+        ifMatch: 1,
+        clientRecordedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        status: 'pending' as const,
+        attempts: 0,
+        lastError: null,
+        lastResult: null,
+      });
+      expect(await legacyHoldSummary(db)).toEqual({ count: 3, names: ['Other Tech'] });
+      await db.delete();
+    });
+
+    it('the v2 upgrade preserves an already-stamped userId and copes with an empty v1 jobs table', async () => {
+      const name = `db-test-prestamped-${Math.random()}`;
+      const v1 = new Dexie(name);
+      v1.version(1).stores({
+        outbox: 'id, sequence, jobId, status, [jobId+status]',
+        jobs: 'id, submitState',
+        meta: 'key',
+      });
+      // Defensive branch: a row that somehow already carries a string
+      // userId must keep it — the stamp never overwrites.
+      await v1.table('outbox').add({
+        id: 'pre-stamped',
+        userId: 'user-7',
+        sequence: 1,
+        jobId: 'job-1',
+        method: 'PUT',
+        path: '/jobs/job-1/items/item-1',
+        body: {},
+        ifMatch: 1,
+        clientRecordedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        lastResult: null,
+      });
+      // jobs table left EMPTY — the copy loop must be a clean no-op.
+      v1.close();
+
+      const db = createTestDB(name);
+      await db.open();
+      expect((await db.outbox.get('pre-stamped'))?.userId).toBe('user-7');
+      expect(await db.jobs.count()).toBe(0);
       await db.delete();
     });
 

@@ -514,7 +514,7 @@ describe('O-17: per-user partition — a shared tablet never drains one user’s
     expect(await hasConflicts(db, 'user-b', 'job-1')).toBe(true);
     expect(await hasConflicts(db, 'user-a', 'job-1')).toBe(false);
     const counts = await jobOutboxCounts(db, 'user-b', 'job-1');
-    expect(counts).toEqual({ total: 1, sendable: 0, conflict: 1 });
+    expect(counts).toEqual({ total: 1, sendable: 0, failed: 0, conflict: 1 });
   });
 });
 
