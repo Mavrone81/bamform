@@ -408,6 +408,55 @@ describe('Users/roles administration — /users, /roles', () => {
     expect(res.body).toMatchObject({ active: false, status: 'DEACTIVATED' });
   });
 
+  // Review finding W-1: the original guard counted other admins OUTSIDE the
+  // update transaction, so two concurrent self-deactivations by the last TWO
+  // admins both saw "one other admin exists" and both succeeded — zero active
+  // admins remained (the reviewer proved it with a probe). The guard now runs
+  // inside the transaction over FOR-UPDATE-locked admin rows (ORDER BY id so
+  // racers serialise instead of deadlocking), which makes the invariant real:
+  // whatever the interleaving, at least one active ADMIN survives. The
+  // assertion is the INVARIANT, not which racer loses — under the old code
+  // this test fails with remaining=0; under the fix exactly one PATCH gets
+  // 409 and one succeeds.
+  it('SYS-11/W-1: two concurrent self-deactivations of the last two admins cannot reach zero admins', async () => {
+    const mk = async (label: string) => {
+      const { userId } = await createLoginableUser({
+        email: `admin-race-${label}-${randomUUID()}@bevorasg.com`,
+        password: 'CorrectHorseBattery1!',
+        fullName: `Race Admin ${label}`,
+        roleCodes: ['ADMIN'],
+      });
+      return { userId, token: await mintAccessToken(app, userId, ['ADMIN']) };
+    };
+    const a = await mk('a');
+    const b = await mk('b');
+
+    const [resA, resB] = await Promise.all([
+      request(app.getHttpServer())
+        .patch(`/api/v1/users/${a.userId}`)
+        .set(...authHeader(a.token))
+        .send({ active: false }),
+      request(app.getHttpServer())
+        .patch(`/api/v1/users/${b.userId}`)
+        .set(...authHeader(b.token))
+        .send({ active: false }),
+    ]);
+
+    const statuses = [resA.status, resB.status].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const remaining = await adminPool.query(
+      `SELECT count(*)::int AS n
+         FROM app_user u
+        WHERE u.status = 'active'
+          AND EXISTS (SELECT 1 FROM user_role ur JOIN role r ON r.id = ur.role_id
+                       WHERE ur.user_id = u.id AND ur.active AND r.code = 'ADMIN')
+          AND u.id IN ($1, $2)`,
+      [a.userId, b.userId],
+    );
+    expect(remaining.rows[0].n).toBeGreaterThanOrEqual(1);
+  });
+
   it('SYS-11: a deactivated or admin-role-stripped OTHER admin does not count as cover — the last WORKING admin is protected', async () => {
     const { userId: soleAdmin } = await createLoginableUser({
       email: `admin-real-${randomUUID()}@bevorasg.com`,
