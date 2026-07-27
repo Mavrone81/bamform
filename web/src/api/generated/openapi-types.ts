@@ -1916,8 +1916,13 @@ export interface components {
       description?: string;
       manufacturer?: string;
       model?: string;
-      /** Format: uuid */
-      areaId?: string;
+      /**
+       * Format: uuid
+       * @description Slice 13-UI-B (review B-1) — explicit `null` CLEARS the area
+       *     assignment (moves the machine out of every scoped area's
+       *     visibility); omitting the field leaves it unchanged.
+       */
+      areaId?: string | null;
       locationDetail?: string;
       status?: components['schemas']['AssetStatus'];
       active?: boolean;

@@ -435,21 +435,45 @@ export class UsersService {
    * written here regardless).
    */
   async setAreaScopes(id: string, dto: UserAreaScopeSet, actor: ActorMeta): Promise<User> {
-    const existing = await this.findOrThrow(id);
     const desiredAreaIds = [...new Set(dto.areaIds)];
 
-    if (desiredAreaIds.length > 0) {
-      const areas = await this.prisma.area.findMany({ where: { id: { in: desiredAreaIds } } });
-      if (areas.length !== desiredAreaIds.length) {
-        throw validationFailedProblem('One or more areaIds do not match a known area.');
-      }
-    }
-
-    const beforeAreaIds = existing.userAreaScopes.map((scope) => scope.areaId);
-    const changed =
-      JSON.stringify([...beforeAreaIds].sort()) !== JSON.stringify([...desiredAreaIds].sort());
-
+    // Every read that informs the write happens INSIDE the transaction
+    // (review B-5, the W-1 lesson): the audit event's `before` and the
+    // changed-set decision are derived from rows read under the same
+    // transaction that writes, so a concurrent PUT cannot make this event
+    // record a `before` that was already stale when the write committed.
     return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.appUser.findUnique({
+        where: { id },
+        include: USER_ROLES_INCLUDE,
+      });
+      if (!existing) {
+        throw notFoundProblem('User', id);
+      }
+
+      if (desiredAreaIds.length > 0) {
+        const areas = await tx.area.findMany({ where: { id: { in: desiredAreaIds } } });
+        if (areas.length !== desiredAreaIds.length) {
+          throw validationFailedProblem('One or more areaIds do not match a known area.');
+        }
+        // Review B-4: an inactive area is retired — history keeps pointing
+        // at it, but scoping someone INTO it is refused. (Deactivating an
+        // area does not touch scopes already standing on it; those
+        // semantics are an owner decision, tracked in the review's §Owner.)
+        const inactive = areas.filter((area) => !area.active);
+        if (inactive.length > 0) {
+          throw validationFailedProblem(
+            `One or more areaIds refer to a deactivated area (${inactive
+              .map((area) => area.code)
+              .join(', ')}). Reactivate the area first, or scope to an active one.`,
+          );
+        }
+      }
+
+      const beforeAreaIds = existing.userAreaScopes.map((scope) => scope.areaId);
+      const changed =
+        JSON.stringify([...beforeAreaIds].sort()) !== JSON.stringify([...desiredAreaIds].sort());
+
       if (changed) {
         const desired = new Set(desiredAreaIds);
         for (const areaId of desiredAreaIds) {

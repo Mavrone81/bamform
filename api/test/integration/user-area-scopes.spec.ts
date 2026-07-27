@@ -110,6 +110,37 @@ describe('User area scopes — PUT /users/{userId}/area-scopes (SYS-10)', () => 
     expect(res.body.type).toBe('/errors/validation-failed');
   });
 
+  it('B-4: 422s an areaId that refers to a DEACTIVATED area (scoping someone into a retired area is a mistake, not a request)', async () => {
+    const admin = await adminActor();
+    const subject = await subjectUser();
+    const areaA = await createArea(`B4-A-${randomUUID().slice(0, 8)}`);
+    await adminPool.query('UPDATE "area" SET active = false WHERE id = $1', [areaA]);
+
+    const res = await request(app.getHttpServer())
+      .put(`/api/v1/users/${subject}/area-scopes`)
+      .set(...authHeader(admin.token))
+      .send({ areaIds: [areaA] })
+      .expect(422);
+    expect(res.body.type).toBe('/errors/validation-failed');
+    expect(res.body.detail).toMatch(/deactivated/i);
+
+    // An EXISTING scope on a later-deactivated area is untouched by this
+    // guard (deactivation = no NEW use; standing semantics are an owner
+    // decision, see the review's §Owner) — replaying the same set still works.
+    const areaB = await createArea(`B4-B-${randomUUID().slice(0, 8)}`);
+    await request(app.getHttpServer())
+      .put(`/api/v1/users/${subject}/area-scopes`)
+      .set(...authHeader(admin.token))
+      .send({ areaIds: [areaB] })
+      .expect(200);
+    await adminPool.query('UPDATE "area" SET active = false WHERE id = $1', [areaB]);
+    const kept = await request(app.getHttpServer())
+      .get(`/api/v1/users/${subject}`)
+      .set(...authHeader(admin.token))
+      .expect(200);
+    expect(kept.body.areaIds).toEqual([areaB]);
+  });
+
   it('422s a malformed body (areaIds not an array of uuids)', async () => {
     const admin = await adminActor();
     const subject = await subjectUser();

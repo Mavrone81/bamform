@@ -2550,7 +2550,13 @@ components:
         description: { type: string }
         manufacturer: { type: string }
         model: { type: string }
-        areaId: { type: string, format: uuid }
+        areaId:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            Slice 13-UI-B (review B-1) — explicit `null` CLEARS the area
+            assignment (moves the machine out of every scoped area's
+            visibility); omitting the field leaves it unchanged.
         locationDetail: { type: string }
         status: { $ref: '#/components/schemas/AssetStatus' }
         active: { type: boolean }

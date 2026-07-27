@@ -85,11 +85,35 @@ export function AdminMachineDetail({ assetId }: { assetId: string }) {
     setBusy(true);
     setCodeMsg(null);
     try {
+      // Review B-2: the server clears `codeProvisional` only on an actual
+      // CHANGE (`assets.service.ts` — a same-code PATCH is a no-op on the
+      // flag), so retyping the code on screen must not be reported as a
+      // confirmation the server never performed.
+      if (asset && newCode.trim() === asset.code) {
+        setCodeMsg(
+          asset.codeProvisional
+            ? {
+                tone: 'bad',
+                text: `${asset.code} IS the provisional code — type the machine's real code to confirm it.`,
+              }
+            : { tone: 'bad', text: `That is already this machine's code — nothing to change.` },
+        );
+        return;
+      }
       const result = await updateAsset(assetId, { code: newCode.trim() });
       if (result.ok) {
         applyAsset(result.value);
         setNewCode('');
-        setCodeMsg({ tone: 'good', text: `Code confirmed as ${result.value.code}.` });
+        // Belt-and-braces on the same B-2 rule: only claim a confirmation
+        // the server actually made (the flag must really be clear now).
+        setCodeMsg(
+          result.value.codeProvisional
+            ? {
+                tone: 'bad',
+                text: `The code is still provisional — type the machine's real code to confirm it.`,
+              }
+            : { tone: 'good', text: `Code confirmed as ${result.value.code}.` },
+        );
       } else {
         setCodeMsg({ tone: 'bad', text: refusalText(result.status, result.problem) });
       }
@@ -108,7 +132,10 @@ export function AdminMachineDetail({ assetId }: { assetId: string }) {
         manufacturer: manufacturer.trim(),
         model: model.trim(),
         locationDetail: locationDetail.trim(),
-        ...(areaId ? { areaId } : {}),
+        // Review B-1: "No area" sends an EXPLICIT null — the API clears the
+        // FK (nullable since this fix). Omitting the field would silently
+        // keep the old area and make the option a lie.
+        areaId: areaId || null,
         status,
         active,
       };

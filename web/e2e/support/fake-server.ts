@@ -1820,6 +1820,22 @@ export class FakeServer {
       );
       return;
     }
+    // Review B-4 — same rule as `users.service.ts#setAreaScopes`: a NEW
+    // assignment to a deactivated area is refused; standing scopes on a
+    // later-deactivated area are untouched.
+    const inactive = body.areaIds.filter((id) => this.areasById.get(id)?.active === false);
+    if (inactive.length > 0) {
+      await this.fulfillProblem(
+        route,
+        422,
+        'Validation failed',
+        '/errors/validation-failed',
+        `One or more areaIds refer to a deactivated area (${inactive
+          .map((id) => this.areasById.get(id)?.code ?? id)
+          .join(', ')}). Reactivate the area first, or scope to an active one.`,
+      );
+      return;
+    }
     target.areaIds = [...new Set(body.areaIds)];
     target.updatedAt = new Date().toISOString();
     await route.fulfill({
@@ -2015,7 +2031,8 @@ export class FakeServer {
         description?: string;
         manufacturer?: string;
         model?: string;
-        areaId?: string;
+        /** Review B-1: nullable — explicit null clears, omission keeps. */
+        areaId?: string | null;
         locationDetail?: string;
         status?: 'ACTIVE' | 'UNDER_REPAIR' | 'DECOMMISSIONED';
         active?: boolean;

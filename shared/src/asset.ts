@@ -66,13 +66,17 @@ export type AssetCreate = z.infer<typeof assetCreateSchema>;
  * `api/openapi.yaml` `AssetUpdate` schema. PR-039/non-negotiable #7: no
  * DELETE — `status`/`active` are the only removal mechanism (deactivation).
  * `code` (slice 13a, B-09): an admin changing it clears `codeProvisional`.
+ * `areaId` (13-UI-B review B-1): NULLABLE — an explicit `null` clears the
+ * area assignment (a machine placed in the wrong scoped area must be
+ * movable OUT, since area membership now decides who can see it), while
+ * omission still means "no change".
  */
 export const assetUpdateSchema = z.object({
   code: assetCodeSchema.optional(),
   description: z.string().optional(),
   manufacturer: z.string().optional(),
   model: z.string().optional(),
-  areaId: z.string().uuid().optional(),
+  areaId: z.string().uuid().nullable().optional(),
   locationDetail: z.string().optional(),
   status: assetStatusSchema.optional(),
   active: z.boolean().optional(),

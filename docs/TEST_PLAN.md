@@ -300,6 +300,12 @@ that makes PR-API-10's read-side enforcement reachable.
 | I-SCOPE-05 | Audit | `permission_change` in the SAME transaction, `{areaIds}` before/after only — no person-fields (CR-5); an unchanged PUT records nothing |
 | I-SCOPE-06 | `/auth/me` | reports only ACTIVE scopes |
 | I-SCOPE-07 | **Scoping bites** | a TL scoped via the API to area B stops seeing area A's queue; re-scoped to A it returns; `GET /assets` filters the same way |
+| I-SCOPE-08 | Scoping into a DEACTIVATED area (review B-4) | 422 naming the area; a scope already standing on a later-deactivated area is untouched (standing semantics = owner decision) |
+
+Adjacent (review B-1, in `assets.spec.ts` "B-1"): `PATCH /assets/{id}` with an
+EXPLICIT `areaId: null` clears the area assignment (omission still means "no
+change"), removes the asset from scoped visibility, reassigns cleanly, and the
+clear is audited — `AssetUpdate.areaId` is nullable in Zod and openapi alike.
 
 ## 6.1 Void semantics — slice 17 (owner decision 2026-07-27, SYS-19/W-2 resolution)
 
@@ -487,7 +493,7 @@ slice 13-UI-B, each run at 375/768/1280 (CI job 8 matrix):
 | `e07-forced-password-change.spec.ts` | Forced password change + admin MFA reset |
 | `e08-returned-record-visibility.spec.ts` | E-03 addendum (returned-record visibility) |
 | `e09-admin-users-scoping.spec.ts` | **E-06 (admin half)** — create user → role → area scope through the UI → the scoped user's queue shows only their area (SYS-10 write path + PR-API-10 read side); last-admin 409 surfaced; deactivate/reactivate bites at sign-in |
-| `e10-admin-machines.spec.ts` | **E-06 (machines half)** — add machine → backend-suggested provisional code rendered RED → confirm with the real code → normal; duplicate-code 409 surfaced |
+| `e10-admin-machines.spec.ts` | **E-06 (machines half)** — add machine → backend-suggested provisional code rendered RED → confirm with the real code → normal; duplicate-code 409 surfaced; area assign → explicit-null clear → reassign round trip (review B-1); a retyped provisional code is honestly refused, never a false "confirmed" (review B-2) |
 
 E-06's "jobs generate" clause is server-side scheduling, proven in
 `api/test/integration/scheduling.spec.ts` — the browser journey covers the

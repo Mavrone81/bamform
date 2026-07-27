@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  assetUpdateSchema,
   assignJobRequestSchema,
   listRecordsQuerySchema,
   mfaChallengeResponseSchema,
@@ -453,6 +454,19 @@ describe('test:contract — slice 13-UI-B area-scope schema matches its Zod DTO 
   it('User.areaIds is documented as required — toUser always emits it', () => {
     const schema = getSchema('User') as { required?: string[] };
     expect(schema.required).toContain('areaIds');
+  });
+
+  it('B-1: AssetUpdate.areaId is NULLABLE on both sides — explicit null clears the area assignment', () => {
+    // Zod: null accepted (clears), undefined accepted (no change), and a
+    // non-uuid string still rejected — nullability did not loosen the type.
+    expect(assetUpdateSchema.safeParse({ areaId: null }).success).toBe(true);
+    expect(assetUpdateSchema.safeParse({}).success).toBe(true);
+    expect(assetUpdateSchema.safeParse({ areaId: 'not-a-uuid' }).success).toBe(false);
+    // openapi mirrors it: `type: [string, 'null']`.
+    const schema = getSchema('AssetUpdate') as {
+      properties: { areaId: { type: string | string[] } };
+    };
+    expect(schema.properties.areaId.type).toEqual(['string', 'null']);
   });
 });
 

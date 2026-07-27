@@ -194,6 +194,11 @@ export class AssetsService {
             description: dto.description,
             manufacturer: dto.manufacturer,
             model: dto.model,
+            // 13-UI-B review B-1: `areaId` is nullable — an explicit `null`
+            // CLEARS the assignment (Prisma sets the FK NULL), `undefined`
+            // leaves it untouched. Both directions are integration-tested
+            // (assets.spec.ts "B-1"); the audit before/after carries the
+            // change like any other field.
             areaId: dto.areaId,
             locationDetail: dto.locationDetail,
             status: dto.status ? STATUS_TO_DB[dto.status] : undefined,

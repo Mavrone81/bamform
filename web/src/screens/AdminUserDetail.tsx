@@ -11,7 +11,7 @@ import {
   type Role,
   type RoleCode,
 } from '../api/admin-client';
-import { resetUserMfa } from '../auth';
+import { getCurrentUser, resetUserMfa } from '../auth';
 
 /**
  * Slice 13-UI-B — one user's admin page: identity edit, role assignment
@@ -199,6 +199,18 @@ export function AdminUserDetail({ userId }: { userId: string }) {
     setAreaIds((prev) => (prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id]));
   }
 
+  // Review B-3 (presentation only — the server enforces nothing about self
+  // here and needs to enforce nothing): is the admin looking at themselves?
+  const isSelf = user !== null && getCurrentUser()?.id === user.id;
+
+  // Review B-4: ACTIVE areas are offered for assignment. A deactivated area
+  // shows only while this user is still scoped to it (based on the SAVED
+  // scopes, so the row does not vanish mid-edit) — it can be unticked, and
+  // the API refuses any attempt to newly assign it.
+  const selectableAreas = areas.filter(
+    (area) => area.active || (user !== null && user.areaIds.includes(area.id)),
+  );
+
   function sectionBanner(msg: { tone: 'good' | 'bad'; text: string } | null) {
     if (!msg) return null;
     return (
@@ -346,12 +358,23 @@ export function AdminUserDetail({ userId }: { userId: string }) {
           With no areas ticked this user sees <strong>every</strong> area. Ticking one or more
           restricts their jobs, queue, records and reports to those areas only.
         </p>
+        {isSelf && (
+          // Review B-3: no lockout exists (an admin can always PUT [] for
+          // themselves, and /users administration is never area-scoped) but
+          // the machines list and queue WOULD shrink to the ticked areas —
+          // said out loud before it surprises them.
+          <p className="banner" data-tone="attention" role="status">
+            <span aria-hidden="true">⚠</span> This is your own account — restricting your areas also
+            restricts what <em>you</em> see under Machines and in the queue. User administration
+            itself is unaffected, and you can always clear your own restriction here.
+          </p>
+        )}
         {areas.length === 0 && (
           <p className="field-hint">
             No areas exist yet — create them under Administration › Areas first.
           </p>
         )}
-        {areas.map((area) => (
+        {selectableAreas.map((area) => (
           <div className="checkbox-field" key={area.id}>
             <input
               id={`area-${area.id}`}
@@ -361,6 +384,15 @@ export function AdminUserDetail({ userId }: { userId: string }) {
             />
             <label htmlFor={`area-${area.id}`}>
               {area.name} <span className="job-code text-soft">({area.code})</span>
+              {!area.active && (
+                // Review B-4: a deactivated area cannot be NEWLY assigned
+                // (the API 422s it) — it appears here only because this
+                // user is still scoped to it, so it can be unticked.
+                <span className="status-chip" data-tone="neutral">
+                  <span aria-hidden="true">⊘</span>
+                  <span>Deactivated</span>
+                </span>
+              )}
             </label>
           </div>
         ))}

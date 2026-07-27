@@ -227,6 +227,73 @@ describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', ()
       expect(res.body.data.every((a: { areaId: string | null }) => a.areaId === areaA)).toBe(true);
     });
 
+    it('B-1: PATCH areaId: null CLEARS the area — assign → clear → reassign, and clearing removes it from scoped visibility', async () => {
+      const assetTypeId = await makeAssetType();
+      const areaA = await createArea(`AREA-${randomUUID()}`);
+      const areaB = await createArea(`AREA-${randomUUID()}`);
+
+      const engineer = await engineerToken();
+      const server = app.getHttpServer();
+      const assetId = await createAssetCode(server, engineer, assetTypeId, areaA);
+
+      // A user scoped to area A sees it while it is IN area A…
+      const scopedUserId = await createUser('scoped-clear');
+      await grantRole(scopedUserId, 'ENGINEER');
+      await scopeUserToArea(scopedUserId, areaA);
+      const scopedToken = await mintAccessToken(app, scopedUserId, ['ENGINEER']);
+      const seen = await request(server)
+        .get('/api/v1/assets?limit=100')
+        .set(...authHeader(scopedToken))
+        .expect(200);
+      expect(seen.body.data.map((a: { id: string }) => a.id)).toContain(assetId);
+
+      // …clear the assignment with an EXPLICIT null (the B-1 fix: nullable,
+      // distinct from omission which must keep the current value)…
+      const cleared = await request(server)
+        .patch(`/api/v1/assets/${assetId}`)
+        .set(...authHeader(engineer))
+        .send({ areaId: null })
+        .expect(200);
+      expect(cleared.body.areaId).toBeNull();
+
+      // …and the scoped user no longer sees it: area membership is
+      // load-bearing for visibility, which is why the clear must exist.
+      const gone = await request(server)
+        .get('/api/v1/assets?limit=100')
+        .set(...authHeader(scopedToken))
+        .expect(200);
+      expect(gone.body.data.map((a: { id: string }) => a.id)).not.toContain(assetId);
+
+      // Omission still means "no change" (null and undefined stay distinct).
+      const untouched = await request(server)
+        .patch(`/api/v1/assets/${assetId}`)
+        .set(...authHeader(engineer))
+        .send({ description: 'still unassigned' })
+        .expect(200);
+      expect(untouched.body.areaId).toBeNull();
+
+      // Reassign to area B — the full round trip.
+      const reassigned = await request(server)
+        .patch(`/api/v1/assets/${assetId}`)
+        .set(...authHeader(engineer))
+        .send({ areaId: areaB })
+        .expect(200);
+      expect(reassigned.body.areaId).toBe(areaB);
+
+      // The clear is audited like any other change (before/after carry areaId).
+      const audit = await adminPool.query(
+        `SELECT before, after FROM "audit_event"
+          WHERE entity_type = 'asset' AND entity_id = $1 AND action = 'update'
+          ORDER BY occurred_at ASC`,
+        [assetId],
+      );
+      const clearing = audit.rows.find(
+        (row: { before: { areaId: string | null }; after: { areaId: string | null } }) =>
+          row.before.areaId === areaA && row.after.areaId === null,
+      );
+      expect(clearing).toBeDefined();
+    });
+
     it("GET /assets/{id} for an asset outside the caller's scope is 403 out-of-scope, not 404", async () => {
       const assetTypeId = await makeAssetType();
       const areaA = await createArea(`AREA-${randomUUID()}`);
