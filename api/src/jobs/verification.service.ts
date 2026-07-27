@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ApprovalActionT, AuditActionT, JobStatusT } from '@prisma/client';
-import type { Job, VerifyJobRequest } from '@bamform/shared';
+import type { Frequency, Job, VerifyJobRequest } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import {
@@ -16,6 +16,7 @@ import { computeContentHash } from '../crypto/content-hash';
 import type { RecordSigningService } from '../crypto/record-signer';
 import { NotificationQueueService } from '../notifications/notification-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CompletionCascadeService } from '../scheduling/completion-cascade.service';
 import { ApprovalRepository } from './approval.repository';
 import { buildCanonicalJobRecord } from './canonical-job-record';
 import { decodeAndValidateDrawnSignature } from './drawn-signature';
@@ -24,6 +25,7 @@ import { JOB_FULL_INCLUDE } from './job-include';
 import { JobsService } from './jobs.service';
 import { assertLegalTransition } from './job-state-machine';
 import { toJob } from './mappers';
+import { StageEscalationService } from './stage-escalation.service';
 
 /**
  * PR-041..046/070..077/093/094 — the two-stage verification transition
@@ -46,6 +48,8 @@ export class VerificationService {
     @Inject(RECORD_SIGNING_SERVICE) private readonly recordSigner: RecordSigningService,
     @Inject(FIELD_ENCRYPTION_SERVICE) private readonly fieldEncryption: FieldEncryptionService,
     private readonly notificationQueue: NotificationQueueService,
+    private readonly completionCascade: CompletionCascadeService,
+    private readonly stageEscalation: StageEscalationService,
   ) {}
 
   async verify(
@@ -129,7 +133,58 @@ export class VerificationService {
           );
         }
 
+        // SYS-1 (slice 15-SYSWIRE) — PR-055/056: the final verify is what
+        // completes the PM cycle, so the SAME transaction that archives the
+        // job advances `schedule_rule.last_completed_on`/`next_due_on` for
+        // every frequency the job's frozen `frequency_scope` subsumes
+        // (1M→{1M}, 3M→{1M,3M}, 6M→{1M,3M,6M}, Y→all — PR-053's scope,
+        // computed at generation). `CompletionCascadeService` was built in
+        // slice 5 exactly for this call site (see its doc comment: "must be
+        // called with the SAME transaction client"); until this slice nothing
+        // called it, so recurring generation died after one cycle per asset.
+        if (isFinalStage) {
+          await this.completionCascade.apply(tx, {
+            jobId,
+            assetId: job.assetId,
+            frequencyScope: job.frequencyScope as Frequency[],
+            verifiedOn: now,
+            actorId: actor.actorId,
+          });
+        }
+
         const priorSteps = await this.approvalRepo.listApprovalSteps(jobId, tx);
+
+        // SYS-8 (slice 15-SYSWIRE) — two-verifier means two PEOPLE. A user
+        // holding TEAM_LEADER + ENGINEER passes both stages' role gates, but
+        // the ISO intent (and all 12 source forms) is independent review:
+        // the same human must not supply both signatures. Scope is the
+        // CURRENT submission cycle — a return/recall supersedes earlier
+        // signatures (the canonical content they signed no longer exists),
+        // so only `verified` steps after the last `returned`/`recalled` step
+        // count. Checked inside the transaction (after the guarded update,
+        // reading with `tx`) and backstopped by the
+        // `approval_step_distinct_stage_verifiers_trg` DB trigger, mirroring
+        // INV-05's service+trigger pattern.
+        const lastCycleBreak = priorSteps.reduce<Date | null>(
+          (latest, step) =>
+            (step.action === ApprovalActionT.returned ||
+              step.action === ApprovalActionT.recalled) &&
+            (!latest || step.actedAt > latest)
+              ? step.actedAt
+              : latest,
+          null,
+        );
+        const alreadyVerifiedThisCycle = priorSteps.some(
+          (step) =>
+            step.action === ApprovalActionT.verified &&
+            step.actorId === actor.actorId &&
+            (!lastCycleBreak || step.actedAt > lastCycleBreak),
+        );
+        if (alreadyVerifiedThisCycle) {
+          throw selfApprovalProblem(
+            'You already verified an earlier stage of this record — the two verification signatures must come from two different people (SYS-8, UR-045 intent).',
+          );
+        }
 
         const canonicalRecord = buildCanonicalJobRecord({
           job: {
@@ -268,6 +323,15 @@ export class VerificationService {
           this.logger.error(
             `escalation cancel failed for job ${jobId} stage ${stageOrdinal}: ${err.message}`,
           );
+        }
+        // SYS-7 (slice 15-SYSWIRE) — a NON-final verify moves the record into
+        // stage N+1's queue, which is the same event submit is for stage 1:
+        // schedule the NEXT stage's escalation timer and notify its eligible
+        // verifiers (StageEscalationService — best-effort, contains its own
+        // failures). Before this call stage 2's escalation_hours config was
+        // dead and stage-2 verifiers were never told a record awaited them.
+        if (!isFinalStage) {
+          await this.stageEscalation.scheduleForStage(jobId, stageOrdinal + 1);
         }
         return dtoOut;
       });

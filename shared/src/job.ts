@@ -207,6 +207,17 @@ export const verifyJobRequestSchema = z.object({
 });
 export type VerifyJobRequest = z.infer<typeof verifyJobRequestSchema>;
 
+/**
+ * `POST /jobs/{id}/assign` request body — UR-029/PR-030 (slice 15-SYSWIRE,
+ * system-review SYS-2). `assigneeId` is the user the job is (re)assigned to;
+ * the server validates the assignee exists, is active, holds a
+ * result-recording role and can reach the job's area.
+ */
+export const assignJobRequestSchema = z.object({
+  assigneeId: z.string().uuid(),
+});
+export type AssignJobRequest = z.infer<typeof assignJobRequestSchema>;
+
 /** `POST /jobs/{id}/return` request body — PR-074/INV-13, reason mandatory, >= 10 chars. */
 export const returnJobRequestSchema = z.object({
   reason: z.string().trim().min(10, 'reason must be at least 10 characters (INV-13, PR-074).'),

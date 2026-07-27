@@ -1,20 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { AuditActionT, JobStatusT } from '@prisma/client';
 import type { Job } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import { incompleteRecordProblem, invalidTransitionProblem } from '../common/domain-problems';
 import { IdempotencyService } from '../common/idempotency.service';
-import { NotificationQueueService } from '../notifications/notification-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { VerifierEligibilityService } from '../queue/verifier-eligibility.service';
-import { ApprovalRepository } from './approval.repository';
 import { JOB_FULL_INCLUDE } from './job-include';
 import { JobsService } from './jobs.service';
 import { toJob } from './mappers';
+import { StageEscalationService } from './stage-escalation.service';
 import { findOutstandingMandatoryItems } from './submission-gate';
 
-const HOURS_TO_MS = 3_600_000;
 const FIRST_STAGE = 1;
 
 /**
@@ -24,27 +21,22 @@ const FIRST_STAGE = 1;
  * every `mandatory` item on the frozen revision has an `item_result`.
  *
  * PR-077/UR-063 — a successful submission ALSO (outside the transaction,
- * after commit — `api` schedules, it never sends, PR-150/151): schedules
- * stage 1's escalation timer (if `approval_stage.escalation_hours` is
- * configured for it — `null` means none, see `ApprovalRepository
- * #getStageEscalationConfig`'s doc comment) and enqueues a "record entered
- * your queue" notification to every verifier currently eligible for stage 1.
- * Neither failing (e.g. Redis briefly unreachable) rolls back the
- * submission — a notification/escalation is best-effort operational
- * signalling, not part of the durable job-state transition itself.
+ * after commit — `api` schedules, it never sends, PR-150/151) schedules
+ * stage 1's escalation timer and notifies stage 1's eligible verifiers —
+ * `StageEscalationService`, the stage-parameterised extraction of what used
+ * to be a submit-only private helper (slice 15-SYSWIRE/SYS-7: a non-final
+ * verify enters stage N+1 the same way submit enters stage 1, and now both
+ * share the one implementation). Best-effort: a Redis blip never rolls back
+ * the submission itself.
  */
 @Injectable()
 export class SubmissionService {
-  private readonly logger = new Logger(SubmissionService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobs: JobsService,
     private readonly audit: AuditEventService,
     private readonly idempotency: IdempotencyService,
-    private readonly approvalRepo: ApprovalRepository,
-    private readonly notificationQueue: NotificationQueueService,
-    private readonly eligibility: VerifierEligibilityService,
+    private readonly stageEscalation: StageEscalationService,
   ) {}
 
   async submit(
@@ -80,8 +72,15 @@ export class SubmissionService {
 
     return this.prisma
       .$transaction(async (tx) => {
-        await tx.job.update({
-          where: { id: jobId },
+        // SYS-18 (slice 15-SYSWIRE) — re-assert the status INSIDE the
+        // transaction, like verify/return/recall's guarded updateMany. The
+        // pre-transaction check above closes the common case; this closes
+        // the race where a void (or another transition) commits between that
+        // read and this write — without it a just-voided job would be
+        // silently resurrected to SUBMITTED (VOIDED has no immutability
+        // trigger the way ARCHIVED does).
+        const guarded = await tx.job.updateMany({
+          where: { id: jobId, status: JobStatusT.in_progress },
           data: {
             status: JobStatusT.submitted,
             submittedAt: new Date(),
@@ -89,6 +88,11 @@ export class SubmissionService {
             currentStageOrdinal: 1,
           },
         });
+        if (guarded.count === 0) {
+          throw invalidTransitionProblem(
+            'This job changed state before the submission could be applied — reload and retry.',
+          );
+        }
 
         await this.audit.record(tx, {
           actorId: actor.actorId,
@@ -123,52 +127,8 @@ export class SubmissionService {
         return dtoOut;
       })
       .then(async (dtoOut) => {
-        await this.scheduleEscalationAndNotify(jobId);
+        await this.stageEscalation.scheduleForStage(jobId, FIRST_STAGE);
         return dtoOut;
       });
-  }
-
-  private async scheduleEscalationAndNotify(jobId: string): Promise<void> {
-    try {
-      const row = await this.prisma.job.findUnique({
-        where: { id: jobId },
-        include: JOB_FULL_INCLUDE,
-      });
-      if (!row) return;
-
-      const escalationConfig = await this.approvalRepo.getStageEscalationConfig(
-        row.approvalRouteId,
-        FIRST_STAGE,
-      );
-      if (escalationConfig && escalationConfig.escalationHours != null) {
-        await this.notificationQueue.scheduleEscalation({
-          jobId,
-          stageOrdinal: FIRST_STAGE,
-          delayMs: escalationConfig.escalationHours * HOURS_TO_MS,
-          recipientRoleCode: escalationConfig.escalateToRoleCode,
-        });
-      }
-
-      const recipientIds = await this.eligibility.findEligibleVerifierIds({
-        approvalRouteId: row.approvalRouteId,
-        currentStageOrdinal: FIRST_STAGE,
-        areaId: row.asset.areaId,
-      });
-      await this.notificationQueue.enqueueNotifications(
-        recipientIds.map((recipientId) => ({
-          recipientId,
-          templateCode: 'RECORD_SUBMITTED' as const,
-          entityType: 'job',
-          entityId: jobId,
-          payload: { jobNumber: row.jobNumber, assetCode: row.asset.code },
-        })),
-      );
-    } catch (error) {
-      const err = error as Error;
-      // Best-effort operational signalling (see class doc comment) — never fails the submission itself.
-      this.logger.error(
-        `post-submission notification/escalation scheduling failed for job ${jobId}: ${err.message}`,
-      );
-    }
   }
 }

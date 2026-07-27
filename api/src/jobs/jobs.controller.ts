@@ -14,9 +14,11 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import {
+  assignJobRequestSchema,
   itemResultInputSchema,
   measurementResultInputSchema,
   partUsedInputSchema,
+  type AssignJobRequest,
   type ItemResultInput,
   type MeasurementResultInput,
   type PartUsedInput,
@@ -27,6 +29,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AccessTokenClaims } from '../auth/jwt/access-token.types';
 import { requestMeta } from '../common/request-meta';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { AssignmentService } from './assignment.service';
 import { JOB_RECORD_ROLES } from './job-access';
 import { JobsService } from './jobs.service';
 import { PartsService } from './parts.service';
@@ -47,6 +50,7 @@ export class JobsController {
     private readonly results: ResultsService,
     private readonly parts: PartsService,
     private readonly submission: SubmissionService,
+    private readonly assignment: AssignmentService,
   ) {}
 
   @Get()
@@ -76,6 +80,26 @@ export class JobsController {
   @Get(':jobId')
   get(@Param('jobId') jobId: string, @CurrentUser() user: AccessTokenClaims) {
     return this.jobs.get(user.sub, user.roles, jobId);
+  }
+
+  /** UR-029 — assignment/reassignment. Permission matrix §4.1 has no dedicated row; TL/ENG/ADMIN per the review-confirmed intent (SYS-2) — the roles that manage the schedule and the team. */
+  @Post(':jobId/assign')
+  @Roles('TEAM_LEADER', 'ENGINEER', 'ADMIN')
+  @HttpCode(HttpStatus.OK)
+  assign(
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(assignJobRequestSchema)) dto: AssignJobRequest,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+  ) {
+    return this.assignment.assign(
+      jobId,
+      dto,
+      idempotencyKey,
+      { actorId: user.sub, ...requestMeta(req) },
+      user.roles,
+    );
   }
 
   @Put(':jobId/items/:templateItemId')

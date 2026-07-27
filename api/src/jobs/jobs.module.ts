@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { QueueModule } from '../queue/queue.module';
+import { SchedulingModule } from '../scheduling/scheduling.module';
 import { ApprovalController } from './approval.controller';
 import { ApprovalRepository } from './approval.repository';
 import { ApprovalTransitionsService } from './approval-transitions.service';
+import { AssignmentService } from './assignment.service';
 import { AttachmentsController } from './attachments.controller';
 import { AttachmentsService } from './attachments.service';
 import { IntegrityService } from './integrity.service';
@@ -12,6 +14,7 @@ import { JobsRepository } from './jobs.repository';
 import { JobsService } from './jobs.service';
 import { PartsService } from './parts.service';
 import { ResultsService } from './results.service';
+import { StageEscalationService } from './stage-escalation.service';
 import { SubmissionService } from './submission.service';
 import { VerificationService } from './verification.service';
 
@@ -36,7 +39,11 @@ import { VerificationService } from './verification.service';
  * in the new module) can still inject it — same provider, no behaviour change.
  */
 @Module({
-  imports: [QueueModule],
+  // SchedulingModule: slice 15-SYSWIRE (SYS-1) — `VerificationService`'s
+  // final-stage transaction calls `CompletionCascadeService.apply` (the seam
+  // slice 5 built for exactly this). No cycle: SchedulingModule imports no
+  // job-side module.
+  imports: [QueueModule, SchedulingModule],
   controllers: [JobsController, AttachmentsController, ApprovalController],
   providers: [
     JobAccessService,
@@ -45,6 +52,8 @@ import { VerificationService } from './verification.service';
     ResultsService,
     PartsService,
     SubmissionService,
+    AssignmentService,
+    StageEscalationService,
     AttachmentsService,
     ApprovalRepository,
     VerificationService,

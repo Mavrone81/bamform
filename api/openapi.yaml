@@ -1154,6 +1154,56 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
 
+  /jobs/{jobId}/assign:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Jobs]
+      operationId: assignJob
+      summary: Assign or reassign a job to a technician
+      description: |
+        UR-029 (slice 15-SYSWIRE). TEAM_LEADER/ENGINEER/ADMIN. First
+        assignment moves `SCHEDULED` -> `ASSIGNED` (PRD §5.1); reassignment
+        of an `ASSIGNED` or `IN_PROGRESS` job replaces the assignee and does
+        NOT change status (previously recorded results keep their original
+        recorded-by attribution — the recovery path for a job whose assignee
+        was deactivated). Not legal from SUBMITTED/ARCHIVED/VOIDED. The
+        assignee must be an active user holding a result-recording role
+        (MAINTAINER/TEAM_LEADER/ENGINEER, §4.1) whose area scope can reach
+        the job. Audited in the same transaction; enqueues the UR-061
+        JOB_ASSIGNED notification to the (new) assignee.
+        `Idempotency-Key` is honoured when supplied but not required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignJobRequest' }
+      responses:
+        '200':
+          description: Assigned (or reassigned)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '403':
+          description: |
+            `/errors/out-of-scope` - the job's asset is outside the CALLER's
+            area scope
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: '`/errors/invalid-transition` - job is SUBMITTED/ARCHIVED/VOIDED, or changed state concurrently'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: '`/errors/validation-failed` - assignee unknown, inactive, holds no result-recording role, or cannot reach the job''s area'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /jobs/{jobId}/items/{templateItemId}:
     parameters:
       - $ref: '#/components/parameters/JobId'
@@ -2844,6 +2894,17 @@ components:
         reason: { type: [string, 'null'] }
         actedAt: { type: string, format: date-time }
         signingKeyId: { type: string }
+
+    AssignJobRequest:
+      # Mirrors shared/src/job.ts `assignJobRequestSchema` exactly (contract
+      # test pins keys + required-ness both directions).
+      type: object
+      required: [assigneeId]
+      properties:
+        assigneeId:
+          type: string
+          format: uuid
+          description: The user this job is (re)assigned to.
 
     VerifyJobRequest:
       type: object

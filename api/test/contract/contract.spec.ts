@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  assignJobRequestSchema,
   mfaChallengeResponseSchema,
   mfaEnrolConfirmRequestSchema,
   mfaEnrolConfirmResponseSchema,
@@ -368,5 +369,38 @@ describe('test:contract — slice 13-MFA schemas match their Zod DTOs exactly', 
     for (const entry of NEW_PATHS) {
       expect(allowlisted).not.toContain(entry);
     }
+  });
+});
+
+/**
+ * Slice 15-SYSWIRE (SYS-2) — `POST /jobs/{jobId}/assign`. Same mechanical
+ * openapi-vs-Zod check the 13-MFA schemas get: keys AND required-ness, both
+ * directions, derived from the schema the server actually validates against.
+ */
+describe('test:contract — slice 15-SYSWIRE assign schema matches its Zod DTO exactly', () => {
+  function zodShape(schema: z.ZodObject<z.ZodRawShape>): { keys: string[]; required: string[] } {
+    const shape = schema.shape as Record<string, z.ZodTypeAny>;
+    const keys = Object.keys(shape);
+    const required = keys.filter((key) => !shape[key].safeParse(undefined).success);
+    return { keys: keys.sort(), required: required.sort() };
+  }
+
+  it('openapi AssignJobRequest documents the same keys as assignJobRequestSchema', () => {
+    const schema = getSchema('AssignJobRequest');
+    expect(Object.keys(schema.properties as object).sort()).toEqual(
+      zodShape(assignJobRequestSchema).keys,
+    );
+  });
+
+  it('openapi AssignJobRequest marks the same fields required as assignJobRequestSchema', () => {
+    const schema = getSchema('AssignJobRequest') as { required?: string[] };
+    expect([...(schema.required ?? [])].sort()).toEqual(zodShape(assignJobRequestSchema).required);
+  });
+
+  it('POST /jobs/{jobId}/assign is documented and not parked in the future-work allowlist', () => {
+    const documented = listOpenapiOperations().map((op) => `${op.method} ${op.path}`);
+    expect(documented).toContain('POST /jobs/{jobId}/assign');
+    const allowlisted = FUTURE_SLICE_OPENAPI_PATHS.map((gap) => `${gap.method} ${gap.path}`);
+    expect(allowlisted).not.toContain('POST /jobs/{jobId}/assign');
   });
 });
