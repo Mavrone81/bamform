@@ -20,6 +20,9 @@ import type {
   VerifyJobRequest,
   CreateDelegationRequest,
   Problem,
+  Attachment,
+  AttachmentUploadOptions,
+  AttachmentUploadResult,
 } from './transport';
 
 async function authorizedFetch(
@@ -118,7 +121,10 @@ export class HttpSyncTransport implements SyncTransport {
   async getJob(jobId: string): Promise<Job> {
     const res = await authorizedFetch(`/jobs/${jobId}`);
     if (!res.ok) {
-      throw new TransportError(`getJob failed: ${res.status}`);
+      // Status attached (H-3): conflict recovery needs to distinguish a
+      // 403/404 (job reassigned away / removed — recovery by resend can
+      // never succeed) from an unreachable server.
+      throw new TransportError(`getJob failed: ${res.status}`, undefined, res.status);
     }
     return (await res.json()) as Job;
   }
@@ -167,6 +173,76 @@ export class HttpSyncTransport implements SyncTransport {
     }
     const problem: Problem | undefined = await res.json().catch(() => undefined);
     return { status: res.status, ok: false, problem };
+  }
+
+  /**
+   * XMLHttpRequest, deliberately: it is the only platform transport that
+   * reports UPLOAD progress (fetch reports download only), and a multi-MB
+   * photo over plant WiFi needs a truthful progress bar. Zero-dependency,
+   * same-origin, same cookie semantics (`withCredentials`).
+   *
+   * Auth (H-5): the bearer is pre-flighted through `ensureFreshToken`
+   * (which refreshes a stale-but-present token, not only an absent one),
+   * and a 401 response triggers ONE refresh + ONE retry — mirroring
+   * `authorizedFetch`'s behaviour, which XHR cannot reuse directly.
+   * Without the retry, a token expiring while the capture screen sits
+   * open makes every upload (and every manual Retry) replay the same
+   * stale bearer into the same 401 forever. Same idempotency key on the
+   * retry: it is a replay of this upload, never a second one.
+   */
+  async uploadAttachment(
+    jobId: string,
+    file: Blob,
+    opts: AttachmentUploadOptions,
+  ): Promise<AttachmentUploadResult> {
+    const token = await ensureFreshToken();
+    const first = await this.uploadAttachmentOnce(jobId, file, opts, token);
+    if (first.status !== 401) return first;
+    const refreshed = await refresh();
+    if (!refreshed) return first; // session is dead — an honest 401, no pointless replay
+    return this.uploadAttachmentOnce(jobId, file, opts, refreshed.accessToken);
+  }
+
+  private uploadAttachmentOnce(
+    jobId: string,
+    file: Blob,
+    opts: AttachmentUploadOptions,
+    token: string | null,
+  ): Promise<AttachmentUploadResult> {
+    return new Promise<AttachmentUploadResult>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/jobs/${encodeURIComponent(jobId)}/attachments`);
+      xhr.withCredentials = true;
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('Idempotency-Key', opts.idempotencyKey);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          opts.onProgress?.(event.loaded / event.total);
+        }
+      };
+      xhr.onload = () => {
+        let body: unknown;
+        try {
+          body = JSON.parse(xhr.responseText) as unknown;
+        } catch {
+          body = undefined;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ status: xhr.status, ok: true, attachment: body as Attachment });
+        } else {
+          resolve({ status: xhr.status, ok: false, problem: body as Problem });
+        }
+      };
+      xhr.onerror = () =>
+        reject(new TransportError('uploadAttachment failed: network error before any response'));
+      xhr.onabort = () => reject(new TransportError('uploadAttachment failed: aborted'));
+
+      const form = new FormData();
+      const filename = file instanceof File ? file.name : 'photo.jpg';
+      form.append('file', file, filename);
+      if (opts.itemResultId) form.append('itemResultId', opts.itemResultId);
+      xhr.send(form);
+    });
   }
 
   async getDelegations(): Promise<DelegationsPage> {

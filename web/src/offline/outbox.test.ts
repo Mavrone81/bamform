@@ -8,6 +8,7 @@ import {
   discardConflict,
   hasConflicts,
   isQuotaExceeded,
+  jobOutboxCounts,
   listDrainable,
   pendingCountForJob,
   retryConflictWithNewId,
@@ -20,6 +21,7 @@ let dbCounter = 0;
 beforeEach(async () => {
   db = createTestDB(`test-outbox-${dbCounter++}-${Math.random()}`);
   await db.jobs.put({
+    userId: 'user-1',
     id: 'job-1',
     job: {} as never,
     cachedAt: new Date().toISOString(),
@@ -36,6 +38,7 @@ afterEach(async () => {
 
 function input(overrides: Partial<Parameters<typeof append>[1]> = {}) {
   return {
+    userId: 'user-1',
     jobId: 'job-1',
     method: 'PUT' as const,
     path: '/jobs/job-1/items/item-1',
@@ -75,7 +78,7 @@ describe('append — durability and quota (O-11)', () => {
     const a = await append(db, input());
     if (!a.ok) throw new Error('unreachable');
     const transport = new MockSyncTransport();
-    await drain(db, transport); // acks + deletes `a`
+    await drain(db, transport, 'user-1'); // acks + deletes `a`
     const b = await append(db, input());
     if (!b.ok) throw new Error('unreachable');
     expect(b.entry.sequence).toBeGreaterThan(a.entry.sequence);
@@ -83,7 +86,7 @@ describe('append — durability and quota (O-11)', () => {
 
   it('marks the owning job dirty (hasPendingOutbox) on append', async () => {
     await append(db, input());
-    const job = await db.jobs.get('job-1');
+    const job = await db.jobs.get(['user-1', 'job-1']);
     expect(job?.hasPendingOutbox).toBe(true);
   });
 
@@ -103,7 +106,7 @@ describe('append — durability and quota (O-11)', () => {
     // No silent loss AND no silent partial success: nothing was written.
     const count = await db.outbox.count();
     expect(count).toBe(0);
-    const job = await db.jobs.get('job-1');
+    const job = await db.jobs.get(['user-1', 'job-1']);
     expect(job?.hasPendingOutbox).toBe(false);
 
     db.outbox.add = original;
@@ -142,7 +145,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
   it('deletes the outbox row when the server returns applied: true', async () => {
     const { entry } = (await append(db, input())) as { ok: true; entry: { id: string } };
     const transport = new MockSyncTransport();
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.acked).toBe(1);
     expect(await db.outbox.get(entry.id)).toBeUndefined();
   });
@@ -153,7 +156,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     transport.dropResponseOnceFor(entry.id);
 
     // First attempt: server applies it, then the response is lost.
-    const first = await drain(db, transport);
+    const first = await drain(db, transport, 'user-1');
     expect(first.networkError).toBe(true);
     expect(first.acked).toBe(0);
     // Row must still be present — this is the entire point of O-15.
@@ -163,7 +166,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     expect(transport.timesApplied(entry.id)).toBe(1); // server-side: applied once already
 
     // Retry with the SAME id (idempotency key) — server replays, does not re-apply.
-    const second = await drain(db, transport);
+    const second = await drain(db, transport, 'user-1');
     expect(second.acked).toBe(1);
     expect(await db.outbox.get(entry.id)).toBeUndefined();
     expect(transport.timesApplied(entry.id)).toBe(1); // still exactly once, never twice
@@ -188,7 +191,10 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     }
     const transport = new MockSyncTransport();
 
-    const [summaryA, summaryB] = await Promise.all([drain(db, transport), drain(db, transport)]);
+    const [summaryA, summaryB] = await Promise.all([
+      drain(db, transport, 'user-1'),
+      drain(db, transport, 'user-1'),
+    ]);
 
     const totalSent = summaryA.attempted + summaryB.attempted;
     expect(totalSent).toBe(5); // each row claimed by exactly one of the two calls
@@ -238,7 +244,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     for (let i = 0; i < MAX_BATCH_SIZE + 25; i++) {
       await append(db, input({ path: `/jobs/job-1/items/item-${i}` }));
     }
-    const batch = await listDrainable(db);
+    const batch = await listDrainable(db, 'user-1');
     expect(batch.length).toBe(MAX_BATCH_SIZE);
     for (let i = 1; i < batch.length; i++) {
       expect(batch[i].sequence).toBeGreaterThan(batch[i - 1].sequence);
@@ -250,7 +256,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
       await append(db, input({ path: `/jobs/job-1/items/item-${i}` }));
     }
     const transport = new MockSyncTransport();
-    const summaries = await drainAll(db, transport);
+    const summaries = await drainAll(db, transport, 'user-1');
     expect(summaries.reduce((n, s) => n + s.acked, 0)).toBe(MAX_BATCH_SIZE + 25);
     expect(await db.outbox.count()).toBe(0);
   });
@@ -263,7 +269,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     const transport = new MockSyncTransport();
     transport.networkDown = true;
 
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.networkError).toBe(true);
     expect(summary.acked).toBe(0);
     for (const e of entries) {
@@ -279,24 +285,24 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     const transport = new MockSyncTransport();
     transport.forceConflict(bad.entry.id);
 
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.acked).toBe(1);
     expect(summary.conflicted).toBe(1);
     expect(await db.outbox.get(good.entry.id)).toBeUndefined();
     const conflictRow = await db.outbox.get(bad.entry.id);
     expect(conflictRow?.status).toBe('conflict');
     expect(conflictRow?.lastResult?.status).toBe(409);
-    expect(await hasConflicts(db, 'job-1')).toBe(true);
+    expect(await hasConflicts(db, 'user-1', 'job-1')).toBe(true);
   });
 
   it('conflict rows are never auto-resent by drain()', async () => {
     const bad = (await append(db, input())) as { ok: true; entry: { id: string } };
     const transport = new MockSyncTransport();
     transport.forceConflict(bad.entry.id);
-    await drain(db, transport); // -> conflict
+    await drain(db, transport, 'user-1'); // -> conflict
 
     const before = transport.timesApplied(bad.entry.id);
-    await drain(db, transport); // should be a no-op: nothing drainable
+    await drain(db, transport, 'user-1'); // should be a no-op: nothing drainable
     expect(transport.timesApplied(bad.entry.id)).toBe(before);
     expect((await db.outbox.get(bad.entry.id))?.status).toBe('conflict');
   });
@@ -305,15 +311,15 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     const bad = (await append(db, input())) as { ok: true; entry: { id: string } };
     const transport = new MockSyncTransport();
     transport.forceConflict(bad.entry.id);
-    await drain(db, transport);
+    await drain(db, transport, 'user-1');
 
     await retryConflictWithNewId(db, bad.entry.id);
     expect(await db.outbox.get(bad.entry.id)).toBeUndefined(); // old id gone
-    const pending = await listDrainable(db);
+    const pending = await listDrainable(db, 'user-1');
     expect(pending).toHaveLength(1);
     expect(pending[0].id).not.toBe(bad.entry.id);
 
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.acked).toBe(1);
   });
 
@@ -321,12 +327,12 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     const bad = (await append(db, input())) as { ok: true; entry: { id: string } };
     const transport = new MockSyncTransport();
     transport.forceConflict(bad.entry.id);
-    await drain(db, transport);
+    await drain(db, transport, 'user-1');
 
     await discardConflict(db, bad.entry.id);
     expect(await db.outbox.get(bad.entry.id)).toBeUndefined();
-    expect(await pendingCountForJob(db, 'job-1')).toBe(0);
-    const job = await db.jobs.get('job-1');
+    expect(await pendingCountForJob(db, 'user-1', 'job-1')).toBe(0);
+    const job = await db.jobs.get(['user-1', 'job-1']);
     expect(job?.hasPendingOutbox).toBe(false);
   });
 
@@ -339,7 +345,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
       return { ...res, results: [] }; // simulate a malformed/partial response
     };
 
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.acked).toBe(0);
     expect(summary.failed).toBe(1);
     const row = await db.outbox.get(entry.id);
@@ -349,7 +355,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
 
   it('draining an empty outbox is a safe no-op', async () => {
     const transport = new MockSyncTransport();
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary).toEqual({
       attempted: 0,
       acked: 0,
@@ -365,7 +371,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
     transport.drainOutbox = async () => {
       throw 'raw string failure';
     };
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.networkError).toBe(true);
     const row = await db.outbox.get(entry.id);
     expect(row?.status).toBe('pending');
@@ -379,7 +385,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
       Promise.resolve({
         results: mutations.map((m) => ({ id: m.id, status: 409, applied: false })),
       });
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.conflicted).toBe(1);
     const row = await db.outbox.get(entry.id);
     expect(row?.status).toBe('conflict');
@@ -398,7 +404,7 @@ describe('drain — non-negotiable #1: cleared ONLY after server ack (O-15)', ()
           problem: { type: 'about:blank', title: 'unprocessable', status: 422 },
         })),
       });
-    const summary = await drain(db, transport);
+    const summary = await drain(db, transport, 'user-1');
     expect(summary.failed).toBe(1);
     const row = await db.outbox.get(entry.id);
     expect(row?.status).toBe('failed');
@@ -416,9 +422,99 @@ describe('drainAll — stops on network failure instead of hammering a dead conn
     await append(db, input());
     const transport = new MockSyncTransport();
     transport.networkDown = true;
-    const summaries = await drainAll(db, transport);
+    const summaries = await drainAll(db, transport, 'user-1');
     expect(summaries).toHaveLength(1);
     expect(summaries[0].networkError).toBe(true);
+  });
+});
+
+describe('O-17: per-user partition — a shared tablet never drains one user’s work under another’s identity (SYS-6)', () => {
+  it('drain for user B sends ONLY B’s rows; A’s stay untouched in the outbox', async () => {
+    // User A queued work offline, then signed out; user B signs in on the
+    // same device and connectivity returns.
+    const a1 = (await append(db, input({ userId: 'user-a' }))) as {
+      ok: true;
+      entry: { id: string };
+    };
+    const a2 = (await append(
+      db,
+      input({ userId: 'user-a', path: '/jobs/job-1/items/item-2' }),
+    )) as {
+      ok: true;
+      entry: { id: string };
+    };
+    const b1 = (await append(
+      db,
+      input({ userId: 'user-b', path: '/jobs/job-1/items/item-3' }),
+    )) as {
+      ok: true;
+      entry: { id: string };
+    };
+
+    const transport = new MockSyncTransport();
+    const summary = await drain(db, transport, 'user-b');
+
+    expect(summary.attempted).toBe(1);
+    expect(summary.acked).toBe(1);
+    // B's row went out and was cleared on ack…
+    expect(await db.outbox.get(b1.entry.id)).toBeUndefined();
+    // …while A's rows were NEVER transmitted under B's bearer, and remain
+    // exactly as A left them.
+    expect(transport.timesApplied(a1.entry.id)).toBe(0);
+    expect(transport.timesApplied(a2.entry.id)).toBe(0);
+    expect((await db.outbox.get(a1.entry.id))?.status).toBe('pending');
+    expect((await db.outbox.get(a2.entry.id))?.status).toBe('pending');
+  });
+
+  it('A signing back in finds their work intact and it drains under A', async () => {
+    const a1 = (await append(db, input({ userId: 'user-a' }))) as {
+      ok: true;
+      entry: { id: string };
+    };
+    const transport = new MockSyncTransport();
+    await drain(db, transport, 'user-b'); // B's session: must not touch A's row
+    expect((await db.outbox.get(a1.entry.id))?.status).toBe('pending');
+
+    const summary = await drain(db, transport, 'user-a'); // A returns
+    expect(summary.acked).toBe(1);
+    expect(transport.timesApplied(a1.entry.id)).toBe(1);
+    expect(await db.outbox.get(a1.entry.id)).toBeUndefined();
+  });
+
+  it('legacy (unclaimed) rows are never drained under anyone', async () => {
+    const legacy = (await append(db, input({ userId: '@legacy' }))) as {
+      ok: true;
+      entry: { id: string };
+    };
+    const transport = new MockSyncTransport();
+    const summary = await drain(db, transport, 'user-b');
+    expect(summary.attempted).toBe(0);
+    expect(transport.timesApplied(legacy.entry.id)).toBe(0);
+    expect((await db.outbox.get(legacy.entry.id))?.status).toBe('pending');
+  });
+
+  it('pendingCountForJob and jobOutboxCounts are scoped to the user (SYS-23 honesty split)', async () => {
+    await append(db, input({ userId: 'user-a' }));
+    const bBad = (await append(
+      db,
+      input({ userId: 'user-b', path: '/jobs/job-1/items/item-9' }),
+    )) as {
+      ok: true;
+      entry: { id: string };
+    };
+    await append(db, input({ userId: 'user-b', path: '/jobs/job-1/items/item-8' }));
+
+    const transport = new MockSyncTransport();
+    transport.forceConflict(bBad.entry.id);
+    await drain(db, transport, 'user-b');
+
+    // B: one conflicted row retained; the clean one acked. A: one pending.
+    expect(await pendingCountForJob(db, 'user-a', 'job-1')).toBe(1);
+    expect(await pendingCountForJob(db, 'user-b', 'job-1')).toBe(1);
+    expect(await hasConflicts(db, 'user-b', 'job-1')).toBe(true);
+    expect(await hasConflicts(db, 'user-a', 'job-1')).toBe(false);
+    const counts = await jobOutboxCounts(db, 'user-b', 'job-1');
+    expect(counts).toEqual({ total: 1, sendable: 0, failed: 0, conflict: 1 });
   });
 });
 

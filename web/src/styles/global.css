@@ -449,6 +449,15 @@ dialog.dialog {
   margin: auto;
 }
 
+/* `.dialog`'s own `display: flex` would otherwise beat the UA stylesheet's
+ * `dialog:not([open]) { display: none }` — leaving a CLOSED native dialog
+ * painted over the page, intercepting taps (found by O-17's shared-tablet
+ * E2E: the Menu's always-mounted sign-out warning blocked the Sign out
+ * button). Closed means gone, unconditionally. */
+dialog.dialog:not([open]) {
+  display: none;
+}
+
 dialog.dialog::backdrop {
   background: rgba(15, 20, 26, 0.55);
 }

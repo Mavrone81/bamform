@@ -16,6 +16,9 @@ import type {
   JobActionResponse,
   DelegationActionResponse,
   Problem,
+  Attachment,
+  AttachmentUploadOptions,
+  AttachmentUploadResult,
 } from './transport';
 
 /**
@@ -64,6 +67,13 @@ export class MockSyncTransport implements SyncTransport {
 
   seedJob(job: Job): void {
     this.jobStore.set(job.id, job);
+  }
+
+  /** Models the job being reassigned away / removed server-side: `getJob`
+   * then throws a TransportError carrying status 404, exactly as
+   * `HttpSyncTransport.getJob` does for a non-OK response. */
+  removeJob(jobId: string): void {
+    this.jobStore.delete(jobId);
   }
 
   seedQueueEntry(entry: QueueEntry): void {
@@ -193,8 +203,58 @@ export class MockSyncTransport implements SyncTransport {
   async getJob(jobId: string): Promise<Job> {
     if (this.networkDown) throw new TransportError('mock: network down');
     const job = this.jobStore.get(jobId);
-    if (!job) throw new TransportError(`mock: job ${jobId} not found`);
+    if (!job) throw new TransportError(`mock: job ${jobId} not found`, undefined, 404);
     return job;
+  }
+
+  // ---- Slice 16 (D-2b): attachments, online-only ----
+  private readonly attachmentStore = new Map<string, Attachment[]>();
+  private readonly attachmentIdempotency = new Map<string, AttachmentUploadResult>();
+  private attachmentSeq = 0;
+  private uploadRejectionOverride: { status: number; problem?: Problem } | null = null;
+
+  /** The NEXT upload is refused with this outcome (e.g. a 422 magic-byte
+   * rejection) instead of being stored. */
+  forceNextUploadRejection(status: number, problem?: Problem): void {
+    this.uploadRejectionOverride = { status, problem };
+  }
+
+  attachmentsFor(jobId: string): Attachment[] {
+    return this.attachmentStore.get(jobId) ?? [];
+  }
+
+  async uploadAttachment(
+    jobId: string,
+    file: Blob,
+    opts: AttachmentUploadOptions,
+  ): Promise<AttachmentUploadResult> {
+    if (this.networkDown) throw new TransportError('mock: network down');
+    const replay = this.attachmentIdempotency.get(opts.idempotencyKey);
+    if (replay) return replay;
+
+    opts.onProgress?.(0.5);
+    if (this.uploadRejectionOverride) {
+      const { status, problem } = this.uploadRejectionOverride;
+      this.uploadRejectionOverride = null;
+      const result: AttachmentUploadResult = { status, ok: false, problem };
+      this.attachmentIdempotency.set(opts.idempotencyKey, result);
+      return result;
+    }
+    opts.onProgress?.(1);
+    const attachment: Attachment = {
+      id: `att-${++this.attachmentSeq}`,
+      itemResultId: opts.itemResultId ?? null,
+      originalFilename: file instanceof File ? file.name : 'photo.jpg',
+      contentType: 'image/jpeg',
+      byteSize: file.size,
+      uploadState: 'received',
+    };
+    const list = this.attachmentStore.get(jobId) ?? [];
+    list.push(attachment);
+    this.attachmentStore.set(jobId, list);
+    const result: AttachmentUploadResult = { status: 201, ok: true, attachment };
+    this.attachmentIdempotency.set(opts.idempotencyKey, result);
+    return result;
   }
 
   async getQueue(): Promise<QueuePage> {

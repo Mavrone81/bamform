@@ -1,14 +1,17 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getServices } from '../state/services';
+import { getServices, getSyncUserId } from '../state/services';
 import {
   bootstrap,
   listCachedJobs,
   jobSyncState,
   getClockSkew,
+  triggerDrainIfOnline,
   type JobSyncState,
   type ClockSkewRecord,
 } from '../offline/sync-engine';
-import { onSynced } from '../offline/sync-events';
+import { getStoragePersistence } from '../offline/persistence';
+import { onSynced, notifySynced } from '../offline/sync-events';
+import { legacyHoldSummary, type LegacyHoldSummary } from '../offline/db';
 import type { CachedJob } from '../offline/db';
 import { SyncStatusChip } from '../components/SyncStatusChip';
 import { InstallHint } from '../components/InstallHint';
@@ -41,12 +44,26 @@ export function JobList() {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [clockSkew, setClockSkew] = useState<ClockSkewRecord | null>(null);
+  const [storageUnprotected, setStorageUnprotected] = useState(false);
+  const [legacyHold, setLegacyHold] = useState<LegacyHoldSummary | null>(null);
 
   const refresh = useCallback(async () => {
     const { db } = getServices();
-    const jobs = await listCachedJobs(db);
+    const userId = getSyncUserId();
+    if (!userId) return; // signed out mid-flight — nothing to show
+    // SYS-15: re-read on every refresh — App's sign-in request may resolve
+    // after this screen first mounted (it notifies via sync-events).
+    void getStoragePersistence(db).then((outcome) => {
+      setStorageUnprotected(Boolean(outcome && !outcome.persisted));
+    });
+    // H-4: pre-upgrade work quarantined for OTHER users must be visible,
+    // not silently parked in IndexedDB.
+    void legacyHoldSummary(db).then((summary) => {
+      setLegacyHold(summary.count > 0 ? summary : null);
+    });
+    const jobs = await listCachedJobs(db, userId);
     const withState = await Promise.all(
-      jobs.map(async (job) => ({ job, syncState: await jobSyncState(db, job.id) })),
+      jobs.map(async (job) => ({ job, syncState: await jobSyncState(db, userId, job.id) })),
     );
     withState.sort((a, b) => {
       const aOverdue = a.job.job.overdue ? 0 : 1;
@@ -78,6 +95,15 @@ export function JobList() {
       })
       .finally(() => {
         if (!cancelled) void refresh();
+        // H-2: bootstrap may have just CLAIMED pre-upgrade legacy rows for
+        // this principal (claimLegacyRows runs inside bootstrap). App's
+        // sign-in drain fired before that claim, and on an always-online
+        // device no further `online` transition will ever come — so the
+        // claimed work would sit untransmitted all session. Drain now,
+        // after the claim, unconditionally (a no-op when nothing is
+        // drainable).
+        const { db: drainDb, transport: drainTransport } = getServices();
+        triggerDrainIfOnline(drainDb, drainTransport, getSyncUserId, () => notifySynced());
       });
     // Covers the case where a skew was recorded on an earlier bootstrap
     // this session and the banner should still be visible on remount.
@@ -125,6 +151,22 @@ export function JobList() {
         </p>
       )}
       {clockSkew && <ClockSkewBanner skew={clockSkew} />}
+      {legacyHold && (
+        <p className="banner" data-tone="info">
+          <span aria-hidden="true">◍</span> {legacyHold.count} unsent entr
+          {legacyHold.count === 1 ? 'y' : 'ies'} recorded before the app update
+          {legacyHold.names.length > 0 ? ` belong to ${legacyHold.names.join(', ')} and` : ''} will
+          be sent when the matching user signs in on this device. They are held safely and are not
+          part of your work.
+        </p>
+      )}
+      {storageUnprotected && (
+        <p className="banner" data-tone="attention">
+          <span aria-hidden="true">⚠</span> This browser has not protected BamForm's offline storage
+          — records held on this device could be evicted if it runs low on space or sits unused.
+          Installing the app (Add to Home Screen) protects them.
+        </p>
+      )}
 
       {rows === null && (
         <p className="loading-state">

@@ -366,6 +366,228 @@ describe('HttpSyncTransport', () => {
 });
 
 /**
+ * Slice 16 (D-2b): `POST /jobs/{id}/attachments` rides XMLHttpRequest, the
+ * one transport in the platform that reports UPLOAD progress (fetch cannot)
+ * — a multi-MB photo on plant WiFi deserves a real progress bar, not a
+ * spinner. These tests drive a scripted fake XHR.
+ */
+describe('uploadAttachment', () => {
+  class FakeXHR {
+    static instances: FakeXHR[] = [];
+    static nextResponse: { status: number; body: string } = {
+      status: 201,
+      body: JSON.stringify({
+        id: 'att-1',
+        contentType: 'image/jpeg',
+        byteSize: 3,
+        uploadState: 'received',
+      }),
+    };
+    /** When non-empty, each send() consumes the next scripted response —
+     * lets a test serve 401-then-201 across the retry (H-5). */
+    static responseQueue: Array<{ status: number; body: string }> = [];
+    static failNextWithNetworkError = false;
+
+    method = '';
+    url = '';
+    headers: Record<string, string> = {};
+    withCredentials = false;
+    status = 0;
+    responseText = '';
+    sentBody: unknown = null;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    upload = { onprogress: null as ((e: ProgressEvent) => void) | null };
+
+    open(method: string, url: string) {
+      this.method = method;
+      this.url = url;
+      FakeXHR.instances.push(this);
+    }
+    setRequestHeader(name: string, value: string) {
+      this.headers[name.toLowerCase()] = value;
+    }
+    send(body: unknown) {
+      this.sentBody = body;
+      queueMicrotask(() => {
+        if (FakeXHR.failNextWithNetworkError) {
+          FakeXHR.failNextWithNetworkError = false;
+          this.onerror?.();
+          return;
+        }
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 } as ProgressEvent);
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 2, total: 2 } as ProgressEvent);
+        const scripted = FakeXHR.responseQueue.shift() ?? FakeXHR.nextResponse;
+        this.status = scripted.status;
+        this.responseText = scripted.body;
+        this.onload?.();
+      });
+    }
+  }
+
+  beforeEach(() => {
+    FakeXHR.instances = [];
+    FakeXHR.responseQueue = [];
+    FakeXHR.failNextWithNetworkError = false;
+    FakeXHR.nextResponse = {
+      status: 201,
+      body: JSON.stringify({
+        id: 'att-1',
+        contentType: 'image/jpeg',
+        byteSize: 3,
+        uploadState: 'received',
+      }),
+    };
+    vi.stubGlobal('XMLHttpRequest', FakeXHR as unknown as typeof XMLHttpRequest);
+  });
+
+  it('POSTs multipart form-data with bearer + REQUIRED Idempotency-Key, reporting upload progress', async () => {
+    setAccessToken('tok', 900);
+    const transport = new HttpSyncTransport();
+    const fractions: number[] = [];
+    const result = await transport.uploadAttachment(
+      'job-1',
+      new Blob(['abc'], { type: 'image/jpeg' }),
+      { idempotencyKey: 'key-1', onProgress: (f) => fractions.push(f) },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.attachment?.id).toBe('att-1');
+    const xhr = FakeXHR.instances[0];
+    expect(xhr.method).toBe('POST');
+    expect(xhr.url).toContain('/jobs/job-1/attachments');
+    expect(xhr.withCredentials).toBe(true);
+    expect(xhr.headers.authorization).toBe('Bearer tok');
+    expect(xhr.headers['idempotency-key']).toBe('key-1');
+    expect(xhr.sentBody).toBeInstanceOf(FormData);
+    expect(fractions).toEqual([0.5, 1]);
+  });
+
+  it('returns ok:false with the Problem body on a 422 magic-byte rejection — a failure state the UI can show honestly', async () => {
+    setAccessToken('tok', 900);
+    FakeXHR.nextResponse = {
+      status: 422,
+      body: JSON.stringify({
+        type: 'https://form.bevorasg.com/errors/attachment-rejected',
+        title: 'Not a supported image',
+        status: 422,
+      }),
+    };
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-2',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(422);
+    expect((result.problem as { title?: string })?.title).toBe('Not a supported image');
+  });
+
+  it('rejects with a TransportError when the connection dies mid-upload (caller shows the retry affordance)', async () => {
+    setAccessToken('tok', 900);
+    FakeXHR.failNextWithNetworkError = true;
+    const transport = new HttpSyncTransport();
+    await expect(
+      transport.uploadAttachment('job-1', new Blob(['x']), { idempotencyKey: 'key-3' }),
+    ).rejects.toThrow('uploadAttachment failed');
+  });
+
+  it('passes itemResultId through in the form body when supplied', async () => {
+    setAccessToken('tok', 900);
+    const transport = new HttpSyncTransport();
+    await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-4',
+      itemResultId: 'ir-9',
+    });
+    const form = FakeXHR.instances[0].sentBody as FormData;
+    expect(form.get('itemResultId')).toBe('ir-9');
+  });
+
+  it('H-5: a 401 refreshes the session once and retries once with the NEW token — the upload succeeds', async () => {
+    setAccessToken('stale-tok', 900);
+    // `refresh()` posts /auth/refresh through fetch (still globally mocked).
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        accessToken: 'fresh-tok',
+        expiresIn: 900,
+        user: { id: 'u1', fullName: 'A', roles: [] },
+      }),
+    );
+    FakeXHR.responseQueue = [
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+      {
+        status: 201,
+        body: JSON.stringify({
+          id: 'att-9',
+          contentType: 'image/jpeg',
+          byteSize: 1,
+          uploadState: 'received',
+        }),
+      },
+    ];
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-5',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.attachment?.id).toBe('att-9');
+    expect(FakeXHR.instances).toHaveLength(2);
+    expect(FakeXHR.instances[0].headers.authorization).toBe('Bearer stale-tok');
+    expect(FakeXHR.instances[1].headers.authorization).toBe('Bearer fresh-tok');
+    // Same idempotency key both attempts — the retry is a replay, never a
+    // second upload.
+    expect(FakeXHR.instances[1].headers['idempotency-key']).toBe('key-5');
+    const refreshCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).includes('/auth/refresh'));
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('H-5: a second 401 after the refresh fails honestly — exactly one retry, never a loop', async () => {
+    setAccessToken('stale-tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        accessToken: 'fresh-tok',
+        expiresIn: 900,
+        user: { id: 'u1', fullName: 'A', roles: [] },
+      }),
+    );
+    FakeXHR.responseQueue = [
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+    ];
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-6',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(401);
+    expect(FakeXHR.instances).toHaveLength(2); // one retry, then honest failure
+  });
+
+  it('H-5: a 401 with a DEAD refresh session fails honestly without retrying', async () => {
+    setAccessToken('stale-tok', 900);
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, false, 401)); // refresh refused
+    FakeXHR.responseQueue = [
+      { status: 401, body: JSON.stringify({ title: 'Unauthenticated', status: 401 }) },
+    ];
+
+    const transport = new HttpSyncTransport();
+    const result = await transport.uploadAttachment('job-1', new Blob(['x']), {
+      idempotencyKey: 'key-7',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(401);
+    expect(FakeXHR.instances).toHaveLength(1); // no pointless replay with no new token
+  });
+});
+
+/**
  * U-TRANS-01 — brief §2.3: the forced-password-change 403 is detected once,
  * centrally, in the transport layer, "not scattered across screens". Every
  * authenticated request in this app goes through `authorizedFetch`, so these

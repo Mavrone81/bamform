@@ -223,3 +223,67 @@ test('A-03: the MFA and password fields have accessible labels', async ({ page, 
   await page.getByRole('button', { name: 'Use a recovery code instead' }).click();
   await expect(page.getByLabel('Recovery code', { exact: true })).toBeVisible();
 });
+
+// ---- Slice 16: the new surfaces must be as clean as the ones they join ----
+
+test('A-01: the RecordCapture conflict-recovery panel has zero axe violations', async ({
+  signedInPage: page,
+  server,
+}) => {
+  await page.getByText('PM-2026-000431').click();
+  server.forceNextConflictOnce();
+  const request = page.waitForRequest('**/api/v1/sync/outbox');
+  await page
+    .locator('.checklist-item')
+    .nth(0)
+    .getByRole('button', { name: 'Done', exact: true })
+    .click();
+  await request;
+  await expect(page.getByTestId('conflict-panel')).toBeVisible({ timeout: 10_000 });
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+});
+
+test('A-01: the photo section with a staged photo has zero axe violations', async ({
+  signedInPage: page,
+}) => {
+  await page.getByText('PM-2026-000431').click();
+  await page.getByLabel('Add a photo (camera or gallery)').setInputFiles({
+    name: 'evidence.jpg',
+    mimeType: 'image/jpeg',
+    buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+  });
+  await expect(page.getByTestId('staged-photo')).toBeVisible();
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+});
+
+test('A-01: the Menu (with sign-out) and the unsent-work warning dialog have zero axe violations', async ({
+  signedInPage: page,
+}) => {
+  // Queue an unsent entry so the warning dialog genuinely opens.
+  await page.getByText('PM-2026-000431').click();
+  await page.context().setOffline(true);
+  await page
+    .locator('.checklist-item')
+    .nth(0)
+    .getByRole('button', { name: 'Done', exact: true })
+    .click();
+  await page.getByRole('button', { name: 'Menu' }).click();
+  const menuScan = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(menuScan.violations, JSON.stringify(menuScan.violations, null, 2)).toEqual([]);
+
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  const dialogScan = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(dialogScan.violations, JSON.stringify(dialogScan.violations, null, 2)).toEqual([]);
+  await page.getByRole('button', { name: 'Stay signed in' }).click();
+});

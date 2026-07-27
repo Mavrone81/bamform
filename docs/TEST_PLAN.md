@@ -334,10 +334,25 @@ record — is the highest-impact risk in the project.
 | **O-14** | Job reassigned server-side while cached on the original device | original device informed on sync, cannot submit |
 | **O-15** | Outbox cleared only after server acknowledgement | forced-failure test proves no premature clear |
 | **O-16** | 200-mutation batch (cap) | accepted; 201 rejected with a clear error |
+| **O-17** | Shared tablet: user A's unsent work, user B signs in | B neither sees nor transmits A's rows; A's return drains them under A, exactly once |
+| **O-18** | App upgrade over a live single-user (pre-partition) store holding unsent results | additive Dexie v1→v2 migration preserves every row; first server-confirmed principal claims them |
+| **O-19** | Sign out while unsent entries are held | explicit warning (count + consequences); proceeding keeps the work stored, never clears it |
+| **O-20** | Device wedged by 409 conflicts (SYS-5) | visible recovery UI: keep-mine resends with ifMatch refreshed from the server's current draftVersion (fresh ids); accept-server discards and refetches; Submit works again |
+| **O-21** | Attachment capture (online-only v1) | capture/preview/remove-before-submit; upload with real progress + honest failure/retry; offline attempt refused with clear message and NOTHING queued; checklist capture unaffected |
+| **O-22** | Storage persistence (SYS-15) | `navigator.storage.persist()` requested at sign-in; a refusal is surfaced in the sync status area, a grant stays silent |
 
 **PR-TST-07** O-15 is tested by injecting a failure between the server's commit and the
 client's receipt of the response. The client must retain the outbox entry and retry, producing
 exactly one applied mutation.
+
+**Slice-16 status note (O-06/O-07):** attachment upload shipped **online-only by design**
+(slice-16 decision, defended in `.superpowers/sdd/slice-16-webharden-report.md`): photos are
+never queued in the offline outbox, an upload either completes or visibly fails before Submit
+(staged/uploading photos block Submit), so the "attachments still uploading at submit" and
+"attachments pending at verify" states O-06/O-07 describe are **unreachable under v1's design**.
+Their intent — a record can never silently ride ahead of its evidence — is covered by O-21's
+passing specs (`web/e2e/offline/o21-attachments.spec.ts`). O-06/O-07 remain reserved: they
+become real test targets if and when offline-queued attachments are built (PR-069 quota work).
 
 ---
 
