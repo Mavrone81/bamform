@@ -180,6 +180,8 @@ test('E-07b: a user who is NOT forced can still change their password voluntaril
     await signIn(page, E2E_USERS.technician.email, E2E_PASSWORD);
     await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
+    // Slice 14-DESIGN: account actions live on the Menu tab of the nav shell.
+    await page.getByRole('button', { name: 'Menu' }).click();
     const link = page.getByRole('button', { name: 'Change password' });
     await link.scrollIntoViewIfNeeded();
     await link.click();
@@ -210,6 +212,8 @@ test('E-07c: an ADMIN can reset a locked-out user’s authenticator, behind an e
     await signIn(page, E2E_USERS.admin.email, E2E_PASSWORD);
     await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
+    // Slice 14-DESIGN: the admin reset entry lives on the Menu tab.
+    await page.getByRole('button', { name: 'Menu' }).click();
     const entry = page.getByRole('button', { name: /Reset a user/i });
     await entry.scrollIntoViewIfNeeded();
     await entry.click();
@@ -250,7 +254,11 @@ test('E-07d: the reset control is not offered to a non-admin, and the server ref
     await signIn(page, E2E_USERS.technician.email, E2E_PASSWORD);
     await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
-    // Presentation: the technician is not offered the control...
+    // Presentation: the technician is not offered the control — checked where
+    // the control would live (the Menu tab, slice 14-DESIGN), not just on a
+    // screen that never carried it.
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await expect(page.getByRole('heading', { name: 'Menu' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Reset a user/i })).toHaveCount(0);
 
     // ...but that is NOT the enforcement (non-negotiable #6). The screen is

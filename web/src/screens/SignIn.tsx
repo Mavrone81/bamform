@@ -9,6 +9,7 @@ import {
   type AuthCallResult,
 } from '../auth';
 import { MfaEnrolment } from '../components/MfaEnrolment';
+import { BrandMark } from '../components/BrandMark';
 import { useRouter } from '../router';
 
 /**
@@ -155,9 +156,19 @@ export function SignIn() {
   }
 
   return (
-    <main className="app-shell" aria-labelledby="sign-in-heading">
-      <h1 id="sign-in-heading">BamForm</h1>
-      <p>Preventive Maintenance Record and Approval System</p>
+    <main
+      className="app-shell app-shell--focus app-shell--standalone"
+      aria-labelledby="sign-in-heading"
+    >
+      <header className="signin-brand">
+        <BrandMark className="signin-mark" />
+        <h1 id="sign-in-heading" className="brand-word" style={{ marginBottom: 0 }}>
+          BamForm
+        </h1>
+        <p className="microlabel" style={{ margin: 0 }}>
+          Preventive Maintenance Record and Approval System
+        </p>
+      </header>
 
       {notice && (
         <p className="banner" data-tone="attention" role="alert">
@@ -166,7 +177,8 @@ export function SignIn() {
       )}
 
       {step === 'password' && (
-        <form onSubmit={handlePasswordSubmit} noValidate>
+        <form onSubmit={handlePasswordSubmit} noValidate className="card">
+          <span className="microlabel">Sign in</span>
           <div className="field">
             <label htmlFor="email">Email</label>
             <input
@@ -209,7 +221,7 @@ export function SignIn() {
       )}
 
       {step === 'totp' && (
-        <section aria-label="Two-step verification">
+        <section aria-label="Two-step verification" className="card">
           <h2>Enter your 6-digit code</h2>
           <p>Open your authenticator app and enter the code it shows for BamForm.</p>
           <form onSubmit={handleTotpSubmit} noValidate>
@@ -259,7 +271,7 @@ export function SignIn() {
       )}
 
       {step === 'recovery' && (
-        <section aria-label="Use a recovery code">
+        <section aria-label="Use a recovery code" className="card">
           <h2>Use a recovery code</h2>
           <p>
             Enter one of the ten codes you saved when you set up your authenticator. Each code works

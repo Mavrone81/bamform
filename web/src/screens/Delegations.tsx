@@ -72,12 +72,15 @@ export function Delegations() {
 
   return (
     <main className="app-shell" aria-labelledby="delegations-heading">
-      <div className="card-row">
-        <h1 id="delegations-heading">Delegations</h1>
-        <button type="button" onClick={() => navigate('/queue')}>
-          Verifier queue
+      <header className="screen-header">
+        <button type="button" className="back-link btn-quiet" onClick={() => navigate('/queue')}>
+          <span aria-hidden="true">‹</span> Back to queue
         </button>
-      </div>
+        <span className="microlabel">Cover an absence</span>
+        <h1 id="delegations-heading" style={{ marginBottom: 0 }}>
+          Delegations
+        </h1>
+      </header>
 
       {listError && (
         <p className="banner" data-tone="attention" role="alert">
@@ -85,7 +88,7 @@ export function Delegations() {
         </p>
       )}
 
-      <section aria-label="Grant a delegation">
+      <section aria-label="Grant a delegation" className="card">
         <h2>Grant delegated verification authority</h2>
         <form onSubmit={(e) => void handleCreate(e)} noValidate>
           <div className="field">
@@ -152,41 +155,51 @@ export function Delegations() {
 
       <section aria-label="Delegations">
         <h2>Your delegations</h2>
-        {items === null && <p>Loading…</p>}
-        {items !== null && items.length === 0 && <p>No delegations involve you.</p>}
-        <ul
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            padding: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-3)',
-          }}
-        >
+        {items === null && (
+          <p className="loading-state">
+            <span className="loading-spinner" aria-hidden="true" />
+            Loading…
+          </p>
+        )}
+        {items !== null && items.length === 0 && (
+          <div className="empty-state">
+            <span className="empty-state-glyph" aria-hidden="true">
+              ◈
+            </span>
+            <p className="empty-state-title">No delegations involve you.</p>
+            <p>Grants you make, and grants made to you, are listed here.</p>
+          </div>
+        )}
+        <ul className="data-list">
           {items?.map((d) => (
             <li key={d.id} className="card">
               <div className="card-row">
-                <span>
+                <span style={{ fontWeight: 600 }}>
                   {d.delegatorName ?? d.delegatorId} → {d.delegateName ?? d.delegateId}
                 </span>
                 {d.revokedAt ? (
                   <span className="status-chip" data-tone="neutral">
-                    Revoked
+                    <span aria-hidden="true">⊘</span>
+                    <span>Revoked</span>
                   </span>
                 ) : (
                   <span className="status-chip" data-tone="good">
-                    Active
+                    <span aria-hidden="true">◉</span>
+                    <span>Active</span>
                   </span>
                 )}
               </div>
               <div className="card-row">
-                <span>
+                <span className="numeric text-soft">
                   {new Date(d.validFrom).toLocaleString()} – {new Date(d.validTo).toLocaleString()}
                 </span>
               </div>
               {!d.revokedAt && (
-                <button type="button" onClick={() => void handleRevoke(d.id)}>
+                <button
+                  type="button"
+                  style={{ alignSelf: 'flex-start' }}
+                  onClick={() => void handleRevoke(d.id)}
+                >
                   Revoke
                 </button>
               )}

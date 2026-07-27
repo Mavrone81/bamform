@@ -11,7 +11,7 @@ import {
 import { onSynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { SyncStatusChip } from '../components/SyncStatusChip';
-import { getCurrentUser, onCurrentUserChange } from '../auth';
+import { InstallHint } from '../components/InstallHint';
 import { useRouter } from '../router';
 
 interface Row {
@@ -41,11 +41,6 @@ export function JobList() {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [clockSkew, setClockSkew] = useState<ClockSkewRecord | null>(null);
-  // Presentation only (non-negotiable #6). The server owns who may reset
-  // another user's MFA; not offering the link to everyone else just avoids
-  // a control that would certainly 403.
-  const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
-  useEffect(() => onCurrentUserChange(setCurrentUser), []);
 
   const refresh = useCallback(async () => {
     const { db } = getServices();
@@ -109,29 +104,21 @@ export function JobList() {
 
   return (
     <main className="app-shell" aria-labelledby="job-list-heading">
-      <div className="card-row">
-        <h1 id="job-list-heading">Your jobs</h1>
-        <button type="button" onClick={() => navigate('/queue')}>
-          Verifier queue
-        </button>
-      </div>
+      <header className="screen-header">
+        <span className="microlabel">Preventive maintenance</span>
+        <h1 id="job-list-heading" style={{ marginBottom: 0 }}>
+          Your jobs
+        </h1>
+      </header>
 
-      <nav aria-label="Account" className="card-row">
-        <button type="button" onClick={() => navigate('/change-password')}>
-          Change password
-        </button>
-        {currentUser?.roles.includes('ADMIN') && (
-          <button type="button" onClick={() => navigate('/admin/mfa-reset')}>
-            Reset a user&rsquo;s authenticator
-          </button>
-        )}
-      </nav>
+      <InstallHint />
 
-      <p className="status-chip" data-tone={isOnline ? 'good' : 'attention'} role="status">
-        <span aria-hidden="true">{isOnline ? '◉' : '◌'}</span>
-        {isOnline ? 'Online' : 'Offline — work is saved on this device'}
-      </p>
-
+      {!isOnline && (
+        <p className="banner" data-tone="attention">
+          <span aria-hidden="true">◌</span> Offline — work is saved on this device and sent when you
+          reconnect.
+        </p>
+      )}
       {bootstrapError && (
         <p className="banner" data-tone="attention" role="alert">
           <span aria-hidden="true">⚠</span> {bootstrapError}
@@ -139,36 +126,41 @@ export function JobList() {
       )}
       {clockSkew && <ClockSkewBanner skew={clockSkew} />}
 
-      {rows === null && <p>Loading…</p>}
-      {rows !== null && rows.length === 0 && <p>No jobs assigned yet.</p>}
+      {rows === null && (
+        <p className="loading-state">
+          <span className="loading-spinner" aria-hidden="true" />
+          Loading…
+        </p>
+      )}
+      {rows !== null && rows.length === 0 && (
+        <div className="empty-state">
+          <span className="empty-state-glyph" aria-hidden="true">
+            ◇
+          </span>
+          <p className="empty-state-title">No jobs assigned yet.</p>
+          <p>New preventive-maintenance jobs appear here as soon as they are assigned to you.</p>
+        </div>
+      )}
 
-      <ul
-        style={{
-          listStyle: 'none',
-          margin: 0,
-          padding: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 'var(--space-3)',
-        }}
-      >
+      <ul className="data-list">
         {rows?.map(({ job, syncState }) => (
           <li key={job.id}>
             <button
               type="button"
-              className="card"
-              style={{ width: '100%', textAlign: 'left', alignItems: 'stretch' }}
+              className="card card-button"
+              data-rule={job.job.overdue || job.serverRemoved ? 'bad' : 'neutral'}
               onClick={() => navigate(`/jobs/${job.id}`)}
             >
               <div className="card-row">
-                <span className="job-code">{job.job.jobNumber}</span>
-                <span className="job-code">{job.job.assetCode}</span>
+                <span className="card-title">{job.job.jobNumber}</span>
+                <span className="job-code text-soft">{job.job.assetCode}</span>
               </div>
               <div className="card-row">
-                <span>Due {job.job.dueOn}</span>
+                <span className="numeric text-soft">Due {job.job.dueOn}</span>
                 {job.job.overdue && (
                   <span className="status-chip" data-tone="bad">
-                    <span aria-hidden="true">⚠</span> Overdue
+                    <span aria-hidden="true">⚠</span>
+                    <span>Overdue</span>
                   </span>
                 )}
               </div>
@@ -176,7 +168,8 @@ export function JobList() {
                 <SyncStatusChip state={syncState} />
                 {job.serverRemoved && (
                   <span className="status-chip" data-tone="bad">
-                    <span aria-hidden="true">⚠</span> Reassigned — cannot submit
+                    <span aria-hidden="true">⚠</span>
+                    <span>Reassigned — cannot submit</span>
                   </span>
                 )}
               </div>

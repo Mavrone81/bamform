@@ -68,6 +68,10 @@ test('E-04: a delegated approver covers an absence and acts on behalf of the del
   await server.install(delegatePage);
   await signInAs(delegatePage, E2E_USERS.delegate.email);
 
+  // Slice 14-DESIGN: the delegate holds no verifying role, so the nav shell
+  // offers no dedicated Queue tab — the queue is reached via the Menu tab
+  // (still two taps from anywhere, and still the same server-side rules).
+  await delegatePage.getByRole('button', { name: 'Menu' }).click();
   await delegatePage.getByRole('button', { name: 'Verifier queue' }).click();
   await expect(delegatePage.getByText(JOB.jobNumber)).toBeVisible();
   await expect(delegatePage.getByText(/on behalf of delegator/i)).toBeVisible();

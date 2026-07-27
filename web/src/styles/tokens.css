@@ -1,29 +1,58 @@
 /*
- * Design tokens — BamForm PWA.
+ * Design tokens — BamForm PWA (slice 14-DESIGN).
  *
- * Direction: an instrument panel / controlled-document register, not a SaaS
- * dashboard. The domain is a printed calibration form being digitised, so a
- * warm paper-white surface with near-black ink and a hazard-amber accent
- * reads as native to a workshop rather than borrowed from an office app.
- * A monospace face carries every number, job code and status word — a
- * technician glancing at a reading under bad light benefits from tabular
- * figures and unambiguous glyph shapes far more than from personality in
- * the type. All faces below are locally-available system stacks (the CSP
- * here is `style-src 'self'` with no font-src exception, so nothing is
- * fetched from a font CDN).
+ * Direction: INDUSTRIAL CLARITY. This is the instrument panel of a
+ * controlled-document system used by gloved technicians on a plant floor
+ * (glare, arm's length, thumbs) and by verifiers at desks. One deliberately
+ * calibrated LIGHT theme: cool steel canvas, white instrument panels,
+ * graphite ink, and a disciplined four-tone signal system (good / bad /
+ * attention / info) rendered as tinted plates with dark ink — never colour
+ * alone, never white-on-pastel. The only saturated fills are the primary
+ * action (engineering blue) and pressed checklist segments, which is what
+ * makes them unmissable.
  *
- * This is a foundation pass: the tokens exist so contrast, spacing and tap
- * targets are correct and consistent now, with room for a dedicated visual
- * pass later without restructuring markup.
+ * Every colour pair used by the components layer is verified mathematically
+ * against WCAG 2.x in web/DESIGN.md (§ contrast table) — do not eyeball new
+ * combinations; add them to the table.
+ *
+ * Type: the display face is a condensed industrial grotesque drawn from
+ * faces every target OS actually ships (Bahnschrift is Windows's DIN 1451
+ * revival; Avenir Next Condensed on iOS/iPadOS/macOS; Roboto Condensed on
+ * Android) — DIN is literally the typeface of industrial signage, and using
+ * the local copy costs zero bytes and zero CSP exceptions (style-src 'self',
+ * no font-src). Every number, code and status word rides the monospace
+ * stack with tabular figures: unambiguous glyphs beat personality when the
+ * reading is taken through a smeared face shield.
+ *
+ * Dark mode is intentionally absent: the locked visual direction is a
+ * high-contrast light UI readable in plant-floor glare, and one calibrated
+ * palette we can prove is better than two we cannot. The tokens are the
+ * seam — a future dark theme is a token swap, not a restyle.
  */
 
 :root {
   /* ---- Type ---- */
-  --font-display: ui-serif, 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
-  --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+  --font-display:
+    'Bahnschrift', 'Avenir Next Condensed', 'Roboto Condensed', 'Arial Narrow', 'Helvetica Neue',
+    sans-serif;
+  --font-body:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'Cascadia Mono', 'Segoe UI Mono', 'Roboto Mono', Consolas, monospace;
 
-  /* ---- Spacing (8px grid) ---- */
+  --text-xs: 0.75rem; /* 12px — micro-labels, uppercase only */
+  --text-sm: 0.875rem; /* 14px — secondary text, chips */
+  --text-md: 1rem; /* 16px — body, inputs (16px stops iOS zoom-on-focus) */
+  --text-lg: 1.125rem; /* 18px — emphasised data, section heads */
+  --text-xl: 1.375rem; /* 22px — screen titles */
+  --text-2xl: 1.75rem; /* 28px — hero numerals (sign-in brand) */
+
+  --leading-tight: 1.15;
+  --leading-body: 1.5;
+  --tracking-caps: 0.08em; /* uppercase micro-labels */
+  --tracking-display: 0.01em;
+
+  /* ---- Spacing (4px grid) ---- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -32,58 +61,100 @@
   --space-6: 2rem;
   --space-7: 3rem;
 
-  /* Minimum interactive target — E-RSP-02 / WCAG 2.5.5 */
-  --tap-min: 44px;
-  --radius: 3px;
-  --border-width: 1.5px;
+  /* ---- Interactive targets (A-04 / WCAG 2.5.5) ---- */
+  --tap-min: 44px; /* absolute floor, everywhere */
+  --tap-comfort: 48px; /* default buttons, nav items */
+  --tap-capture: 56px; /* gloved capture controls (segments, submit) */
 
-  /* ---- Light theme: paper ---- */
-  --color-surface: #f4efe4;
-  --color-surface-raised: #fbf8f1;
-  --color-ink: #201c16;
-  --color-ink-soft: #55503f;
-  --color-border: #cabf9e;
-  --color-accent: #b8791a;
-  --color-accent-ink: #1a1204;
-  --color-focus: #0b57a4;
-  --color-signal-good: #276b3c;
-  --color-signal-bad: #a02020;
-  --color-signal-attention: #9a5b00;
-  --color-chip-bg: #ffffff;
+  /* ---- Shape ---- */
+  --radius-1: 3px; /* controls, chips */
+  --radius-2: 6px; /* cards, panels, banners */
+  --radius-round: 999px;
+  --border-width: 1px;
+  --border-width-strong: 2px;
+  --rule-width: 4px; /* the status rule on cards/banners */
+
+  /* ---- Elevation (kept faint — panels, not paper planes) ---- */
+  --shadow-1: 0 1px 2px rgba(15, 20, 26, 0.08);
+  --shadow-2: 0 2px 8px rgba(15, 20, 26, 0.12);
+  --shadow-nav: 0 -1px 0 rgba(15, 20, 26, 0.12);
+
+  /* ---- Z-layers ---- */
+  --z-nav: 40;
+  --z-appbar: 41;
+  --z-overlay: 50;
+  --z-toast: 60;
+  --z-skip: 100;
+
+  /* ---- Motion (instrument, not showcase: fast and subtle) ---- */
+  --motion-fast: 120ms;
+  --motion-med: 160ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* ---- Neutral scale ---- */
+  --color-canvas: #e9edf0; /* cool steel — the bench the panels sit on */
+  --color-panel: #ffffff; /* instrument panel */
+  --color-panel-sunken: #f4f6f8; /* wells, readonly plates */
+  --color-ink: #16191d; /* 17.6:1 on panel */
+  --color-ink-soft: #3f4650; /* 9.5:1 on panel */
+  --color-ink-faint: #5a626c; /* 6.2:1 on panel — still AA body */
+  --color-border: #c3cad1; /* hairlines (decorative) */
+  --color-border-strong: #78828d; /* input/control borders — 3.9:1 on panel */
+
+  /* ---- Graphite chrome (app bar, nav rail, brand) ---- */
+  --color-chrome: #16191d;
+  --color-chrome-ink: #ffffff;
+  --color-chrome-ink-soft: #9aa5b1; /* 7.1:1 on chrome */
+  --color-chrome-line: #2e343b;
+  --color-brand-amber: #f5b82e; /* the mark's accent — graphics only, never text on light */
+
+  /* ---- Primary action: engineering blue ---- */
+  --color-accent: #0f4d8a; /* white text 8.6:1 */
+  --color-accent-ink: #ffffff;
+  --color-accent-hover: #0c3f71;
+  --color-accent-text: #0f4d8a; /* as foreground on panel/canvas */
+
+  /* ---- Destructive action ---- */
+  --color-destructive: #a1160f; /* white text 8.0:1 */
+  --color-destructive-ink: #ffffff;
+  --color-destructive-hover: #86120c;
+
+  /* ---- Focus (A-06 — never removed, only restyled) ---- */
+  --color-focus: #0b62d6; /* 5.6:1 panel / 4.8:1 canvas */
+
+  /* ---- Signal system: ink (text) / tint (plate) / edge (border+rule) ----
+   * Dark ink on a pale tint with a saturated edge: legible in glare,
+   * distinguishable in greyscale, and every chip carries icon + words
+   * (A-05 — never colour alone). */
+  --signal-good-ink: #15602f;
+  --signal-good-tint: #e3f3e7;
+  --signal-good-edge: #2f7d4f;
+  --signal-good-solid: #15602f; /* pressed segments — white ink 7.7:1 */
+
+  --signal-bad-ink: #a1160f;
+  --signal-bad-tint: #fdeae8;
+  --signal-bad-edge: #c2453a;
+  --signal-bad-solid: #a1160f;
+
+  --signal-attention-ink: #7a4a00;
+  --signal-attention-tint: #fdf2dd;
+  --signal-attention-edge: #b37400;
+
+  --signal-info-ink: #1b4d7d;
+  --signal-info-tint: #e6f0f9;
+  --signal-info-edge: #4a7fb2;
+
+  --signal-neutral-ink: #3f4650;
+  --signal-neutral-tint: #eceff2;
+  --signal-neutral-edge: #9aa5b1;
+  --signal-neutral-solid: #3f4650;
+
+  /* ---- Layout ---- */
+  --shell-max-form: 34rem; /* focused forms (sign-in, passwords) */
+  --shell-max-content: 50rem; /* lists, capture, review */
+  --appbar-height: 48px;
+  --tabbar-height: 60px;
+  --rail-width: 232px;
 
   color-scheme: light;
-}
-
-:root[data-theme='dark'] {
-  --color-surface: #17140f;
-  --color-surface-raised: #241f17;
-  --color-ink: #f1ead9;
-  --color-ink-soft: #c9bfa4;
-  --color-border: #4a4230;
-  --color-accent: #e0a545;
-  --color-accent-ink: #17140f;
-  --color-focus: #7cb8ff;
-  --color-signal-good: #6fcf8e;
-  --color-signal-bad: #ff8a80;
-  --color-signal-attention: #ffc266;
-  --color-chip-bg: #241f17;
-  color-scheme: dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --color-surface: #17140f;
-    --color-surface-raised: #241f17;
-    --color-ink: #f1ead9;
-    --color-ink-soft: #c9bfa4;
-    --color-border: #4a4230;
-    --color-accent: #e0a545;
-    --color-accent-ink: #17140f;
-    --color-focus: #7cb8ff;
-    --color-signal-good: #6fcf8e;
-    --color-signal-bad: #ff8a80;
-    --color-signal-attention: #ffc266;
-    --color-chip-bg: #241f17;
-    color-scheme: dark;
-  }
 }

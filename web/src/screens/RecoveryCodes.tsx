@@ -47,8 +47,16 @@ export function RecoveryCodes({ codes }: { codes: readonly string[] }) {
   }
 
   return (
-    <main className="app-shell" aria-labelledby="recovery-codes-heading">
-      <h1 id="recovery-codes-heading">Save your recovery codes</h1>
+    <main
+      className="app-shell app-shell--focus app-shell--standalone"
+      aria-labelledby="recovery-codes-heading"
+    >
+      <header className="screen-header">
+        <span className="microlabel">One-time step</span>
+        <h1 id="recovery-codes-heading" style={{ marginBottom: 0 }}>
+          Save your recovery codes
+        </h1>
+      </header>
 
       <p className="banner" data-tone="bad" role="alert">
         <span aria-hidden="true">⚠</span> These ten codes are shown once and can never be shown
@@ -91,15 +99,16 @@ export function RecoveryCodes({ codes }: { codes: readonly string[] }) {
         </label>
       </div>
 
-      <button
-        type="button"
-        className="btn-primary"
-        disabled={!acknowledged}
-        onClick={() => acknowledgeRecoveryCodes()}
-        style={{ width: '100%' }}
-      >
-        Continue
-      </button>
+      <div className="action-bar">
+        <button
+          type="button"
+          className="btn-primary btn-block btn-capture"
+          disabled={!acknowledged}
+          onClick={() => acknowledgeRecoveryCodes()}
+        >
+          Continue
+        </button>
+      </div>
     </main>
   );
 }

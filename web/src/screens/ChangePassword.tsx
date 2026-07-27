@@ -101,22 +101,36 @@ export function ChangePassword({ forced = false }: { forced?: boolean }) {
   }
 
   return (
-    <main className="app-shell" aria-labelledby="change-password-heading">
-      <h1 id="change-password-heading">Change your password</h1>
+    <main
+      className={`app-shell app-shell--focus${forced ? ' app-shell--standalone' : ''}`}
+      aria-labelledby="change-password-heading"
+    >
+      <header className="screen-header">
+        {!forced && (
+          <button
+            type="button"
+            className="back-link btn-quiet"
+            onClick={() => navigate('/jobs')}
+            aria-label="Back to your jobs"
+          >
+            <span aria-hidden="true">‹</span> Back to your jobs
+          </button>
+        )}
+        <span className="microlabel">Account</span>
+        <h1 id="change-password-heading" style={{ marginBottom: 0 }}>
+          Change your password
+        </h1>
+      </header>
 
-      {forced ? (
+      {forced && (
         <p className="banner" data-tone="attention" role="alert">
           <span aria-hidden="true">⚠</span> Your password was set by an administrator. Choose your
           own before you can use the system — nobody else should know the password you sign records
           with.
         </p>
-      ) : (
-        <button type="button" onClick={() => navigate('/jobs')} style={{ width: 'fit-content' }}>
-          Back to your jobs
-        </button>
       )}
 
-      <form onSubmit={(e) => void handleSubmit(e)} noValidate>
+      <form onSubmit={(e) => void handleSubmit(e)} noValidate className="card">
         <div className="field">
           <label htmlFor="current-password">Current password</label>
           <input
@@ -140,7 +154,9 @@ export function ChangePassword({ forced = false }: { forced?: boolean }) {
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
           />
-          <span id="new-password-hint">At least {MIN_PASSWORD_LENGTH} characters.</span>
+          <span id="new-password-hint" className="field-hint">
+            At least {MIN_PASSWORD_LENGTH} characters.
+          </span>
         </div>
         <div className="field" style={{ marginTop: 'var(--space-4)' }}>
           <label htmlFor="confirm-password">Confirm new password</label>
@@ -180,11 +196,13 @@ export function ChangePassword({ forced = false }: { forced?: boolean }) {
         </button>
       </form>
 
-      <p>Changing your password signs you out everywhere else. This device stays signed in.</p>
+      <p className="text-soft">
+        Changing your password signs you out everywhere else. This device stays signed in.
+      </p>
 
       {forced && (
         <>
-          <p>
+          <p className="text-soft">
             Don&rsquo;t know the password you were given, or is this not your account? Sign out and
             ask an administrator to set a new one. You will still be asked to choose your own the
             next time you sign in.

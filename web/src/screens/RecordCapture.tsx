@@ -132,13 +132,26 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     }
   }
 
-  if (cached === null) return <main className="app-shell">Loading…</main>;
+  if (cached === null) {
+    return (
+      <main className="app-shell">
+        <p className="loading-state">
+          <span className="loading-spinner" aria-hidden="true" />
+          Loading…
+        </p>
+      </main>
+    );
+  }
   if (cached === undefined) {
     return (
       <main className="app-shell">
-        <p role="alert">
-          This job is not cached on this device. Reconnect and sync from the job list first.
+        <p className="banner" data-tone="attention" role="alert">
+          <span aria-hidden="true">⚠</span> This job is not cached on this device. Reconnect and
+          sync from the job list first.
         </p>
+        <button type="button" className="back-link btn-quiet" onClick={() => navigate('/jobs')}>
+          <span aria-hidden="true">‹</span> Back to your jobs
+        </button>
       </main>
     );
   }
@@ -154,16 +167,40 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     (m): m is typeof m & { id: string } => typeof m.id === 'string',
   );
   const canSubmit = pendingCount === 0 && !cached.serverRemoved && syncState !== 'conflict';
+  const recordedCount = items.filter((item) => itemResults[item.id] != null).length;
 
   return (
     <main className="app-shell" aria-labelledby="record-heading">
-      <div className="card-row">
-        <h1 id="record-heading">{cached.job.jobNumber}</h1>
-        <SyncStatusChip state={syncState} />
-      </div>
-      <p>
-        {cached.job.assetCode} · {revision?.documentNumber} rev {revision?.revisionCode}
-      </p>
+      <header className="screen-header">
+        <button type="button" className="back-link btn-quiet" onClick={() => navigate('/jobs')}>
+          <span aria-hidden="true">‹</span> Back to your jobs
+        </button>
+        <div className="card-row">
+          <h1 id="record-heading" className="job-code" style={{ marginBottom: 0 }}>
+            {cached.job.jobNumber}
+          </h1>
+          <SyncStatusChip state={syncState} />
+        </div>
+        <p className="screen-meta">
+          {cached.job.assetCode} · {revision?.documentNumber} rev {revision?.revisionCode}
+        </p>
+        {items.length > 0 && (
+          <div className="progress-plate">
+            <p className="screen-meta" style={{ color: 'var(--color-ink-soft)' }}>
+              <span className="numeric">
+                {recordedCount} of {items.length}
+              </span>{' '}
+              checklist items recorded
+            </p>
+            <div className="progress-track" aria-hidden="true">
+              <div
+                className="progress-fill"
+                style={{ width: `${(recordedCount / items.length) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+      </header>
 
       {quotaBanner && (
         <p className="banner" data-tone="bad" role="alert">
@@ -184,10 +221,14 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       )}
 
       <section aria-label="Checklist items">
+        <h2 className="microlabel" style={{ marginBottom: 'var(--space-3)' }}>
+          Checklist
+        </h2>
         {items.map((item) => (
           <div className="checklist-item" key={item.id}>
-            <p>
-              <strong>{item.itemNo}.</strong> {item.instruction}
+            <p className="checklist-instruction">
+              <span className="item-no">{item.itemNo}</span>
+              <span>{item.instruction}</span>
             </p>
             <ItemStatusControl
               itemNo={item.itemNo}
@@ -201,6 +242,9 @@ export function RecordCapture({ jobId }: { jobId: string }) {
 
       {measurements.length > 0 && (
         <section aria-label="Measurements">
+          <h2 className="microlabel" style={{ marginBottom: 'var(--space-3)' }}>
+            Measurements
+          </h2>
           {measurements.map((m) => (
             <div className="field" key={m.id} style={{ marginBottom: 'var(--space-4)' }}>
               <label htmlFor={`m-${m.id}`}>
@@ -219,19 +263,20 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         </section>
       )}
 
-      <button
-        type="button"
-        className="btn-primary"
-        style={{ width: '100%' }}
-        disabled={!canSubmit || submitting}
-        onClick={() => void handleSubmit()}
-      >
-        {submitting
-          ? 'Submitting…'
-          : pendingCount > 0
-            ? `Sending ${pendingCount} entr${pendingCount === 1 ? 'y' : 'ies'}…`
-            : 'Submit'}
-      </button>
+      <div className="action-bar">
+        <button
+          type="button"
+          className="btn-primary btn-block btn-capture"
+          disabled={!canSubmit || submitting}
+          onClick={() => void handleSubmit()}
+        >
+          {submitting
+            ? 'Submitting…'
+            : pendingCount > 0
+              ? `Sending ${pendingCount} entr${pendingCount === 1 ? 'y' : 'ies'}…`
+              : 'Submit'}
+        </button>
+      </div>
     </main>
   );
 }
