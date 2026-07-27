@@ -18,13 +18,16 @@ export class AreaScopeService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Returns `null` when the user has no `user_area_scope` rows (unrestricted
-   * visibility), otherwise the list of area ids their collection reads must
-   * be filtered to.
+   * Returns `null` when the user has no ACTIVE `user_area_scope` rows
+   * (unrestricted visibility), otherwise the list of area ids their
+   * collection reads must be filtered to. `active: false` rows are
+   * soft-removed scopes (slice 13-UI-B, INV-16: revocation cannot DELETE) —
+   * a user whose every scope was revoked is back to unrestricted, exactly
+   * as if the rows had never existed.
    */
   async getAllowedAreaIds(userId: string): Promise<string[] | null> {
     const rows = await this.prisma.userAreaScope.findMany({
-      where: { userId },
+      where: { userId, active: true },
       select: { areaId: true },
     });
     if (rows.length === 0) {

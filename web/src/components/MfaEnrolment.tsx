@@ -164,7 +164,7 @@ export function MfaEnrolment({
             type="text"
             inputMode="numeric"
             autoComplete="one-time-code"
-            maxLength={7}
+            maxLength={6}
             value={totpCode}
             onChange={(e) => setTotpCode(e.target.value)}
           />

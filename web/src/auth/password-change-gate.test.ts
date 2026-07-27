@@ -46,6 +46,16 @@ describe('U-PWGATE-01: recognising the server’s problem document', () => {
     expect(isPasswordChangeRequiredProblem({})).toBe(false);
     expect(isPasswordChangeRequiredProblem('not an object')).toBe(false);
   });
+
+  it('m4: does not match a type that merely CONTAINS the phrase mid-string — the match is endsWith, not includes', () => {
+    expect(
+      isPasswordChangeRequiredProblem({
+        type: '/errors/password-change-required-exemption-granted',
+        title: 'x',
+        status: 403,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('U-PWGATE-02: the latch', () => {

@@ -212,8 +212,10 @@ test('E-07c: an ADMIN can reset a locked-out user’s authenticator, behind an e
     await signIn(page, E2E_USERS.admin.email, E2E_PASSWORD);
     await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
-    // Slice 14-DESIGN: the admin reset entry lives on the Menu tab.
+    // Slice 13-UI-B: the reset entry lives inside the admin area now —
+    // Menu → Administration → Reset a user's authenticator.
     await page.getByRole('button', { name: 'Menu' }).click();
+    await page.getByRole('button', { name: 'Administration' }).click();
     const entry = page.getByRole('button', { name: /Reset a user/i });
     await entry.scrollIntoViewIfNeeded();
     await entry.click();

@@ -59,7 +59,10 @@ export function Menu() {
     // still matches on pathname alone.
     { label: 'Delegations', to: '/delegations?from=menu' },
     { label: 'Change password', to: '/change-password' },
-    ...(isAdmin ? [{ label: 'Reset a user’s authenticator', to: '/admin/mfa-reset' }] : []),
+    // Slice 13-UI-B: the single MFA-reset entry grew into the admin area
+    // (users, machines, areas). The old /admin/mfa-reset screen stays routed
+    // for bookmarks; its control also lives on each user's detail page now.
+    ...(isAdmin ? [{ label: 'Administration', to: '/admin' }] : []),
   ];
 
   return (

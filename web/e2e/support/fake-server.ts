@@ -32,6 +32,11 @@ export interface SeedJob {
   id: string;
   jobNumber: string;
   assetCode: string;
+  /** Slice 13-UI-B: the area the job's asset sits in. Jobs and queue
+   * entries are area-scoped for a user who HAS area scopes (PR-API-10) —
+   * `undefined` means "no area", which a scoped user never sees, exactly
+   * like the real `applyAreaScope` `IN (...)` filter. */
+  areaId?: string;
   frequency: 'M1' | 'M3' | 'M6' | 'Y';
   dueOn: string;
   overdue?: boolean;
@@ -159,8 +164,60 @@ const PASSWORD_CHANGE_ALLOWED_PATHS = ['/auth/me', '/auth/password', '/auth/logo
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
 
-const USERS_BY_EMAIL = new Map<string, E2EUser>(Object.values(E2E_USERS).map((u) => [u.email, u]));
-const USERS_BY_ID = new Map<string, E2EUser>(Object.values(E2E_USERS).map((u) => [u.id, u]));
+/** Slice 13-UI-B — the fake's mutable user record behind `/users`. */
+export interface FakeAdminUser extends E2EUser {
+  active: boolean;
+  employeeId: string | null;
+  areaIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FakeArea {
+  id: string;
+  code: string;
+  name: string;
+  parentId: string | null;
+  active: boolean;
+}
+
+export interface FakeAssetType {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  formTemplateId: string;
+  approvalRouteId: string;
+  leadTimeDays: number;
+  active: boolean;
+}
+
+export interface FakeAsset {
+  id: string;
+  code: string;
+  codeProvisional: boolean;
+  assetTypeId: string;
+  description: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  serialNumber: string | null;
+  areaId: string | null;
+  locationDetail: string | null;
+  commissionedOn: string | null;
+  scheduleAnchorDate: string;
+  status: 'ACTIVE' | 'UNDER_REPAIR' | 'DECOMMISSIONED';
+  active: boolean;
+}
+
+/** The six seeded roles (`role` reference data, seeded by migration). */
+export const FAKE_ROLES: Array<{ id: string; code: string; name: string; description: null }> = [
+  { id: 'role-1', code: 'MAINTAINER', name: 'Maintainer', description: null },
+  { id: 'role-2', code: 'TEAM_LEADER', name: 'Team Leader', description: null },
+  { id: 'role-3', code: 'ENGINEER', name: 'Engineer', description: null },
+  { id: 'role-4', code: 'DOC_CONTROLLER', name: 'Document Controller', description: null },
+  { id: 'role-5', code: 'ADMIN', name: 'Administrator', description: null },
+  { id: 'role-6', code: 'AUDITOR', name: 'Auditor', description: null },
+];
 
 export interface FakeDelegation {
   id: string;
@@ -188,6 +245,88 @@ interface ApprovalStepLike {
 }
 
 export class FakeServer {
+  // ---- Slice 13-UI-B: mutable admin state (users/areas/asset-types/assets).
+  //
+  // The canned E2E_USERS become MUTABLE rows here (the static export stays
+  // for identity/credential constants in specs): `/users` administration
+  // edits these, and users created through the UI live alongside them —
+  // able to sign in, refresh, and be scoped exactly like the canned cast.
+  private adminUsers = new Map<string, FakeAdminUser>(
+    Object.values(E2E_USERS).map((u) => [
+      u.id,
+      {
+        ...u,
+        roles: [...u.roles],
+        active: true,
+        employeeId: null,
+        areaIds: [],
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-01T00:00:00.000Z',
+      },
+    ]),
+  );
+  /** Ids continue the `user-N` shape so every existing bearer regex
+   * (`e2e-token-user-\d+`) keeps matching created users too. */
+  private userSeq = 100;
+  private areasById = new Map<string, FakeArea>();
+  private areaSeq = 0;
+  private assetTypesById = new Map<string, FakeAssetType>();
+  private assetsById = new Map<string, FakeAsset>();
+  private assetSeq = 0;
+  private provisionalSeq = 0;
+
+  constructor() {
+    // A small canned asset-type catalogue (reference data the real system
+    // seeds by migration/template-load) so the machines screens have types
+    // to hang machines off without every spec seeding them.
+    this.seedAssetType({ code: 'WB', name: 'Wire Bonder' });
+    this.seedAssetType({ code: 'AO', name: 'Aging Oven' });
+  }
+
+  userById(id: string): FakeAdminUser | undefined {
+    return this.adminUsers.get(id);
+  }
+
+  private userByEmail(email: string): FakeAdminUser | undefined {
+    return Array.from(this.adminUsers.values()).find((u) => u.email === email);
+  }
+
+  seedArea(input: { code: string; name: string; active?: boolean }): FakeArea {
+    const area: FakeArea = {
+      id: `area-${++this.areaSeq}`,
+      code: input.code,
+      name: input.name,
+      parentId: null,
+      active: input.active ?? true,
+    };
+    this.areasById.set(area.id, area);
+    return area;
+  }
+
+  seedAssetType(input: { code: string; name: string }): FakeAssetType {
+    const id = `at-${this.assetTypesById.size + 1}`;
+    const assetType: FakeAssetType = {
+      id,
+      code: input.code,
+      name: input.name,
+      description: null,
+      formTemplateId: `tpl-${id}`,
+      approvalRouteId: 'route-1',
+      leadTimeDays: 30,
+      active: true,
+    };
+    this.assetTypesById.set(id, assetType);
+    return assetType;
+  }
+
+  /** Scopes a user directly (bypassing the PUT endpoint) so a spec can set
+   * up a starting condition; the E-06 journey assigns scope through the UI. */
+  seedUserAreaScope(userId: string, areaIds: string[]): void {
+    const user = this.adminUsers.get(userId);
+    if (!user) throw new Error(`seedUserAreaScope: unknown user ${userId}`);
+    user.areaIds = [...areaIds];
+  }
+
   private jobs = new Map<string, SeedJob>();
   private deletedJobIds = new Set<string>();
   private idempotencyStore = new Map<string, OutboxResultLike>();
@@ -465,11 +604,11 @@ export class FakeServer {
     });
   }
 
-  private async currentUser(route: Route): Promise<E2EUser> {
+  private async currentUser(route: Route): Promise<FakeAdminUser> {
     const auth = (await route.request().headerValue('authorization')) ?? '';
     const match = auth.match(/Bearer e2e-token-(user-\d+)/);
     const userId = match?.[1];
-    return (userId && USERS_BY_ID.get(userId)) || E2E_USERS.technician;
+    return (userId && this.adminUsers.get(userId)) || this.adminUsers.get('user-1')!;
   }
 
   private problem(status: number, title: string, type = 'about:blank') {
@@ -520,9 +659,11 @@ export class FakeServer {
 
   private async handleLogin(route: Route) {
     const body = route.request().postDataJSON() as { email?: string; password?: string };
-    const user = (body.email && USERS_BY_EMAIL.get(body.email)) || E2E_USERS.technician;
+    const user = (body.email && this.userByEmail(body.email)) || this.adminUsers.get('user-1')!;
 
-    if (body.password !== this.passwordOf(user.id)) {
+    // Slice 13-UI-B: a deactivated account cannot sign in — same opaque 401
+    // as a wrong password (the real api never discloses WHICH it was).
+    if (body.password !== this.passwordOf(user.id) || !user.active) {
       await this.fulfillInvalidCredentials(route);
       return;
     }
@@ -564,7 +705,7 @@ export class FakeServer {
     if (this.consumedChallenges.has(challengeToken)) return null;
     const challenge = this.challenges.get(challengeToken);
     if (!challenge || Date.now() > challenge.expiresAt) return null;
-    return USERS_BY_ID.get(challenge.userId) ?? null;
+    return this.adminUsers.get(challenge.userId) ?? null;
   }
 
   /** Burns a challenge token. The FIRST redemption wins; every later one —
@@ -585,7 +726,7 @@ export class FakeServer {
     }
     const auth = (await route.request().headerValue('authorization')) ?? '';
     const match = auth.match(/Bearer e2e-token-(user-\d+)/);
-    const user = match ? USERS_BY_ID.get(match[1]) : undefined;
+    const user = match ? this.adminUsers.get(match[1]) : undefined;
     return user ? { user } : null;
   }
 
@@ -766,7 +907,7 @@ export class FakeServer {
       });
       return;
     }
-    if (!USERS_BY_ID.has(userId)) {
+    if (!this.adminUsers.has(userId)) {
       await route.fulfill({
         status: 404,
         contentType: 'application/problem+json',
@@ -820,7 +961,17 @@ export class FakeServer {
       });
       return;
     }
-    const user = USERS_BY_ID.get(match[1]) ?? E2E_USERS.technician;
+    const user = this.adminUsers.get(match[1]) ?? this.adminUsers.get('user-1')!;
+    // Slice 13-UI-B: deactivation bites at the next refresh, exactly as the
+    // real api enforces it — the cookie stops minting sessions.
+    if (!user.active) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({ type: 'about:blank', title: 'account deactivated', status: 401 }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -844,7 +995,12 @@ export class FakeServer {
       body: JSON.stringify({
         serverTime: this.serverTime,
         user: { id: requester.id, fullName: requester.fullName, roles: requester.roles },
-        jobs: Array.from(this.jobs.values()).map((j) => this.toApiJob(j)),
+        // Slice 13-UI-B: the bootstrap is area-scoped exactly like the real
+        // GET /jobs family (PR-API-10) — a scoped user's device never even
+        // receives out-of-area jobs.
+        jobs: Array.from(this.jobs.values())
+          .filter((j) => this.jobInScope(requester, j))
+          .map((j) => this.toApiJob(j)),
         deletedJobIds: Array.from(this.deletedJobIds),
         syncToken: `tok-${this.jobs.size}`,
       }),
@@ -1092,6 +1248,9 @@ export class FakeServer {
     const data: unknown[] = [];
     for (const job of this.jobs.values()) {
       if ((this.jobStatus.get(job.id) ?? job.status ?? 'IN_PROGRESS') !== 'SUBMITTED') continue;
+      // Slice 13-UI-B (PR-API-10): a scoped verifier's queue only carries
+      // their areas' jobs — the read-side enforcement E-06 proves end-to-end.
+      if (!this.jobInScope(requester, job)) continue;
       const submitter = this.jobSubmittedBy.get(job.id);
       if (submitter === requester.id) continue; // INV-05: never your own submission
       const stage = this.jobStageOrdinal.get(job.id) ?? 1;
@@ -1101,7 +1260,7 @@ export class FakeServer {
       const eligible = requester.roles.includes(stageRole);
       if (!eligible) {
         const viaDelegation = activeDelegationsToMe.find((d) => {
-          const delegator = USERS_BY_ID.get(d.delegatorId);
+          const delegator = this.adminUsers.get(d.delegatorId);
           return delegator?.roles.includes(stageRole);
         });
         if (!viaDelegation) continue;
@@ -1113,7 +1272,7 @@ export class FakeServer {
         ...this.toApiJob(job),
         submittedAt,
         submittedByName: submitter
-          ? (USERS_BY_ID.get(submitter)?.fullName ?? submitter)
+          ? (this.adminUsers.get(submitter)?.fullName ?? submitter)
           : undefined,
         ageHours: (now - Date.parse(submittedAt)) / 3_600_000,
         escalated: false,
@@ -1225,7 +1384,7 @@ export class FakeServer {
         });
         return;
       }
-      const delegator = USERS_BY_ID.get(body.onBehalfOf);
+      const delegator = this.adminUsers.get(body.onBehalfOf);
       actingRoles = delegator?.roles ?? [];
       onBehalfOfName = delegator?.fullName ?? body.onBehalfOf;
     }
@@ -1351,8 +1510,8 @@ export class FakeServer {
   private toApiDelegation(d: FakeDelegation) {
     return {
       ...d,
-      delegatorName: USERS_BY_ID.get(d.delegatorId)?.fullName,
-      delegateName: USERS_BY_ID.get(d.delegateId)?.fullName,
+      delegatorName: this.adminUsers.get(d.delegatorId)?.fullName,
+      delegateName: this.adminUsers.get(d.delegateId)?.fullName,
     };
   }
 
@@ -1417,6 +1576,481 @@ export class FakeServer {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(this.toApiDelegation(delegation)),
+    });
+  }
+
+  // ---- Slice 13-UI-B: users / roles / areas / asset-types / assets ----
+  //
+  // Honesty rule (the C-1 postmortem, slice-13-ui-a-review.md): every one of
+  // these handlers enforces what the REAL endpoint enforces — a missing
+  // bearer is 401 (no silent technician fallback like the legacy
+  // `currentUser` default the offline suite depends on), a non-ADMIN is 403,
+  // the last-admin self-lockout is 409 with the server's own sentence, and
+  // reads are area-scoped. A permissive fake here would hide exactly the
+  // client bugs this slice exists to not ship.
+
+  /** PR-API-10, mirrored: no scopes = unrestricted; scoped = only their areas. */
+  private jobInScope(requester: FakeAdminUser, job: SeedJob): boolean {
+    if (requester.areaIds.length === 0) return true;
+    return job.areaId != null && requester.areaIds.includes(job.areaId);
+  }
+
+  private async fulfillProblem(
+    route: Route,
+    status: number,
+    title: string,
+    type = 'about:blank',
+    detail?: string,
+  ): Promise<void> {
+    await route.fulfill({
+      status,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({ type, title, status, ...(detail ? { detail } : {}) }),
+    });
+  }
+
+  /** Strict bearer check — 401s and returns null when absent/unparseable. */
+  private async requireUser(route: Route): Promise<FakeAdminUser | null> {
+    const auth = (await route.request().headerValue('authorization')) ?? '';
+    const match = auth.match(/Bearer e2e-token-(user-\d+)/);
+    const user = match ? this.adminUsers.get(match[1]) : undefined;
+    if (!user) {
+      await this.fulfillProblem(route, 401, 'Unauthenticated');
+      return null;
+    }
+    return user;
+  }
+
+  private async requireRoles(route: Route, roles: string[]): Promise<FakeAdminUser | null> {
+    const user = await this.requireUser(route);
+    if (!user) return null;
+    if (!user.roles.some((r) => roles.includes(r))) {
+      await this.fulfillProblem(route, 403, 'Forbidden', '/errors/forbidden');
+      return null;
+    }
+    return user;
+  }
+
+  private toApiUser(user: FakeAdminUser) {
+    return {
+      id: user.id,
+      employeeId: user.employeeId,
+      fullName: user.fullName,
+      email: user.email,
+      status: user.active ? 'ACTIVE' : 'DEACTIVATED',
+      active: user.active,
+      roles: user.roles,
+      areaIds: user.areaIds,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  private page<T>(data: T[]) {
+    return { data, page: { hasMore: false, limit: 100, nextCursor: null } };
+  }
+
+  private async handleListUsers(route: Route): Promise<void> {
+    const requester = await this.requireRoles(route, ['ADMIN']);
+    if (!requester) return;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        this.page(Array.from(this.adminUsers.values()).map((u) => this.toApiUser(u))),
+      ),
+    });
+  }
+
+  private async handleGetUser(route: Route, userId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ['ADMIN']);
+    if (!requester) return;
+    const user = this.adminUsers.get(userId);
+    if (!user) {
+      await this.fulfillProblem(route, 404, 'User not found', '/errors/not-found');
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiUser(user)),
+    });
+  }
+
+  private async handleCreateUser(route: Route): Promise<void> {
+    const requester = await this.requireRoles(route, ['ADMIN']);
+    if (!requester) return;
+    const body = route.request().postDataJSON() as {
+      fullName?: string;
+      email?: string;
+      employeeId?: string;
+      password?: string;
+      roleCodes?: string[];
+    };
+    const validRoleCodes = FAKE_ROLES.map((r) => r.code);
+    if (
+      !body.fullName?.trim() ||
+      !body.email?.trim() ||
+      (body.password ?? '').length < 12 ||
+      !body.roleCodes?.length ||
+      body.roleCodes.some((code) => !validRoleCodes.includes(code))
+    ) {
+      await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+      return;
+    }
+    if (this.userByEmail(body.email.trim())) {
+      await this.fulfillProblem(
+        route,
+        409,
+        'Conflict',
+        '/errors/conflict',
+        'A user with this email already exists.',
+      );
+      return;
+    }
+    const now = new Date().toISOString();
+    const user: FakeAdminUser = {
+      id: `user-${++this.userSeq}`,
+      email: body.email.trim(),
+      fullName: body.fullName.trim(),
+      roles: [...body.roleCodes],
+      active: true,
+      employeeId: body.employeeId?.trim() || null,
+      areaIds: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.adminUsers.set(user.id, user);
+    // The admin-set password is the credential the new user signs in with —
+    // FORCE_PASSWORD_CHANGE_ENABLED is off (production default), so no
+    // must-change latch is set here, matching the real create path.
+    this.passwords.set(user.id, body.password!);
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiUser(user)),
+    });
+  }
+
+  private async handlePatchUser(route: Route, userId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ['ADMIN']);
+    if (!requester) return;
+    const target = this.adminUsers.get(userId);
+    if (!target) {
+      await this.fulfillProblem(route, 404, 'User not found', '/errors/not-found');
+      return;
+    }
+    const body = route.request().postDataJSON() as {
+      fullName?: string;
+      email?: string;
+      active?: boolean;
+      roleCodes?: string[];
+    };
+
+    // SYS-11 last-admin guard, byte-for-byte the same refusal the real
+    // `users.service.ts#update` raises — the screen shows this sentence.
+    const isSelfDeactivation = target.id === requester.id && body.active === false;
+    const dropsOwnAdmin =
+      target.id === requester.id &&
+      body.roleCodes !== undefined &&
+      target.roles.includes('ADMIN') &&
+      !body.roleCodes.includes('ADMIN');
+    if (isSelfDeactivation || dropsOwnAdmin) {
+      const otherActiveAdmin = Array.from(this.adminUsers.values()).some(
+        (u) => u.id !== target.id && u.active && u.roles.includes('ADMIN'),
+      );
+      if (!otherActiveAdmin) {
+        await this.fulfillProblem(
+          route,
+          409,
+          'Conflict',
+          '/errors/conflict',
+          'You are the last active ADMIN — deactivating yourself or dropping your own ADMIN role would lock all administrative access out of the system (SYS-11). Create another active ADMIN first.',
+        );
+        return;
+      }
+    }
+
+    if (body.email !== undefined) {
+      const existing = this.userByEmail(body.email.trim());
+      if (existing && existing.id !== target.id) {
+        await this.fulfillProblem(
+          route,
+          409,
+          'Conflict',
+          '/errors/conflict',
+          'A user with this email already exists.',
+        );
+        return;
+      }
+      target.email = body.email.trim();
+    }
+    if (body.fullName !== undefined) target.fullName = body.fullName.trim();
+    if (body.active !== undefined) target.active = body.active;
+    if (body.roleCodes !== undefined) target.roles = [...body.roleCodes];
+    target.updatedAt = new Date().toISOString();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiUser(target)),
+    });
+  }
+
+  private async handleSetUserAreaScopes(route: Route, userId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ['ADMIN']);
+    if (!requester) return;
+    const target = this.adminUsers.get(userId);
+    if (!target) {
+      await this.fulfillProblem(route, 404, 'User not found', '/errors/not-found');
+      return;
+    }
+    const body = route.request().postDataJSON() as { areaIds?: string[] };
+    if (!Array.isArray(body.areaIds)) {
+      await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+      return;
+    }
+    const unknown = body.areaIds.filter((id) => !this.areasById.has(id));
+    if (unknown.length > 0) {
+      await this.fulfillProblem(
+        route,
+        422,
+        'Validation failed',
+        '/errors/validation-failed',
+        'One or more areaIds do not match a known area.',
+      );
+      return;
+    }
+    target.areaIds = [...new Set(body.areaIds)];
+    target.updatedAt = new Date().toISOString();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiUser(target)),
+    });
+  }
+
+  private async handleListRoles(route: Route): Promise<void> {
+    const requester = await this.requireUser(route);
+    if (!requester) return;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.page(FAKE_ROLES)),
+    });
+  }
+
+  private async handleAreas(route: Route): Promise<void> {
+    if (route.request().method() === 'POST') {
+      const requester = await this.requireRoles(route, ['ADMIN']);
+      if (!requester) return;
+      const body = route.request().postDataJSON() as { code?: string; name?: string };
+      if (!body.code?.trim() || !body.name?.trim()) {
+        await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+        return;
+      }
+      const duplicate = Array.from(this.areasById.values()).some(
+        (a) => a.code === body.code!.trim(),
+      );
+      if (duplicate) {
+        await this.fulfillProblem(
+          route,
+          409,
+          'Conflict',
+          '/errors/conflict',
+          `An area with code '${body.code.trim()}' already exists.`,
+        );
+        return;
+      }
+      const area = this.seedArea({ code: body.code.trim(), name: body.name.trim() });
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify(area),
+      });
+      return;
+    }
+    const requester = await this.requireUser(route);
+    if (!requester) return;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.page(Array.from(this.areasById.values()))),
+    });
+  }
+
+  private async handlePatchArea(route: Route, areaId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ['ADMIN']);
+    if (!requester) return;
+    const area = this.areasById.get(areaId);
+    if (!area) {
+      await this.fulfillProblem(route, 404, 'Area not found', '/errors/not-found');
+      return;
+    }
+    const body = route.request().postDataJSON() as { name?: string; active?: boolean };
+    if (body.name !== undefined) area.name = body.name.trim();
+    if (body.active !== undefined) area.active = body.active;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(area),
+    });
+  }
+
+  private async handleListAssetTypes(route: Route): Promise<void> {
+    const requester = await this.requireUser(route);
+    if (!requester) return;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.page(Array.from(this.assetTypesById.values()))),
+    });
+  }
+
+  private toApiAsset(asset: FakeAsset) {
+    return { ...asset, assetTypeName: this.assetTypesById.get(asset.assetTypeId)?.name };
+  }
+
+  private assetInScope(requester: FakeAdminUser, asset: FakeAsset): boolean {
+    if (requester.areaIds.length === 0) return true;
+    return asset.areaId != null && requester.areaIds.includes(asset.areaId);
+  }
+
+  private async handleAssets(route: Route): Promise<void> {
+    if (route.request().method() === 'POST') {
+      const requester = await this.requireRoles(route, ['ENGINEER', 'ADMIN']);
+      if (!requester) return;
+      const body = route.request().postDataJSON() as {
+        code?: string;
+        assetTypeId?: string;
+        description?: string;
+        manufacturer?: string;
+        model?: string;
+        serialNumber?: string;
+        areaId?: string;
+        locationDetail?: string;
+        commissionedOn?: string;
+        scheduleAnchorDate?: string;
+      };
+      if (
+        !body.assetTypeId ||
+        !this.assetTypesById.has(body.assetTypeId) ||
+        !body.scheduleAnchorDate
+      ) {
+        await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+        return;
+      }
+      if (body.code && Array.from(this.assetsById.values()).some((a) => a.code === body.code)) {
+        await this.fulfillProblem(
+          route,
+          409,
+          'Conflict',
+          '/errors/conflict',
+          `Asset code '${body.code}' is already in use.`,
+        );
+        return;
+      }
+      // Same shape production's `generateProvisionalAssetCode` emits
+      // (`PROV-` + 8 uppercase hex chars) — deliberately unmistakable for a
+      // real plant code.
+      const code =
+        body.code ?? `PROV-${(++this.provisionalSeq).toString(16).toUpperCase().padStart(8, '0')}`;
+      const asset: FakeAsset = {
+        id: `asset-${++this.assetSeq}`,
+        code,
+        codeProvisional: !body.code,
+        assetTypeId: body.assetTypeId,
+        description: body.description ?? null,
+        manufacturer: body.manufacturer ?? null,
+        model: body.model ?? null,
+        serialNumber: body.serialNumber ?? null,
+        areaId: body.areaId ?? null,
+        locationDetail: body.locationDetail ?? null,
+        commissionedOn: body.commissionedOn ?? null,
+        scheduleAnchorDate: body.scheduleAnchorDate,
+        status: 'ACTIVE',
+        active: true,
+      };
+      this.assetsById.set(asset.id, asset);
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify(this.toApiAsset(asset)),
+      });
+      return;
+    }
+    const requester = await this.requireUser(route);
+    if (!requester) return;
+    const url = new URL(route.request().url());
+    const assetTypeId = url.searchParams.get('assetTypeId');
+    const assets = Array.from(this.assetsById.values())
+      .filter((a) => (assetTypeId ? a.assetTypeId === assetTypeId : true))
+      .filter((a) => this.assetInScope(requester, a));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.page(assets.map((a) => this.toApiAsset(a)))),
+    });
+  }
+
+  private async handleAssetById(route: Route, assetId: string): Promise<void> {
+    const method = route.request().method();
+    const requester =
+      method === 'PATCH'
+        ? await this.requireRoles(route, ['ENGINEER', 'ADMIN'])
+        : await this.requireUser(route);
+    if (!requester) return;
+    const asset = this.assetsById.get(assetId);
+    if (!asset) {
+      await this.fulfillProblem(route, 404, 'Asset not found', '/errors/not-found');
+      return;
+    }
+    if (!this.assetInScope(requester, asset)) {
+      // PR-API-10 by-id reads: exists but out of scope is an explicit 403.
+      await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
+      return;
+    }
+    if (method === 'PATCH') {
+      const body = route.request().postDataJSON() as {
+        code?: string;
+        description?: string;
+        manufacturer?: string;
+        model?: string;
+        areaId?: string;
+        locationDetail?: string;
+        status?: 'ACTIVE' | 'UNDER_REPAIR' | 'DECOMMISSIONED';
+        active?: boolean;
+      };
+      if (body.code !== undefined && body.code !== asset.code) {
+        const duplicate = Array.from(this.assetsById.values()).some(
+          (a) => a.id !== asset.id && a.code === body.code,
+        );
+        if (duplicate) {
+          await this.fulfillProblem(
+            route,
+            409,
+            'Conflict',
+            '/errors/conflict',
+            `Asset code '${body.code}' is already in use.`,
+          );
+          return;
+        }
+        asset.code = body.code;
+        // The confirmation semantics the machines journey proves: only an
+        // actual CHANGE clears the flag (a same-code PATCH does not).
+        asset.codeProvisional = false;
+      }
+      if (body.description !== undefined) asset.description = body.description;
+      if (body.manufacturer !== undefined) asset.manufacturer = body.manufacturer;
+      if (body.model !== undefined) asset.model = body.model;
+      if (body.areaId !== undefined) asset.areaId = body.areaId;
+      if (body.locationDetail !== undefined) asset.locationDetail = body.locationDetail;
+      if (body.status !== undefined) asset.status = body.status;
+      if (body.active !== undefined) asset.active = body.active;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiAsset(asset)),
     });
   }
 
@@ -1516,6 +2150,78 @@ export class FakeServer {
         return this.handleGetJob(route, match ? match[1] : 'unknown');
       }),
     );
+    // ---- Slice 13-UI-B: the admin surface. Anchored regexes so the
+    // more-specific /users/{id}/mfa-reset and /users/{id}/area-scopes
+    // handlers never collide with the by-id route.
+    await page.route(
+      /\/api\/v1\/users(\?.*)?$/,
+      this.guarded((route) => {
+        if (route.request().method() === 'POST') return this.handleCreateUser(route);
+        return this.handleListUsers(route);
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/users\/([^/]+)$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/users\/([^/]+)$/);
+        const userId = match ? decodeURIComponent(match[1]) : 'unknown';
+        if (route.request().method() === 'PATCH') return this.handlePatchUser(route, userId);
+        return this.handleGetUser(route, userId);
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/users\/([^/]+)\/area-scopes$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/users\/([^/]+)\/area-scopes$/);
+        return this.handleSetUserAreaScopes(
+          route,
+          match ? decodeURIComponent(match[1]) : 'unknown',
+        );
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/roles(\?.*)?$/,
+      this.guarded((route) => this.handleListRoles(route)),
+    );
+    await page.route(
+      /\/api\/v1\/areas(\?.*)?$/,
+      this.guarded((route) => this.handleAreas(route)),
+    );
+    await page.route(
+      /\/api\/v1\/areas\/([^/]+)$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/areas\/([^/]+)$/);
+        return this.handlePatchArea(route, match ? decodeURIComponent(match[1]) : 'unknown');
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/asset-types(\?.*)?$/,
+      this.guarded((route) => this.handleListAssetTypes(route)),
+    );
+    await page.route(
+      /\/api\/v1\/assets(\?.*)?$/,
+      this.guarded((route) => this.handleAssets(route)),
+    );
+    await page.route(
+      /\/api\/v1\/assets\/([^/]+)$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/assets\/([^/]+)$/);
+        return this.handleAssetById(route, match ? decodeURIComponent(match[1]) : 'unknown');
+      }),
+    );
+
     await page.route(
       '**/api/v1/delegations',
       this.guarded((route) => {

@@ -115,9 +115,11 @@ unless noted as a React component:
   MAINTAINER acting as delegate is two taps from it. This is presentation
   derived from server-returned roles, never enforcement (non-negotiable #6);
   every route stays URL-reachable and the server refuses what it refuses.
-- Menu also carries Delegations, Change password and (ADMIN only) the MFA
-  reset. Gate screens (forced password change, recovery codes, sign-in)
-  deliberately render without the shell.
+- Menu also carries Delegations, Change password and (ADMIN only) the
+  **Administration** area (slice 13-UI-B: users, machines, areas, plus the
+  standalone MFA reset). Every `/admin/*` screen counts as the Menu area for
+  `aria-current`. Gate screens (forced password change, recovery codes,
+  sign-in) deliberately render without the shell.
 - `html { scroll-padding }` keeps anything scrolled into view clear of the
   fixed bars.
 

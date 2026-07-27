@@ -234,7 +234,7 @@ export function SignIn() {
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 autoFocus
-                maxLength={7}
+                maxLength={6}
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value)}
               />

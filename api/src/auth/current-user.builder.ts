@@ -26,7 +26,10 @@ export async function buildCurrentUser(
       // role without a `DELETE` (INV-16) — excluded so `/auth/me` and the
       // sync bootstrap never report a revoked role as held.
       userRoles: { where: { active: true }, include: { role: true } },
-      userAreaScopes: true,
+      // Slice 13-UI-B (SYS-10): `active: false` is a soft-removed scope
+      // (`PUT /users/{id}/area-scopes`, INV-16) — excluded so `/auth/me`
+      // never reports a revoked scope as held.
+      userAreaScopes: { where: { active: true } },
     },
   });
 

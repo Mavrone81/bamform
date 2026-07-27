@@ -133,7 +133,10 @@ function navItems(path: string, showQueue: boolean): NavItemDef[] {
   const inMenuArea =
     path === '/menu' ||
     path === '/change-password' ||
-    path === '/admin/mfa-reset' ||
+    // The whole admin area (13-UI-B) is reached through Menu, so Menu is
+    // the current area for every /admin/* screen — including the retained
+    // /admin/mfa-reset route.
+    path.startsWith('/admin') ||
     (!showQueue && queuePaths);
   const items: NavItemDef[] = [
     {

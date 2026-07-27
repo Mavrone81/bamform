@@ -240,6 +240,23 @@ not evidence of correctness.
 | U-MFA-09 | Rate-limit defaults | verify 10/min, recovery 5/min, password change 10/min, **enrol 10/min** (M-4) |
 | U-MFA-10 | `FORCE_PASSWORD_CHANGE_ENABLED` absent, `"false"`, `"0"`, `""`, `"1"`, `"yes"`, `"true "` | **all OFF** — only the literal `"true"` enables the forcing; parsed by the same `isEnvFlagEnabled` helper as `MFA_ENABLED`, asserted equal to it value by value |
 
+## 5.7 Web unit families — `web/src/**/*.test.{ts,tsx}` (Vitest, CI job 3)
+
+Registered here per the 13-UI-A review's m11 (the families existed unlisted).
+Coverage floors: `src/offline|lib|auth` at 95 % lines / 90 % branches;
+screens are covered by the E2E/a11y suites per §4's stated policy.
+
+| Family | Where | Covers |
+|---|---|---|
+| U-QR-01…10 | `src/lib/qrcode.test.ts` | zero-dependency QR encoder vs the ISO/IEC 18004 tables; the 213-byte v10-M ceiling and its fallback |
+| U-AUTH-* | `src/auth/auth-client.test.ts` | login discriminator, refresh, bearer-carrying logout (C-1), MFA calls, password change |
+| U-CHAL-* | `src/auth/challenge-store.test.ts` | challenge token latch, expiry, never persisted |
+| U-PWGATE-01/02 | `src/auth/password-change-gate.test.ts` | problem-type match — `endsWith`, not `includes` (m4) — and the latch |
+| U-USER-* | `src/auth/current-user-store.test.ts` | principal cache + change notification |
+| U-RECOV-* | `src/auth/recovery-codes-store.test.ts` | one-time recovery-codes latch across the auth transition |
+| U-TRANS-01 | `src/api/http-transport.test.ts` | 403 password-change-required latched centrally in `authorizedFetch` |
+| U-ADMIN-* | `src/api/admin-client.test.ts` | slice 13-UI-B: admin request shapes (users/roles/areas/asset-types/assets/area-scopes), Problem pass-through (the last-admin 409 reaches the screen), status-0 offline mapping, gate latch inheritance |
+
 ---
 
 # 6. Integration Tests
@@ -268,6 +285,21 @@ Against real service containers. Each asserts a database-enforced invariant.
 | I-INV-18 | PR-048 | New revision issued | previous superseded, existing jobs unaffected |
 | I-INV-19 | PR-011 | Attachment fetched by an unauthorised user | 403, object not served |
 | I-INV-20 | PR-076 | Expired delegation | queue excludes the delegator's records on the next request |
+
+## 6.0 Area-scope write path — slice 13-UI-B (SYS-10)
+
+`user-area-scopes.spec.ts` — `PUT /users/{userId}/area-scopes`, the endpoint
+that makes PR-API-10's read-side enforcement reachable.
+
+| ID | Case | Expected |
+|---|---|---|
+| I-SCOPE-01 | Unauthenticated / non-ADMIN / unknown user / unknown areaId / malformed body | 401 / 403 `/errors/forbidden` / 404 / 422 / 422 |
+| I-SCOPE-02 | ADMIN sets scopes | 200; `User.areaIds` on the PUT response, `GET /users/{id}` and `GET /users` all reflect the set |
+| I-SCOPE-03 | Replace with a smaller set | dropped row KEPT with `active=false` (INV-16 soft-remove, `user_role.active` convention); re-grant flips the SAME row back — never a duplicate |
+| I-SCOPE-04 | `PUT []` | every scope revoked without deletion; user back to unrestricted |
+| I-SCOPE-05 | Audit | `permission_change` in the SAME transaction, `{areaIds}` before/after only — no person-fields (CR-5); an unchanged PUT records nothing |
+| I-SCOPE-06 | `/auth/me` | reports only ACTIVE scopes |
+| I-SCOPE-07 | **Scoping bites** | a TL scoped via the API to area B stops seeing area A's queue; re-scoped to A it returns; `GET /assets` filters the same way |
 
 ## 6.1 Void semantics — slice 17 (owner decision 2026-07-27, SYS-19/W-2 resolution)
 
@@ -438,6 +470,31 @@ to the pipeline run.
 | E-13 | Measurement trend chart for one asset across revisions | UR-070 |
 | E-14 | Compliance report reconciles against job records | UR-067 |
 
+## 10.0 Implemented journey specs (status, slice 13-UI-B)
+
+The Playwright journey files in `web/e2e/journeys/` carry their own `e0N-`
+file numbering, which is NOT the URD table above (the 13-UI-A auth journeys
+took e05–e07 before the URD 5.5–5.7 journeys were buildable). Mapping as of
+slice 13-UI-B, each run at 375/768/1280 (CI job 8 matrix):
+
+| Spec file | Registers |
+|---|---|
+| `e02-verifier-sign.spec.ts` | E-02 |
+| `e03-return-resubmit.spec.ts` | E-03 |
+| `e04-delegated-approver.spec.ts` | E-04 |
+| `e05-mfa-sign-in.spec.ts` | MFA sign-in (slice 13-UI-A §5) |
+| `e06-mfa-enrolment.spec.ts` | MFA enrolment + recovery codes, incl. the Copy/Download save paths (13-UI-A review m5) |
+| `e07-forced-password-change.spec.ts` | Forced password change + admin MFA reset |
+| `e08-returned-record-visibility.spec.ts` | E-03 addendum (returned-record visibility) |
+| `e09-admin-users-scoping.spec.ts` | **E-06 (admin half)** — create user → role → area scope through the UI → the scoped user's queue shows only their area (SYS-10 write path + PR-API-10 read side); last-admin 409 surfaced; deactivate/reactivate bites at sign-in |
+| `e10-admin-machines.spec.ts` | **E-06 (machines half)** — add machine → backend-suggested provisional code rendered RED → confirm with the real code → normal; duplicate-code 409 surfaced |
+
+E-06's "jobs generate" clause is server-side scheduling, proven in
+`api/test/integration/scheduling.spec.ts` — the browser journey covers the
+administration surface. E-01/E-05/E-07/E-09..E-14 client journeys remain
+future work where the screens do not exist yet (template editor, auditor
+views, trend charts).
+
 ## 10.1 Responsiveness assertions — every page, every viewport
 
 | ID | Assertion |
@@ -491,6 +548,22 @@ export that exhausts memory is a threat to other applications (D-3, D-5, RK-08).
 
 **PR-TST-11** A-05 matters practically here, not only for compliance: shop-floor lighting and
 sunlight through a window defeat colour-only status indication.
+
+## 12.1 A-01..A-07 registration (slice 13-UI-B — the release's a11y pass)
+
+All in `web/e2e/a11y/pages.spec.ts` (CI job 9, `npm run test:a11y`) unless
+noted. Every axe sweep runs at **all three widths** (375/768/1280 — the
+13-UI-A review's m9 closed) via the shared `expectNoViolations` helper.
+
+| ID | How registered | Status |
+|---|---|---|
+| A-01 | axe (wcag2a+wcag2aa+wcag21aa) per screen × 3 widths: SignIn, JobList, RecordCapture (+conflict panel, photo staged), TOTP step, recovery-code step, enrolment, recovery codes, change password (voluntary + forced), Menu (+unsent-work dialog), standalone MFA reset, verifier queue, record review, delegations, admin landing, user list, create user, user detail (+both destructive confirms), machine list, add machine, machine detail (provisional), areas (+inline edit) | zero violations |
+| A-02 | keyboard-only item recording (RecordCapture) + keyboard-only area creation (admin) | pass |
+| A-03 | explicit label assertions: sign-in, MFA/password fields, all new admin form fields (plus axe's label rule in every A-01 sweep) | pass |
+| A-04 | token contrast table measured in `web/DESIGN.md` §5 (unchanged by this slice — the admin screens introduce **no new colours**, tokens/components only); axe's `color-contrast` rule re-checks every rendered screen in each A-01 sweep | pass |
+| A-05 | sync chip icon+text assertion; provisional machine code = tone + ⚠ icon + the word PROVISIONAL + the `PROV-` code shape itself | pass |
+| A-06 | keyboard-focused admin control shows a computed, non-none outline (the tokens' focus ring) | pass |
+| A-07 | server refusals surface as `role="alert"` — duplicate-email create refusal asserted in a11y; last-admin 409 and duplicate-code 409 asserted in e09/e10 | pass |
 
 ---
 

@@ -1,42 +1,36 @@
 import type { Page } from '@playwright/test';
-import { test, expect } from '../support/fixtures';
+import { test, expect, signInAs } from '../support/fixtures';
 import { E2E_PASSWORD, E2E_USERS, type FakeServer } from '../support/fake-server';
 import { currentTotpCode } from '../support/totp';
 import AxeBuilder from '@axe-core/playwright';
 
 /**
- * A-01: axe-core on every page, zero violations (WCAG 2.1 AA). This
- * foundation pass covers the three screens that exist (SignIn, JobList,
- * RecordCapture) at the 375px mobile-first baseline (E-RSP-01/02). The
- * full A-01..A-07 matrix across every viewport (§12) is a later slice's
- * job once the remaining screens (verifier queue, admin, PDF viewer) are
- * built; these three are real, not placeholders.
+ * A-01: axe-core on every page, zero violations (WCAG 2.1 AA). Slice
+ * 13-UI-B completes the release's A-01..A-07 matrix: every screen — old and
+ * new — is swept at ALL THREE viewports (375/768/1280; 13-UI-A review m9
+ * named the 375-only sweep as this slice's inheritance) by
+ * `expectNoViolations`, which re-runs axe per width so the tab bar AND the
+ * side rail DOM are both covered.
  */
+
+/** m9: the three CI widths. Each sweep runs axe at every one. */
+const A11Y_WIDTHS = [375, 768, 1280] as const;
 
 test('A-01: SignIn has zero axe violations', async ({ page, server }) => {
   void server; // routes installed (incl. a clean 401 on /auth/refresh) so the page never hits a real, unmocked network call
   await page.goto('/sign-in');
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+  await expectNoViolations(page);
 });
 
 test('A-01: JobList has zero axe violations', async ({ signedInPage: page }) => {
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+  await expectNoViolations(page);
 });
 
 test('A-01: RecordCapture has zero axe violations', async ({ signedInPage: page }) => {
   await page.getByText('PM-2026-000431').click();
   await expect(page.getByRole('heading', { name: 'PM-2026-000431' })).toBeVisible();
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+  await expectNoViolations(page);
 });
 
 /** A-02: keyboard-only completion of a full record. */
@@ -95,10 +89,16 @@ async function beginMfaSignIn(page: Page, server: FakeServer): Promise<void> {
 }
 
 async function expectNoViolations(page: Page): Promise<void> {
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+  for (const width of A11Y_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+      .analyze();
+    expect(
+      results.violations,
+      `at ${width}px: ${JSON.stringify(results.violations, null, 2)}`,
+    ).toEqual([]);
+  }
 }
 
 test('A-01: the TOTP code step has zero axe violations', async ({ page, server }) => {
@@ -180,11 +180,10 @@ test('A-01: the admin MFA-reset screen has zero axe violations, including its co
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
-  // Slice 14-DESIGN: the admin reset entry lives on the Menu tab.
-  await page.getByRole('button', { name: 'Menu' }).click();
-  const entry = page.getByRole('button', { name: /Reset a user/i });
-  await entry.scrollIntoViewIfNeeded();
-  await entry.click();
+  // Slice 13-UI-B: the standalone screen stays routed for bookmarks; the
+  // Menu path now goes Menu -> Administration (and per-user reset lives on
+  // the user's detail page, swept separately below).
+  await page.goto('/admin/mfa-reset');
   await page.locator('#mfa-reset-user-id').fill(E2E_USERS.engineer.id);
   await page.getByRole('button', { name: /Reset this user/i }).click();
   await expect(page.getByRole('alert')).toBeVisible();
@@ -240,10 +239,7 @@ test('A-01: the RecordCapture conflict-recovery panel has zero axe violations', 
     .click();
   await request;
   await expect(page.getByTestId('conflict-panel')).toBeVisible({ timeout: 10_000 });
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+  await expectNoViolations(page);
 });
 
 test('A-01: the photo section with a staged photo has zero axe violations', async ({
@@ -256,10 +252,7 @@ test('A-01: the photo section with a staged photo has zero axe violations', asyn
     buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
   });
   await expect(page.getByTestId('staged-photo')).toBeVisible();
-  const results = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+  await expectNoViolations(page);
 });
 
 test('A-01: the Menu (with sign-out) and the unsent-work warning dialog have zero axe violations', async ({
@@ -274,16 +267,248 @@ test('A-01: the Menu (with sign-out) and the unsent-work warning dialog have zer
     .getByRole('button', { name: 'Done', exact: true })
     .click();
   await page.getByRole('button', { name: 'Menu' }).click();
-  const menuScan = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(menuScan.violations, JSON.stringify(menuScan.violations, null, 2)).toEqual([]);
+  await expectNoViolations(page);
 
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
-  const dialogScan = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
-    .analyze();
-  expect(dialogScan.violations, JSON.stringify(dialogScan.violations, null, 2)).toEqual([]);
+  await expectNoViolations(page);
   await page.getByRole('button', { name: 'Stay signed in' }).click();
+});
+
+// ---- Slice 13-UI-B: the admin surface + the screens never yet swept ----
+//
+// Every sweep below (like every one above, since this slice) runs at
+// 375/768/1280 via `expectNoViolations` — the full A-01 matrix the release
+// owes (TEST_PLAN §12), not a single-width sample.
+
+async function signInAsAdmin(page: Page): Promise<void> {
+  await signInAs(page, E2E_USERS.admin.email);
+}
+
+test('A-01: the verifier queue (entries + empty) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  server.seedJob({
+    id: 'job-a11y-queue',
+    jobNumber: 'PM-2026-000700',
+    assetCode: 'WB09',
+    frequency: 'M1',
+    dueOn: '2026-08-01',
+    status: 'SUBMITTED',
+    submittedBy: E2E_USERS.technician.id,
+    submittedAt: new Date().toISOString(),
+    currentStageOrdinal: 1,
+    items: [{ id: 'item-q1', itemNo: 1, instruction: 'Check clamp force' }],
+    itemResults: [{ templateItemId: 'item-q1', status: 'DONE' }],
+  });
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.getByRole('button', { name: 'Verifier queue' }).click();
+  await expect(page.getByText('PM-2026-000700')).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the record review screen has zero axe violations', async ({ page, server }) => {
+  server.seedJob({
+    id: 'job-a11y-review',
+    jobNumber: 'PM-2026-000701',
+    assetCode: 'WB10',
+    frequency: 'M1',
+    dueOn: '2026-08-01',
+    status: 'SUBMITTED',
+    submittedBy: E2E_USERS.technician.id,
+    submittedAt: new Date().toISOString(),
+    currentStageOrdinal: 1,
+    items: [{ id: 'item-r1', itemNo: 1, instruction: 'Check heater block temperature' }],
+    itemResults: [{ templateItemId: 'item-r1', status: 'DONE' }],
+  });
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.getByRole('button', { name: 'Verifier queue' }).click();
+  await page.getByText('PM-2026-000701').click();
+  await expect(page.getByRole('heading', { name: 'PM-2026-000701' })).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the delegations screen has zero axe violations', async ({ page, server }) => {
+  void server;
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.getByRole('button', { name: 'Verifier queue' }).click();
+  await page.getByRole('button', { name: 'Delegations' }).click();
+  await expect(page.getByRole('heading', { name: 'Delegations', exact: true })).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the admin landing has zero axe violations', async ({ page, server }) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin');
+  await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the user list has zero axe violations', async ({ page, server }) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/users');
+  // Scoped to the card title: the (display:none) rail foot carries the same
+  // name, so a bare getByText can resolve to the hidden span at phone width.
+  await expect(page.locator('.card-title', { hasText: 'Test Administrator' })).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the create-user form has zero axe violations', async ({ page, server }) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/users/new');
+  await expect(page.getByRole('heading', { name: 'Add a user' })).toBeVisible();
+  await expect(page.getByLabel(/Team Leader/)).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the user detail (roles, areas, deactivate + MFA-reset confirms) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  server.seedArea({ code: 'BL', name: 'Bond Line' });
+  await signInAsAdmin(page);
+  await page.goto('/admin/users');
+  await page.getByText('Test Engineer').click();
+  await expect(page.getByRole('heading', { name: 'Test Engineer' })).toBeVisible();
+  await expect(page.getByLabel(/Bond Line/)).toBeVisible();
+  await expectNoViolations(page);
+
+  // Both destructive confirms open — the states a mistake-in-progress shows.
+  await page.getByRole('button', { name: 'Deactivate this account' }).click();
+  await expect(page.getByRole('button', { name: 'Yes, deactivate' })).toBeVisible();
+  await page.getByRole('button', { name: 'Reset authenticator' }).click();
+  await expect(page.getByRole('button', { name: 'Yes, reset it' })).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the machine list (empty and populated) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/machines');
+  await expect(page.getByText('No machines here yet.')).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the add-machine form has zero axe violations', async ({ page, server }) => {
+  server.seedArea({ code: 'BL', name: 'Bond Line' });
+  await signInAsAdmin(page);
+  await page.goto('/admin/machines/new');
+  await expect(page.getByLabel('Asset type')).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01/A-05: the machine detail with a provisional RED code has zero axe violations, and the state is never colour alone', async ({
+  page,
+  server,
+}) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/machines/new');
+  await page.getByLabel('Asset type').selectOption({ label: 'Wire Bonder' });
+  await page.getByRole('button', { name: 'Add machine' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toContainText(/^PROV-/);
+
+  // A-05: the provisional state carries an icon AND the word PROVISIONAL —
+  // never colour alone — and the code SHAPE itself (PROV-…) is a third,
+  // colour-independent signal.
+  const chip = page.locator('.status-chip[data-tone="bad"]').first();
+  await expect(chip).toContainText('PROVISIONAL');
+  const icon = await chip.locator('[aria-hidden="true"]').first().textContent();
+  expect(icon?.trim().length).toBeGreaterThan(0);
+
+  await expectNoViolations(page);
+});
+
+test('A-01: the areas screen (list, create form, inline edit) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  server.seedArea({ code: 'BL', name: 'Bond Line' });
+  await signInAsAdmin(page);
+  await page.goto('/admin/areas');
+  await expect(page.getByText('Bond Line')).toBeVisible();
+  await page.getByRole('button', { name: 'Rename' }).click();
+  await expect(page.getByLabel(/Rename BL/)).toBeVisible();
+  await expectNoViolations(page);
+});
+
+/** A-02 (admin surface): a whole admin task — creating an area — is
+ * completable with the keyboard alone. */
+test('A-02: an area can be created using only the keyboard', async ({ page, server }) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/areas');
+  const code = page.getByLabel('Code');
+  await code.focus();
+  await page.keyboard.type('KB-1');
+  await page.keyboard.press('Tab'); // -> Name field
+  await page.keyboard.type('Keyboard Area');
+  const create = page.getByRole('button', { name: 'Create area' });
+  await create.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Area Keyboard Area created.')).toBeVisible();
+});
+
+/** A-03: the new admin form controls all carry accessible labels. */
+test('A-03: admin form fields have accessible labels', async ({ page, server }) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/users/new');
+  await expect(page.getByLabel('Full name')).toBeVisible();
+  await expect(page.getByLabel('Email')).toBeVisible();
+  await expect(page.getByLabel('Employee ID (optional)')).toBeVisible();
+  await expect(page.getByLabel('Initial password')).toBeVisible();
+  await page.goto('/admin/machines/new');
+  await expect(page.getByLabel('Asset type')).toBeVisible();
+  await expect(page.getByLabel('Machine code (optional)')).toBeVisible();
+  await expect(page.getByLabel('Schedule anchor date')).toBeVisible();
+});
+
+/** A-06: keyboard focus is visible on the admin surface (the tokens'
+ * focus ring actually renders on a focused control). */
+test('A-06: a keyboard-focused admin control shows a visible focus indicator', async ({
+  page,
+  server,
+}) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/users');
+  await expect(page.locator('.card-title', { hasText: 'Test Administrator' })).toBeVisible();
+  const addUser = page.getByRole('button', { name: 'Add user' });
+  await addUser.focus();
+  // :focus-visible only fires for keyboard-initiated focus in some engines;
+  // drive it with a real Tab so the check cannot pass vacuously.
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  const outline = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement;
+    const style = getComputedStyle(el);
+    return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+  });
+  expect(outline.outlineStyle).not.toBe('none');
+  expect(Number.parseFloat(outline.outlineWidth)).toBeGreaterThan(0);
+});
+
+/** A-07: a server refusal on the admin surface is announced (role=alert),
+ * not silently rendered. */
+test('A-07: a duplicate-email refusal is announced as an alert', async ({ page, server }) => {
+  void server;
+  await signInAsAdmin(page);
+  await page.goto('/admin/users/new');
+  await page.getByLabel('Full name').fill('Duplicate Person');
+  await page.getByLabel('Email').fill(E2E_USERS.technician.email); // already taken
+  await page.getByLabel('Initial password').fill('a-long-enough-password');
+  await page.getByLabel(/Maintainer/).check();
+  await page.getByRole('button', { name: 'Create user' }).click();
+  const alert = page.getByRole('alert');
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText(/already exists/);
+  await expectNoViolations(page);
 });

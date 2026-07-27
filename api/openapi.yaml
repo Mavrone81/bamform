@@ -2153,6 +2153,46 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /users/{userId}/area-scopes:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      tags: [Admin]
+      operationId: setUserAreaScopes
+      summary: Set (replace) a user's area scopes
+      description: |
+        ADMIN only (slice 13-UI-B, SYS-10 — the write path that makes
+        PR-API-10's repository-layer scoping reachable). REPLACES the user's
+        area-scope set wholesale, the same way `PATCH /users/{userId}`'s
+        `roleCodes` replaces roles. `[]` clears every scope (the user
+        becomes unrestricted). A dropped scope is soft-removed
+        (`user_area_scope.active = false` — INV-16: no DELETE grant), and a
+        change produces a `permission_change` audit event in the same
+        transaction (INV-09). The payload carries area ids only — never any
+        person-field (CR-5/PR-SEC-02).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserAreaScopeSet' }
+      responses:
+        '200':
+          description: Updated user, `areaIds` reflecting the new set
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: Unknown areaId, or malformed body
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /users/{userId}/mfa-reset:
     parameters:
       - name: userId
@@ -2535,7 +2575,7 @@ components:
 
     User:
       type: object
-      required: [id, fullName, email, status, active, roles, createdAt, updatedAt]
+      required: [id, fullName, email, status, active, roles, areaIds, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         employeeId: { type: [string, 'null'] }
@@ -2546,6 +2586,14 @@ components:
         roles:
           type: array
           items: { $ref: '#/components/schemas/RoleCode' }
+        areaIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: |
+            Slice 13-UI-B (SYS-10) — the user's ACTIVE area scopes
+            (PR-API-10). `[]` means UNRESTRICTED (sees every area). Written
+            via `PUT /users/{userId}/area-scopes`; soft-removed scopes never
+            appear here.
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 
@@ -2575,6 +2623,20 @@ components:
           type: array
           minItems: 1
           items: { $ref: '#/components/schemas/RoleCode' }
+
+    UserAreaScopeSet:
+      type: object
+      required: [areaIds]
+      properties:
+        areaIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: |
+            REPLACES the user's area-scope set wholesale (the
+            `UserUpdate.roleCodes` convention). `[]` is legal and clears
+            every scope — the user becomes unrestricted. Removal is a
+            soft-remove (`user_area_scope.active = false`, INV-16: no
+            DELETE grant); produces a `permission_change` audit event.
 
     ScheduleRule:
       type: object

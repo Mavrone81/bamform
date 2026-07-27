@@ -834,6 +834,41 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/jobs/{jobId}/assign': {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Assign or reassign a job to a technician
+     * @description UR-029 (slice 15-SYSWIRE). TEAM_LEADER/ENGINEER/ADMIN. First
+     *     assignment moves `SCHEDULED` -> `ASSIGNED` (PRD §5.1); reassignment
+     *     of an `ASSIGNED` or `IN_PROGRESS` job replaces the assignee and does
+     *     NOT change status (previously recorded results keep their original
+     *     recorded-by attribution — the recovery path for a job whose assignee
+     *     was deactivated). Not legal from SUBMITTED/ARCHIVED/VOIDED. The
+     *     assignee must be an active user holding a result-recording role
+     *     (MAINTAINER/TEAM_LEADER/ENGINEER, §4.1) whose area scope can reach
+     *     the job. Audited in the same transaction; enqueues the UR-061
+     *     JOB_ASSIGNED notification to the (new) assignee.
+     *     `Idempotency-Key` is honoured when supplied but not required.
+     */
+    post: operations['assignJob'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/jobs/{jobId}/items/{templateItemId}': {
     parameters: {
       query?: never;
@@ -1112,11 +1147,26 @@ export interface paths {
     put?: never;
     /**
      * Void a job. The record remains visible and queryable.
-     * @description PR-046/INV-12. TEAM_LEADER/ENGINEER/ADMIN. Reason required, >= 10
-     *     characters. Legal from SCHEDULED, ASSIGNED, IN_PROGRESS or SUBMITTED
-     *     - never from VERIFIED/ARCHIVED/VOIDED (PRD §5.1). This is NOT a
+     * @description PR-046/INV-12. Reason required, >= 10 characters. This is NOT a
      *     delete (non-negotiable #7 - `bamform_app` holds no `DELETE` grant on
      *     any table); the job stays queryable with `status: VOIDED`.
+     *
+     *     Legal from SCHEDULED, ASSIGNED, IN_PROGRESS or SUBMITTED
+     *     (TEAM_LEADER/ENGINEER/ADMIN), and - since the owner's 2026-07-27
+     *     decision (slice 17) - from ARCHIVED, ADMIN-only (403 for any other
+     *     role). A post-archive void is an ANNOTATION, never a mutation: the
+     *     double-signed record content, drawn signatures, Ed25519 signatures,
+     *     content hashes and audit chain are byte-identical before and after
+     *     (DB-enforced); only `voidReason`/`voidedBy`/`voidedAt` and the
+     *     status change. Never legal from VERIFIED or VOIDED.
+     *
+     *     A voided job never satisfies its schedule period and never blocks
+     *     regeneration. Voiding an ARCHIVED job also recomputes the asset's
+     *     schedule in the same transaction, as if that completion never
+     *     happened: `next_due_on` re-derives from the most recent still-valid
+     *     completion, or reverts to the voided job's own due date if none
+     *     remains. Already-generated successor jobs are left untouched - the
+     *     recompute affects future generation only.
      */
     post: operations['voidJob'];
     delete?: never;
@@ -1264,7 +1314,11 @@ export interface paths {
      *     document number, frequency, date range (`archivedFrom`/`archivedTo`),
      *     technician (submitter) and approver (a verifying `approval_step`
      *     actor). An archived record IS a `job` row with `status = ARCHIVED`
-     *     (this system has no separate `record` table). Area-scoped
+     *     (this system has no separate `record` table) - or, since slice 17, a
+     *     record voided AFTER archive (`status = VOIDED` with its untouched
+     *     `archivedAt` still set): those stay part of the archive by default
+     *     (an auditor must see voids, not lose them), filterable via
+     *     `voided`. Pre-archive voids are not archive records. Area-scoped
      *     (PR-API-10): a MAINTAINER sees only their own records; TEAM_LEADER/
      *     ENGINEER/DOC_CONTROLLER/ADMIN/AUDITOR see every archived record in
      *     area scope (API_SPECIFICATION.md §4.1 "View archive").
@@ -1598,6 +1652,36 @@ export interface paths {
     patch: operations['updateUser'];
     trace?: never;
   };
+  '/users/{userId}/area-scopes': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set (replace) a user's area scopes
+     * @description ADMIN only (slice 13-UI-B, SYS-10 — the write path that makes
+     *     PR-API-10's repository-layer scoping reachable). REPLACES the user's
+     *     area-scope set wholesale, the same way `PATCH /users/{userId}`'s
+     *     `roleCodes` replaces roles. `[]` clears every scope (the user
+     *     becomes unrestricted). A dropped scope is soft-removed
+     *     (`user_area_scope.active = false` — INV-16: no DELETE grant), and a
+     *     change produces a `permission_change` audit event in the same
+     *     transaction (INV-09). The payload carries area ids only — never any
+     *     person-field (CR-5/PR-SEC-02).
+     */
+    put: operations['setUserAreaScopes'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/users/{userId}/mfa-reset': {
     parameters: {
       query?: never;
@@ -1862,6 +1946,13 @@ export interface components {
       status: components['schemas']['UserStatus'];
       active: boolean;
       roles: components['schemas']['RoleCode'][];
+      /**
+       * @description Slice 13-UI-B (SYS-10) — the user's ACTIVE area scopes
+       *     (PR-API-10). `[]` means UNRESTRICTED (sees every area). Written
+       *     via `PUT /users/{userId}/area-scopes`; soft-removed scopes never
+       *     appear here.
+       */
+      areaIds: string[];
       /** Format: date-time */
       createdAt: string;
       /** Format: date-time */
@@ -1882,6 +1973,16 @@ export interface components {
       email?: string;
       active?: boolean;
       roleCodes?: components['schemas']['RoleCode'][];
+    };
+    UserAreaScopeSet: {
+      /**
+       * @description REPLACES the user's area-scope set wholesale (the
+       *     `UserUpdate.roleCodes` convention). `[]` is legal and clears
+       *     every scope — the user becomes unrestricted. Removal is a
+       *     soft-remove (`user_area_scope.active = false`, INV-16: no
+       *     DELETE grant); produces a `permission_change` audit event.
+       */
+      areaIds: string[];
     };
     ScheduleRule: {
       /** Format: uuid */
@@ -2094,6 +2195,15 @@ export interface components {
     };
     Job: components['schemas']['JobSummary'] & {
       draftVersion?: number;
+      /** @description Slice 17 - the void ANNOTATION (never part of the signed record content). Populated only once the job is VOIDED. */
+      voidReason?: string | null;
+      /** Format: uuid */
+      voidedBy?: string | null;
+      /**
+       * Format: date-time
+       * @description Null for voids predating the slice-17 migration.
+       */
+      voidedAt?: string | null;
       templateRevision?: components['schemas']['TemplateRevision'];
       itemResults?: components['schemas']['ItemResult'][];
       measurementResults?: components['schemas']['MeasurementResult'][];
@@ -2192,6 +2302,13 @@ export interface components {
       /** Format: date-time */
       actedAt: string;
       signingKeyId?: string;
+    };
+    AssignJobRequest: {
+      /**
+       * Format: uuid
+       * @description The user this job is (re)assigned to.
+       */
+      assigneeId: string;
     };
     VerifyJobRequest: {
       /**
@@ -2311,6 +2428,11 @@ export interface components {
       intact: boolean;
       /** Format: date-time */
       checkedAt: string;
+      /** @description Slice 17 - `intact` speaks ONLY to cryptographic integrity (a voided record's untouched content still verifies); `voided` states the record's standing. Both are reported; neither masks the other. */
+      voided?: boolean;
+      voidReason?: string | null;
+      /** Format: date-time */
+      voidedAt?: string | null;
       signatures?: {
         /** Format: uuid */
         approvalStepId?: string;
@@ -2375,6 +2497,8 @@ export interface components {
         technician?: string;
         /** Format: uuid */
         approver?: string;
+        /** @description Slice 17 - same semantics as `GET /records`'s `voided` parameter (omitted = include voided-archived records). */
+        voided?: boolean;
       };
     };
     RecordExportStatus: {
@@ -3746,6 +3870,66 @@ export interface operations {
       404: components['responses']['Problem'];
     };
   };
+  assignJob: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AssignJobRequest'];
+      };
+    };
+    responses: {
+      /** @description Assigned (or reassigned) */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Job'];
+        };
+      };
+      /**
+       * @description `/errors/out-of-scope` - the job's asset is outside the CALLER's
+       *     area scope
+       */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      404: components['responses']['Problem'];
+      /** @description `/errors/invalid-transition` - job is SUBMITTED/ARCHIVED/VOIDED, or changed state concurrently */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      /** @description `/errors/validation-failed` - assignee unknown, inactive, holds no result-recording role, or cannot reach the job's area */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+    };
+  };
   recordItemResult: {
     parameters: {
       query?: never;
@@ -4120,6 +4304,15 @@ export interface operations {
           'application/json': components['schemas']['Job'];
         };
       };
+      /** @description `/errors/forbidden` - voiding an ARCHIVED record is ADMIN-only */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
       409: components['responses']['Problem'];
       422: components['responses']['Problem'];
     };
@@ -4296,6 +4489,8 @@ export interface operations {
         archivedTo?: string;
         technician?: string;
         approver?: string;
+        /** @description Omitted - whole archive INCLUDING voided-archived records; `true` - only voided-archived; `false` - exclude them. */
+        voided?: boolean;
       };
       header?: never;
       path?: never;
@@ -4715,6 +4910,44 @@ export interface operations {
         };
       };
       422: components['responses']['Problem'];
+    };
+  };
+  setUserAreaScopes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        userId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UserAreaScopeSet'];
+      };
+    };
+    responses: {
+      /** @description Updated user, `areaIds` reflecting the new set */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['User'];
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      /** @description Unknown areaId, or malformed body */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
     };
   };
   resetUserMfa: {

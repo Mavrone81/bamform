@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditActionT, Prisma, UserStatusT } from '@prisma/client';
 import { v7 as uuidv7 } from 'uuid';
-import type { User, UserCreate, UserUpdate } from '@bamform/shared';
+import type { User, UserAreaScopeSet, UserCreate, UserUpdate } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import { BLIND_INDEX_KEY } from '../auth/auth.tokens';
 import { computeEmailBlindIndex, computeEmployeeIdBlindIndex } from '../auth/crypto/blind-index';
@@ -30,6 +30,9 @@ export interface ListUsersParams {
 
 const USER_ROLES_INCLUDE = {
   userRoles: { where: { active: true }, include: { role: true } },
+  // Slice 13-UI-B (SYS-10): `active: false` rows are soft-removed scopes —
+  // never reported as held (same contract as `userRoles` above).
+  userAreaScopes: { where: { active: true } },
 } satisfies Prisma.AppUserInclude;
 
 /**
@@ -176,6 +179,9 @@ export class UsersService {
             active: true,
             role,
           })),
+          // A user is created UNRESTRICTED; scopes are assigned afterwards
+          // via `PUT /users/{userId}/area-scopes` (SYS-10).
+          userAreaScopes: [],
         };
         const after = toUser(withRoles, this.fieldEncryption);
 
@@ -411,6 +417,79 @@ export class UsersService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Slice 13-UI-B (SYS-10) — `PUT /users/{userId}/area-scopes`, the write
+   * path that makes PR-API-10's read-side scoping reachable. REPLACES the
+   * user's area-scope set wholesale (the `UserUpdate.roleCodes` convention):
+   * every requested area is upserted `active: true`, every currently-active
+   * scope NOT in the request is soft-removed (`active: false` — INV-16:
+   * `bamform_app` has no DELETE grant, same convention as `user_role.active`).
+   * `[]` clears every scope, returning the user to unrestricted.
+   *
+   * Audited `permission_change` in the SAME transaction (INV-09), only when
+   * the effective set changed. The payload is `{ areaIds }` before/after —
+   * area ids are non-personal, so CR-5/PR-SEC-02's ciphertext-digest rule for
+   * person-fields is not triggered (and no decrypted person-field is ever
+   * written here regardless).
+   */
+  async setAreaScopes(id: string, dto: UserAreaScopeSet, actor: ActorMeta): Promise<User> {
+    const existing = await this.findOrThrow(id);
+    const desiredAreaIds = [...new Set(dto.areaIds)];
+
+    if (desiredAreaIds.length > 0) {
+      const areas = await this.prisma.area.findMany({ where: { id: { in: desiredAreaIds } } });
+      if (areas.length !== desiredAreaIds.length) {
+        throw validationFailedProblem('One or more areaIds do not match a known area.');
+      }
+    }
+
+    const beforeAreaIds = existing.userAreaScopes.map((scope) => scope.areaId);
+    const changed =
+      JSON.stringify([...beforeAreaIds].sort()) !== JSON.stringify([...desiredAreaIds].sort());
+
+    return this.prisma.$transaction(async (tx) => {
+      if (changed) {
+        const desired = new Set(desiredAreaIds);
+        for (const areaId of desiredAreaIds) {
+          await tx.userAreaScope.upsert({
+            where: { userId_areaId: { userId: id, areaId } },
+            create: { userId: id, areaId },
+            update: { active: true },
+          });
+        }
+        for (const scope of existing.userAreaScopes) {
+          if (!desired.has(scope.areaId)) {
+            await tx.userAreaScope.update({
+              where: { userId_areaId: { userId: id, areaId: scope.areaId } },
+              data: { active: false },
+            });
+          }
+        }
+      }
+
+      const refreshed = await tx.appUser.findUniqueOrThrow({
+        where: { id },
+        include: USER_ROLES_INCLUDE,
+      });
+      const after = toUser(refreshed, this.fieldEncryption);
+
+      if (changed) {
+        await this.audit.record(tx, {
+          actorId: actor.actorId,
+          action: AuditActionT.permission_change,
+          entityType: 'user',
+          entityId: id,
+          before: { areaIds: beforeAreaIds },
+          after: { areaIds: after.areaIds },
+          sourceIp: actor.sourceIp,
+          requestId: actor.requestId,
+        });
+      }
+
+      return after;
+    });
   }
 
   private async findOrThrow(id: string): Promise<AppUserWithRoles> {
