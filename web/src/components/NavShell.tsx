@@ -124,9 +124,17 @@ interface NavItemDef {
 }
 
 function navItems(path: string, showQueue: boolean): NavItemDef[] {
-  const inQueueArea =
+  const queuePaths =
     path === '/queue' || path === '/delegations' || /^\/jobs\/[^/]+\/review$/.test(path);
-  const inMenuArea = path === '/menu' || path === '/change-password' || path === '/admin/mfa-reset';
+  // Roles without a Queue tab reach the queue/delegations/review through the
+  // Menu tab, so for them Menu is the current area on those paths — a tab
+  // must always answer "where am I" (review D-4).
+  const inQueueArea = showQueue && queuePaths;
+  const inMenuArea =
+    path === '/menu' ||
+    path === '/change-password' ||
+    path === '/admin/mfa-reset' ||
+    (!showQueue && queuePaths);
   const items: NavItemDef[] = [
     {
       key: 'jobs',

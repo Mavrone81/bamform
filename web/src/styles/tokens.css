@@ -121,6 +121,7 @@
 
   /* ---- Focus (A-06 — never removed, only restyled) ---- */
   --color-focus: #0b62d6; /* 5.6:1 panel / 4.8:1 canvas */
+  --color-focus-chrome: #7cb8ff; /* focus ring on graphite chrome — 8.5:1 */
 
   /* ---- Signal system: ink (text) / tint (plate) / edge (border+rule) ----
    * Dark ink on a pale tint with a saturated edge: legible in glare,
@@ -129,7 +130,11 @@
   --signal-good-ink: #15602f;
   --signal-good-tint: #e3f3e7;
   --signal-good-edge: #2f7d4f;
-  --signal-good-solid: #15602f; /* pressed segments — white ink 7.7:1 */
+  --signal-good-solid: #15602f; /* pressed segments — solid ink 7.7:1 */
+  --signal-good-chrome: #58c07e; /* the "online" dot on graphite — 7.8:1 */
+
+  /* Ink used ON solid signal fills (pressed segments). */
+  --signal-solid-ink: #ffffff;
 
   --signal-bad-ink: #a1160f;
   --signal-bad-tint: #fdeae8;

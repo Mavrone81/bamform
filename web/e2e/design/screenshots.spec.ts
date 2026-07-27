@@ -29,7 +29,10 @@ const OVERDUE_JOB: SeedJob = {
   items: [{ id: 'item-shot-2-1', itemNo: 1, instruction: 'Grease spindle bearing' }],
 };
 
-const SUBMITTED_JOB: SeedJob = {
+// Seeded with real recorded results (review D-6): a genuine SUBMITTED record
+// always carries them, so the review screenshots must show the actual
+// DONE / NOT_DONE vocabulary — including a remark — not an empty record.
+const REVIEW_JOB: SeedJob = {
   id: 'job-shot-3',
   jobNumber: 'PM-2026-000512',
   assetCode: 'AW05',
@@ -43,9 +46,25 @@ const SUBMITTED_JOB: SeedJob = {
     { id: 'item-shot-3-1', itemNo: 1, instruction: 'Check heater block temperature' },
     { id: 'item-shot-3-2', itemNo: 2, instruction: 'Inspect wire bond capillary' },
   ],
+  itemResults: [
+    { templateItemId: 'item-shot-3-1', status: 'DONE' },
+    {
+      templateItemId: 'item-shot-3-2',
+      status: 'NOT_DONE',
+      remark: 'Capillary worn — replacement part on order.',
+    },
+  ],
 };
 
-async function shot(page: Page, name: string, width: number): Promise<void> {
+async function shot(
+  page: Page,
+  name: string,
+  width: number,
+  opts: { keepScroll?: boolean } = {},
+): Promise<void> {
+  // Frame from the top unless a test deliberately framed a lower region —
+  // review D-6 caught shots captured wherever the flow left the scroll.
+  if (!opts.keepScroll) await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(250); // let fonts/layout settle
   await page.screenshot({
     path: `design-screenshots/${name}-${width}.png`,
@@ -183,21 +202,22 @@ for (const vp of VIEWPORTS) {
     await withFreshPage(
       browser,
       vp,
-      (server) => server.seedJob(SUBMITTED_JOB),
+      (server) => server.seedJob(REVIEW_JOB),
       async (page) => {
         await signInAs(page, E2E_USERS.teamLeader.email);
         await page.getByRole('button', { name: 'Verifier queue' }).click();
-        await page.getByText(SUBMITTED_JOB.jobNumber).waitFor();
+        await page.getByText(REVIEW_JOB.jobNumber).waitFor();
         await shot(page, '09-verifier-queue', w);
 
-        await page.getByText(SUBMITTED_JOB.jobNumber).click();
-        await page.getByRole('heading', { name: SUBMITTED_JOB.jobNumber }).waitFor();
+        await page.getByText(REVIEW_JOB.jobNumber).click();
+        await page.getByRole('heading', { name: REVIEW_JOB.jobNumber }).waitFor();
+        await page.getByText('DONE', { exact: true }).waitFor();
         await shot(page, '10-record-review', w);
 
         await page.getByRole('button', { name: 'Verify' }).click();
         await drawSignature(page);
         await page.locator('.signature-pad-canvas').scrollIntoViewIfNeeded();
-        await shot(page, '11-record-review-sign', w);
+        await shot(page, '11-record-review-sign', w, { keepScroll: true });
       },
     );
 
@@ -242,7 +262,10 @@ for (const vp of VIEWPORTS) {
         await page.locator('#mfa-reset-user-id').fill(E2E_USERS.engineer.id);
         await page.getByRole('button', { name: /Reset this user/i }).click();
         await page.getByRole('alert').waitFor();
-        await shot(page, '17-admin-mfa-reset-confirm', w);
+        // Frame the destructive confirmation itself — the point of the shot
+        // (review D-6 caught the buttons clipped under the tab bar at 375).
+        await page.locator('.dialog-actions').scrollIntoViewIfNeeded();
+        await shot(page, '17-admin-mfa-reset-confirm', w, { keepScroll: true });
       },
     );
   });

@@ -440,6 +440,19 @@ button:disabled {
   margin-top: var(--space-2);
 }
 
+/* Native modal variant (<dialog> + showModal): the browser's top layer
+ * provides the real modality — focus trapped inside, everything else inert,
+ * Esc cancels — so the assistive-tech contract and the keyboard reality
+ * finally agree (review D-3). */
+dialog.dialog {
+  width: min(100% - 2rem, var(--shell-max-form));
+  margin: auto;
+}
+
+dialog.dialog::backdrop {
+  background: rgba(15, 20, 26, 0.55);
+}
+
 /* ---- Empty / loading states ---------------------------------------------- */
 .empty-state {
   border: var(--border-width) dashed var(--color-border-strong);
@@ -516,19 +529,19 @@ button:disabled {
 .segmented button[aria-pressed='true'][data-tone='good'] {
   background: var(--signal-good-solid);
   border-color: var(--signal-good-solid);
-  color: #ffffff;
+  color: var(--signal-solid-ink);
 }
 
 .segmented button[aria-pressed='true'][data-tone='bad'] {
   background: var(--signal-bad-solid);
   border-color: var(--signal-bad-solid);
-  color: #ffffff;
+  color: var(--signal-solid-ink);
 }
 
 .segmented button[aria-pressed='true'][data-tone='neutral'] {
   background: var(--signal-neutral-solid);
   border-color: var(--signal-neutral-solid);
-  color: #ffffff;
+  color: var(--signal-solid-ink);
 }
 
 .checklist-item {
@@ -662,8 +675,12 @@ button:disabled {
   flex: 1;
   display: flex;
   flex-direction: column;
-  /* Keep content clear of the fixed tab bar and the home indicator. */
+  /* Keep content clear of the fixed tab bar, the home indicator, and — in
+   * landscape on a notched phone (manifest allows any orientation) — the
+   * notch itself (review D-5). */
   padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom, 0px) + var(--space-5));
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* The content column every screen renders into. */
@@ -683,9 +700,12 @@ button:disabled {
 }
 
 /* Unauthenticated / gate screens render without the shell chrome; give the
- * column its own breathing room on tall phones. */
+ * column its own breathing room on tall phones and keep clear of notches in
+ * any orientation. */
 .app-shell--standalone {
   padding-top: max(var(--space-6), env(safe-area-inset-top, 0px));
+  padding-left: calc(var(--space-4) + env(safe-area-inset-left, 0px));
+  padding-right: calc(var(--space-4) + env(safe-area-inset-right, 0px));
   min-height: 100%;
 }
 
@@ -696,7 +716,9 @@ button:disabled {
   z-index: var(--z-appbar);
   background: var(--color-chrome);
   color: var(--color-chrome-ink);
-  padding: calc(env(safe-area-inset-top, 0px) + var(--space-2)) var(--space-4) var(--space-2);
+  padding: calc(env(safe-area-inset-top, 0px) + var(--space-2))
+    calc(var(--space-4) + env(safe-area-inset-right, 0px)) var(--space-2)
+    calc(var(--space-4) + env(safe-area-inset-left, 0px));
   min-height: var(--appbar-height);
   display: flex;
   align-items: center;
@@ -748,7 +770,7 @@ button:disabled {
 }
 
 .online-chip[data-tone='good'] .online-dot {
-  background: #58c07e;
+  background: var(--signal-good-chrome);
 }
 
 .online-chip[data-tone='attention'] .online-dot {
@@ -766,6 +788,8 @@ button:disabled {
   background: var(--color-chrome);
   box-shadow: var(--shadow-nav);
   padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 .nav-tabs .nav-item {
@@ -810,7 +834,7 @@ button:disabled {
 /* Focus rings on graphite chrome need a light ring to stay visible. */
 .nav-tabs .nav-item:focus-visible,
 .nav-rail .nav-item:focus-visible {
-  outline-color: #7cb8ff;
+  outline-color: var(--color-focus-chrome);
   outline-offset: -3px;
 }
 
@@ -838,7 +862,8 @@ button:disabled {
     flex-direction: column;
     background: var(--color-chrome);
     color: var(--color-chrome-ink);
-    padding: var(--space-5) var(--space-3) calc(env(safe-area-inset-bottom, 0px) + var(--space-4));
+    padding: var(--space-5) var(--space-3) calc(env(safe-area-inset-bottom, 0px) + var(--space-4))
+      calc(var(--space-3) + env(safe-area-inset-left, 0px));
     gap: var(--space-2);
   }
 
@@ -937,6 +962,14 @@ button:disabled {
 
 .identity-plate {
   border-left: var(--rule-width) solid var(--color-brand-amber);
+}
+
+/* The rail foot already shows the signed-in identity at >=768px — showing
+ * the same name/roles twice a few centimetres apart is noise (review D-8). */
+@media (min-width: 768px) {
+  .menu-identity {
+    display: none;
+  }
 }
 
 /* ---- Install hint ---------------------------------------------------------- */
@@ -1042,6 +1075,42 @@ button:disabled {
 }
 
 /* ---- Read-only record review (slice 11b) ------------------------------------- */
+
+/* One reviewed checklist item: instruction + result chip + optional remark.
+ * The instruction has a wide flex-basis so on narrow phones the nowrap chip
+ * wraps onto its own line (right-aligned) instead of squeezing the text into
+ * a one-word column (review D-1); side-by-side again from ~30rem of row. */
+.review-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.review-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.review-item .checklist-instruction {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.review-item .status-chip {
+  margin-left: auto;
+}
+
+.review-remark {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-ink-soft);
+  padding-left: calc(2.25rem + var(--space-3)); /* aligns under the instruction text */
+}
+
 .readonly-value {
   font-weight: 700;
   font-family: var(--font-mono);

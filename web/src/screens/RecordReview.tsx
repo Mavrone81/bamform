@@ -56,6 +56,23 @@ export function RecordReview({ jobId }: { jobId: string }) {
   const [stepUpPending, setStepUpPending] = useState(false);
   const [awaitingStepUp, setAwaitingStepUp] = useState(false);
   const pendingSignatureRef = useRef<string | null>(null);
+  const stepUpDialogRef = useRef<HTMLDialogElement | null>(null);
+
+  // The step-up panel is a NATIVE modal dialog (review D-3): `showModal()`
+  // puts it in the top layer, traps focus inside and makes everything
+  // behind it — the nav shell included — genuinely inert, so the modality
+  // assistive tech is told about is the modality keyboard users get. Esc
+  // fires `cancel`, routed to the same handler as the Cancel button.
+  useEffect(() => {
+    const dialog = stepUpDialogRef.current;
+    if (awaitingStepUp && dialog && !dialog.open) dialog.showModal();
+  }, [awaitingStepUp]);
+
+  function cancelStepUp() {
+    setAwaitingStepUp(false);
+    pendingSignatureRef.current = null;
+    setMode('view');
+  }
 
   const load = useCallback(async () => {
     try {
@@ -228,12 +245,8 @@ export function RecordReview({ jobId }: { jobId: string }) {
           const result = itemResultsByItem.get(item.id);
           const meta = result?.status ? ITEM_RESULT_META[result.status] : undefined;
           return (
-            <div
-              className="kv-row"
-              key={item.id}
-              style={{ borderBottom: 'var(--border-width) solid var(--color-border)' }}
-            >
-              <p className="checklist-instruction" style={{ flex: 1 }}>
+            <div className="review-item" key={item.id}>
+              <p className="checklist-instruction">
                 <span className="item-no">{item.itemNo}</span>
                 <span>{item.instruction}</span>
               </p>
@@ -241,7 +254,7 @@ export function RecordReview({ jobId }: { jobId: string }) {
                 <span aria-hidden="true">{meta?.icon ?? '⚠'}</span>
                 <span>{result?.status ?? 'No result recorded'}</span>
               </span>
-              {result?.remark && <p className="text-soft">{result.remark}</p>}
+              {result?.remark && <p className="review-remark">{result.remark}</p>}
             </div>
           );
         })}
@@ -334,13 +347,22 @@ export function RecordReview({ jobId }: { jobId: string }) {
       )}
 
       {awaitingStepUp && (
-        <section
-          aria-label="Re-enter your password"
-          role="dialog"
-          aria-modal="true"
+        <dialog
+          ref={stepUpDialogRef}
           className="dialog"
+          aria-labelledby="step-up-heading"
+          onCancel={(e) => {
+            // Esc while the confirmation request is in flight must not
+            // abandon it half-acknowledged — same rule as the disabled
+            // Cancel button.
+            if (stepUpPending) {
+              e.preventDefault();
+              return;
+            }
+            cancelStepUp();
+          }}
         >
-          <h2>Re-enter your password to sign</h2>
+          <h2 id="step-up-heading">Re-enter your password to sign</h2>
           <p style={{ margin: 0 }} className="text-soft">
             For security, verifying a record requires re-confirming your password.
           </p>
@@ -360,15 +382,7 @@ export function RecordReview({ jobId }: { jobId: string }) {
             </p>
           )}
           <div className="dialog-actions">
-            <button
-              type="button"
-              onClick={() => {
-                setAwaitingStepUp(false);
-                pendingSignatureRef.current = null;
-                setMode('view');
-              }}
-              disabled={stepUpPending}
-            >
+            <button type="button" onClick={cancelStepUp} disabled={stepUpPending}>
               Cancel
             </button>
             <button
@@ -380,7 +394,7 @@ export function RecordReview({ jobId }: { jobId: string }) {
               {stepUpPending ? 'Confirming…' : 'Confirm'}
             </button>
           </div>
-        </section>
+        </dialog>
       )}
 
       {canAct && mode === 'return' && (

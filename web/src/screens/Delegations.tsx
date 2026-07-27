@@ -18,6 +18,14 @@ const EMPTY_FORM = { delegatorId: '', delegateId: '', validFrom: '', validTo: ''
  */
 export function Delegations() {
   const { navigate } = useRouter();
+  // Review D-4: this screen is reachable from the verifier queue AND from
+  // the Menu tab (the only path for roles without a Queue tab). The Menu
+  // link carries `?from=menu` so the back link points where the user came
+  // from. Read once at mount, same pattern as RecordReview's `onBehalfOf`
+  // (the hand-rolled router tracks pathname only).
+  const [fromMenu] = useState(
+    () => new URLSearchParams(window.location.search).get('from') === 'menu',
+  );
   const [items, setItems] = useState<Delegation[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -73,8 +81,12 @@ export function Delegations() {
   return (
     <main className="app-shell" aria-labelledby="delegations-heading">
       <header className="screen-header">
-        <button type="button" className="back-link btn-quiet" onClick={() => navigate('/queue')}>
-          <span aria-hidden="true">‹</span> Back to queue
+        <button
+          type="button"
+          className="back-link btn-quiet"
+          onClick={() => navigate(fromMenu ? '/menu' : '/queue')}
+        >
+          <span aria-hidden="true">‹</span> {fromMenu ? 'Back to menu' : 'Back to queue'}
         </button>
         <span className="microlabel">Cover an absence</span>
         <h1 id="delegations-heading" style={{ marginBottom: 0 }}>

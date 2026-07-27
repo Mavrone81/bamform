@@ -23,7 +23,10 @@ export function Menu() {
 
   const items: Array<{ label: string; to: string }> = [
     ...(hasQueueTab ? [] : [{ label: 'Verifier queue', to: '/queue' }]),
-    { label: 'Delegations', to: '/delegations' },
+    // `from=menu` lets the Delegations screen point its back link here
+    // rather than at the queue (review D-4) — presentation only, the router
+    // still matches on pathname alone.
+    { label: 'Delegations', to: '/delegations?from=menu' },
     { label: 'Change password', to: '/change-password' },
     ...(isAdmin ? [{ label: 'Reset a user’s authenticator', to: '/admin/mfa-reset' }] : []),
   ];
@@ -33,7 +36,7 @@ export function Menu() {
       <h1 id="menu-heading">Menu</h1>
 
       {user && (
-        <div className="card identity-plate">
+        <div className="card identity-plate menu-identity">
           <span className="microlabel">Signed in as</span>
           <span style={{ fontWeight: 700 }}>{user.fullName}</span>
           <span className="job-code text-soft">{user.roles.join(' · ')}</span>

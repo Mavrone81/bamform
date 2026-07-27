@@ -40,6 +40,15 @@ export interface SeedJob {
   revisionId?: string;
   revisionCode?: string;
   items: Array<{ id: string; itemNo: number; instruction: string; mandatory?: boolean }>;
+  /** Slice 14-DESIGN (review D-6): pre-recorded results carried on the job
+   * payload, so a job seeded directly as `SUBMITTED` can look like one a
+   * technician actually filled (a real SUBMITTED record always has results).
+   * Optional and defaulting to none — no pre-existing spec seeds these. */
+  itemResults?: Array<{
+    templateItemId: string;
+    status: 'DONE' | 'NOT_DONE' | 'NOT_APPLICABLE';
+    remark?: string;
+  }>;
   /** Slice 11b additions — only meaningful once a job is (or becomes)
    * `SUBMITTED`; every field defaults to something sensible for jobs that
    * never touch the verifier queue. */
@@ -380,7 +389,14 @@ export class FakeServer {
         })),
         measurements: [],
       },
-      itemResults: [],
+      itemResults: (job.itemResults ?? []).map((r, idx) => ({
+        id: `seed-result-${job.id}-${idx}`,
+        templateItemId: r.templateItemId,
+        status: r.status,
+        remark: r.remark ?? null,
+        recordedByName: 'Test Technician',
+        recordedAt: job.submittedAt ?? new Date().toISOString(),
+      })),
       measurementResults: [],
       partsUsed: [],
       attachments: [],
