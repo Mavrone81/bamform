@@ -66,5 +66,14 @@ export default defineConfig({
         viewport: { width: Number(process.env.VIEWPORT_WIDTH ?? 1280), height: 900 },
       },
     },
+    {
+      // Slice 14-DESIGN §5: captures the owner-review screenshot set into
+      // web/design-screenshots/ at 375/768/1280. Never invoked by CI (jobs
+      // run the offline/e2e/a11y projects by name); run it locally with
+      // `npx playwright test --project=design` after visual changes.
+      name: 'design',
+      testDir: './e2e/design',
+      use: { ...devices['Desktop Chrome'] },
+    },
   ],
 });
