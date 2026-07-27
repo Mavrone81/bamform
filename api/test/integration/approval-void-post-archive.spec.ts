@@ -10,8 +10,10 @@ import {
   createAsset,
   createAssetType,
   createFormTemplate,
+  createJob,
   createJobFixture,
   createTemplateItem,
+  createTemplateMeasurement,
   createTemplateRevision,
   createUser,
   getSeededApprovalRouteId,
@@ -163,7 +165,107 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
     expect(final.body.status).toBe('ARCHIVED');
   }
 
-  /** The record CONTENT of a job + children — everything except the void annotation columns. */
+  /**
+   * A record whose EVERY child table is populated — items, a measurement, a
+   * part and an attachment — driven through capture and both verify stages
+   * so the byte-identity proof in I-VOID-02 compares real content, not empty
+   * sets (review V-2). Items/measurement/part go through the real HTTP
+   * capture endpoints; the attachment row is inserted directly (`received`,
+   * with a real sha256) — the claim under test is that void changes no child
+   * byte, not the upload flow, and the row is signed into the canonical
+   * record at verify time like any other.
+   */
+  async function makeContentBearingArchivedJob(users: Awaited<ReturnType<typeof makeUsers>>) {
+    const authorId = await createUser('author');
+    const approvalRouteId = await getSeededApprovalRouteId();
+    const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+    const assetTypeId = await createAssetType(
+      formTemplateId,
+      approvalRouteId,
+      `AT-${randomUUID()}`,
+    );
+    const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`);
+    const revisionId = await createTemplateRevision(formTemplateId, authorId, {
+      sequenceOrdinal: 0,
+      status: 'current',
+    });
+    const itemIds = [
+      await createTemplateItem(revisionId, 'M1'),
+      await createTemplateItem(revisionId, 'M1'),
+    ];
+    const measurementId = await createTemplateMeasurement(revisionId, {
+      lowerLimit: 10,
+      upperLimit: 30,
+    });
+    const jobId = await createJob({
+      assetId,
+      templateRevisionId: revisionId,
+      approvalRouteId,
+      jobNumber: `PM-VOID17C-${randomUUID()}`,
+      status: 'assigned',
+      assignedTo: users.maintainerId,
+    });
+
+    const server = app.getHttpServer();
+    await request(server)
+      .put(`/api/v1/jobs/${jobId}/items/${itemIds[0]}`)
+      .set(...authHeader(users.maintainerToken))
+      .set('Idempotency-Key', randomUUID())
+      .send({ status: 'DONE', remark: 'belts within tolerance' })
+      .expect(200);
+    await request(server)
+      .put(`/api/v1/jobs/${jobId}/items/${itemIds[1]}`)
+      .set(...authHeader(users.maintainerToken))
+      .set('Idempotency-Key', randomUUID())
+      .send({ status: 'NOT_APPLICABLE', remark: 'guard removed on this variant' })
+      .expect(200);
+    await request(server)
+      .put(`/api/v1/jobs/${jobId}/measurements/${measurementId}`)
+      .set(...authHeader(users.maintainerToken))
+      .set('Idempotency-Key', randomUUID())
+      .send({ readingNumeric: 24.75 })
+      .expect(200);
+    await request(server)
+      .post(`/api/v1/jobs/${jobId}/parts`)
+      .set(...authHeader(users.maintainerToken))
+      .set('Idempotency-Key', randomUUID())
+      .send({ partNo: 'GRS-100', description: 'Grease cartridge', quantity: 2 })
+      .expect(201);
+    await adminPool.query(
+      `INSERT INTO "attachment"
+         ("job_id", "object_key", "original_filename", "content_type", "byte_size",
+          "sha256", "uploaded_by", "uploaded_at", "upload_state")
+       VALUES ($1, $2, 'evidence.png', 'image/png', 2048, digest($3, 'sha256'), $4, now(), 'received')`,
+      [jobId, `attachments/${jobId}/${randomUUID()}`, randomUUID(), users.maintainerId],
+    );
+
+    await request(server)
+      .post(`/api/v1/jobs/${jobId}/submit`)
+      .set(...authHeader(users.maintainerToken))
+      .expect(200);
+    await request(server)
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(users.tlToken))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+    const final = await request(server)
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(users.engToken))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+    expect(final.body.status).toBe('ARCHIVED');
+    return { jobId, assetId };
+  }
+
+  /**
+   * The record CONTENT of a job + children + approval steps — every column of
+   * every table named, via `to_jsonb` whole-row capture (review V-2: a
+   * hand-kept column list can silently drift as columns are added; whole-row
+   * jsonb cannot). Only the job row subtracts the four annotation columns +
+   * `updated_at`; approval steps and children are compared in FULL, including
+   * `drawn_signature_ct`/`drawn_signature_dek_version`, `source_ip`,
+   * `step_up_verified_at` and timestamps.
+   */
   async function snapshotRecordContent(jobId: string) {
     const job = await adminPool.query(
       `SELECT to_jsonb(j) - 'status' - 'void_reason' - 'voided_by' - 'voided_at' - 'updated_at' AS content
@@ -171,11 +273,10 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
       [jobId],
     );
     const steps = await adminPool.query(
-      `SELECT id, stage_ordinal, action, actor_id, reason, acted_at,
+      `SELECT to_jsonb(s) AS row,
               encode(content_hash, 'hex') AS content_hash_hex,
-              encode(signature, 'hex') AS signature_hex,
-              signing_key_id
-       FROM "approval_step" WHERE job_id = $1 ORDER BY id`,
+              encode(signature, 'hex') AS signature_hex
+       FROM "approval_step" s WHERE job_id = $1 ORDER BY id`,
       [jobId],
     );
     const children: Record<string, unknown[]> = {};
@@ -186,7 +287,28 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
       );
       children[table] = rows.rows.map((r) => r.row);
     }
-    return { job: job.rows[0].content, steps: steps.rows, children };
+    return {
+      job: job.rows[0].content,
+      steps: steps.rows as Array<{
+        row: Record<string, unknown>;
+        content_hash_hex: string;
+        signature_hex: string;
+      }>,
+      children,
+    };
+  }
+
+  /** Sum the compliance report's per-area rows into one comparable total. */
+  function complianceTotals(rows: Array<Record<string, number>>) {
+    return rows.reduce(
+      (acc, row) => ({
+        due: acc.due + row.dueCount,
+        onTime: acc.onTime + row.completedOnTimeCount,
+        late: acc.late + row.completedLateCount,
+        notCompleted: acc.notCompleted + row.notCompletedCount,
+      }),
+      { due: 0, onTime: 0, late: 0, notCompleted: 0 },
+    );
   }
 
   // ------------------------------------------------------------------ tests
@@ -255,10 +377,25 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
 
   it('I-VOID-02 (the heart of the slice): voiding an archived record changes NO byte of the signed content, and every stored Ed25519 signature STILL VERIFIES', async () => {
     const users = await makeUsers();
-    const { jobId } = await makeArchivedJob(users);
+    // V-2: a CONTENT-BEARING record — the byte-identity claims below must be
+    // earned against real rows, not empty sets.
+    const { jobId } = await makeContentBearingArchivedJob(users);
     const signer = app.get<RecordSigningService>(RECORD_SIGNING_SERVICE);
 
     const before = await snapshotRecordContent(jobId);
+    // Fixture sanity (V-2): every table this test claims to compare is
+    // actually populated — this test can never silently regress to comparing
+    // empty sets.
+    expect(before.children.item_result.length).toBe(2);
+    expect(before.children.measurement_result.length).toBe(1);
+    expect(before.children.part_used.length).toBe(1);
+    expect(before.children.attachment.length).toBe(1);
+    expect(before.steps.length).toBe(2); // the two verification signatures (submit creates no approval_step)
+    // Both verify steps carry an encrypted drawn signature — the snapshot's
+    // whole-row jsonb therefore includes drawn_signature_ct in the comparison.
+    const drawnBefore = before.steps.filter((s) => s.row.drawn_signature_ct != null);
+    expect(drawnBefore.length).toBe(2);
+
     // Sanity: the freshly archived record's signatures verify BEFORE void.
     for (const step of before.steps) {
       expect(
@@ -280,12 +417,16 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
     // 1. The job row's record content (everything but the annotation columns)
     //    is IDENTICAL.
     expect(after.job).toEqual(before.job);
-    // 2. Every child record row is byte-identical.
+    // 2. Every child record row is byte-identical — EVERY column, whole-row
+    //    jsonb (item results incl. remarks, the measurement reading, the
+    //    part, the attachment sha256).
     expect(after.children).toEqual(before.children);
-    // 3. Every pre-void approval step — ids, content hashes, signatures — is
-    //    byte-identical; exactly ONE new step (the void) was appended.
+    // 3. Every pre-void approval step is byte-identical across ALL columns —
+    //    including drawn_signature_ct/drawn_signature_dek_version, actor,
+    //    role, source_ip, step_up_verified_at, timestamps, content_hash and
+    //    signature; exactly ONE new step (the void) was appended.
     expect(after.steps.length).toBe(before.steps.length + 1);
-    const preVoidStepsAfter = after.steps.filter((s) => s.action !== 'voided');
+    const preVoidStepsAfter = after.steps.filter((s) => s.row.action !== 'voided');
     expect(preVoidStepsAfter).toEqual(before.steps);
     // 4. THE test: the stored signatures (including both verification
     //    signatures) still verify against their stored content hashes.
@@ -504,25 +645,56 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
     expect(record.body.status).toBe('VOIDED');
     expect(record.body.voidReason).toBe('Voided after archive — auditor-visibility test');
 
-    // Compliance: the voided job is NOT completed for its period, even though
-    // archived_at is (correctly) still set on the untouched record.
+    // Compliance (V-1): a voided row is EXCLUDED from the aggregation
+    // entirely — never "completed", and never a permanent notCompleted
+    // either. The owner's rule is "as if that PM never happened": between
+    // the void and the next scheduler tick the period is simply absent;
+    // once the replacement generates, THAT row represents the period
+    // (I-VOID-12 covers the post-replacement half).
     const compliance = await request(server)
       .get(`/api/v1/reports/compliance`)
       .set(...authHeader(users.adminToken))
       .expect(200);
-    const totals = compliance.body.rows.reduce(
-      (
-        acc: { onTime: number; late: number; notCompleted: number },
-        row: Record<string, number>,
-      ) => ({
-        onTime: acc.onTime + row.completedOnTimeCount,
-        late: acc.late + row.completedLateCount,
-        notCompleted: acc.notCompleted + row.notCompletedCount,
-      }),
-      { onTime: 0, late: 0, notCompleted: 0 },
-    );
-    expect(totals.onTime + totals.late).toBe(0);
-    expect(totals.notCompleted).toBeGreaterThanOrEqual(1);
+    const totals = complianceTotals(compliance.body.rows);
+    expect(totals).toEqual({ due: 0, onTime: 0, late: 0, notCompleted: 0 });
+  });
+
+  it('I-VOID-12 (V-1): after the replacement is completed, compliance counts ONE period, completed — the voided row never double-counts it', async () => {
+    const { assetId, itemIds } = await makeSchedulableAsset(['M1']);
+    const users = await makeUsers();
+    const scheduler = app.get(SchedulerService);
+
+    // Cycle: generate → complete → ADMIN voids → tick regenerates the SAME
+    // period → complete the replacement.
+    await scheduler.run();
+    const jobs1 = await adminPool.query(`SELECT id FROM "job" WHERE asset_id = $1`, [assetId]);
+    const firstJobId = jobs1.rows[0].id as string;
+    await completeJob(firstJobId, itemIds, users);
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${firstJobId}/void`)
+      .set(...authHeader(users.adminToken))
+      .send({ reason: 'Wrong machine — void, then complete the replacement' })
+      .expect(200);
+    const regen = await scheduler.run();
+    expect(regen.ran && regen.generated).toBe(1);
+    const jobs2 = await adminPool.query(`SELECT id FROM "job" WHERE asset_id = $1 AND id <> $2`, [
+      assetId,
+      firstJobId,
+    ]);
+    const replacementId = jobs2.rows[0].id as string;
+    await completeJob(replacementId, itemIds, users);
+
+    // The reviewer's P5 scenario: before the V-1 fix this read
+    // due=2, completed=1, notCompleted=1 — a fully-completed period stuck at
+    // 50% compliance forever. The truth: ONE period, completed.
+    const compliance = await request(app.getHttpServer())
+      .get(`/api/v1/reports/compliance`)
+      .set(...authHeader(users.adminToken))
+      .expect(200);
+    const totals = complianceTotals(compliance.body.rows);
+    expect(totals.due).toBe(1);
+    expect(totals.onTime + totals.late).toBe(1);
+    expect(totals.notCompleted).toBe(0);
   });
 
   it('I-VOID-07 (flagship e2e): complete → schedule advanced → ADMIN voids → next_due_on recomputed to the voided job’s own due date → next tick generates the replacement', async () => {

@@ -3,6 +3,28 @@
 --           companion 20260728000020 migration's reversal note; the two
 --           migrations reverse as a pair, in reverse order.)
 --
+-- MID-FAILURE RECOVERY (slice-17 review V-4 — read this if `migrate deploy`
+-- is failing on THIS migration with:
+--   relation "job_asset_frequency_scope_due_on_not_voided_key" already exists
+-- ): an interrupted `CREATE INDEX CONCURRENTLY` (crash, timeout, ^C) leaves
+-- behind an INVALID index that still holds the name, so a plain deploy retry
+-- collides with it. Recovery, run verbatim against the affected database:
+--
+--   1. psql:  DROP INDEX CONCURRENTLY IF EXISTS
+--               "job_asset_frequency_scope_due_on_not_voided_key";
+--      (confirm it was INVALID first if you want the evidence:
+--       SELECT indexrelid::regclass, indisvalid FROM pg_index
+--       WHERE indexrelid::regclass::text LIKE '%not_voided%';)
+--   2. npx prisma migrate resolve --rolled-back
+--        20260728000010_job_period_key_excl_voided_concurrent
+--   3. npx prisma migrate deploy   (re-runs this migration cleanly)
+--
+-- SAFETY DURING ANY OF THIS: deploy halts before 20260728000020, so the old
+-- FULL unique index is still in place — enforcement is never weaker than
+-- intended while this migration is broken, only (harmlessly) stricter. The
+-- same applies if 20260728000020's DROP fails: the extra index is redundant,
+-- never dangerous.
+--
 -- Slice 17-VOID / system-review SYS-19 — the owner's 2026-07-27 decision:
 -- "a voided job never satisfies its schedule period and never blocks
 -- regeneration — the schedule behaves as if that PM never happened."

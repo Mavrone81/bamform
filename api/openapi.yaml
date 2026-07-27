@@ -3167,6 +3167,9 @@ components:
             archivedTo: { type: string, format: date }
             technician: { type: string, format: uuid }
             approver: { type: string, format: uuid }
+            voided:
+              type: boolean
+              description: Slice 17 - same semantics as `GET /records`'s `voided` parameter (omitted = include voided-archived records).
 
     RecordExportStatus:
       type: object

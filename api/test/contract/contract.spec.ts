@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   assignJobRequestSchema,
+  listRecordsQuerySchema,
   mfaChallengeResponseSchema,
   mfaEnrolConfirmRequestSchema,
   mfaEnrolConfirmResponseSchema,
@@ -402,5 +403,41 @@ describe('test:contract — slice 15-SYSWIRE assign schema matches its Zod DTO e
     expect(documented).toContain('POST /jobs/{jobId}/assign');
     const allowlisted = FUTURE_SLICE_OPENAPI_PATHS.map((gap) => `${gap.method} ${gap.path}`);
     expect(allowlisted).not.toContain('POST /jobs/{jobId}/assign');
+  });
+});
+
+/**
+ * Slice 17-VOID (review V-3) — `RecordExportRequest.filters` documents "Same
+ * shape as GET /records's query parameters (minus limit/cursor)", and the
+ * server enforces exactly that by construction (`recordExportRequestSchema`
+ * reuses `listRecordsQuerySchema.omit({limit, cursor})`). The slice-17 review
+ * caught the openapi enumeration silently missing the new `voided` filter —
+ * the exact drift class this file exists for — so the correspondence is now
+ * derived mechanically from the Zod schema instead of being hand-kept: adding
+ * a filter to `listRecordsQuerySchema` without updating BOTH the /records
+ * query parameters AND the export filters enumeration fails here by name.
+ */
+describe('test:contract — slice 17 archive filters match their Zod DTO exactly (V-3)', () => {
+  const expectedFilterKeys = Object.keys(listRecordsQuerySchema.shape)
+    .filter((key) => key !== 'limit' && key !== 'cursor')
+    .sort();
+
+  it('openapi RecordExportRequest.filters documents exactly the listRecordsQuerySchema keys (minus limit/cursor)', () => {
+    const schema = getSchema('RecordExportRequest') as {
+      properties: { filters: { properties: Record<string, unknown> } };
+    };
+    expect(Object.keys(schema.properties.filters.properties).sort()).toEqual(expectedFilterKeys);
+  });
+
+  it('GET /records documents exactly the listRecordsQuerySchema keys as query parameters (plus limit/cursor)', () => {
+    const doc = loadOpenapiDocument() as {
+      paths: Record<string, { get: { parameters: Array<{ name?: string; $ref?: string }> } }>;
+    };
+    const params = doc.paths['/records'].get.parameters.map((p) => {
+      if (p.name) return p.name;
+      // `$ref: '#/components/parameters/Limit'` etc — take the fragment name.
+      return (p.$ref ?? '').split('/').pop()!.toLowerCase();
+    });
+    expect([...params].sort()).toEqual([...expectedFilterKeys, 'cursor', 'limit'].sort());
   });
 });

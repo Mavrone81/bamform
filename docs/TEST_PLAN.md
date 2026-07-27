@@ -271,7 +271,7 @@ Against real service containers. Each asserts a database-enforced invariant.
 
 ## 6.1 Void semantics — slice 17 (owner decision 2026-07-27, SYS-19/W-2 resolution)
 
-`approval-void-post-archive.spec.ts` (I-VOID-01..10), `records-pdf.spec.ts` (I-VOID-11).
+`approval-void-post-archive.spec.ts` (I-VOID-01..10, 12), `records-pdf.spec.ts` (I-VOID-11).
 
 | ID | Case | Expected |
 |---|---|---|
@@ -280,12 +280,13 @@ Against real service containers. Each asserts a database-enforced invariant.
 | I-VOID-03 | TEAM_LEADER/ENGINEER void an ARCHIVED job | 403, record untouched — post-archive void is ADMIN-only |
 | I-VOID-04 | Any mutation of a voided-archived job (items/parts/submit/assign/verify/return/recall/re-void, plus direct SQL UPDATE) | every endpoint 409; DB trigger raises "voided and immutable" |
 | I-VOID-05 | Direct SQL `archived → voided` UPDATE that also alters content, or omits annotation fields | trigger raises — only the pure annotation is permitted |
-| I-VOID-06 | Archive surfaces after a post-archive void | `GET /records` finds it by default (filterable `voided=true/false`); `GET /records/{id}` serves it; compliance report counts it NOT completed |
+| I-VOID-06 | Archive surfaces after a post-archive void | `GET /records` finds it by default (filterable `voided=true/false`); `GET /records/{id}` serves it; compliance EXCLUDES the voided row entirely (review V-1 — never completed, never a permanent notCompleted) |
 | I-VOID-07 | **Flagship e2e**: complete → schedule advanced → ADMIN voids → next tick | `next_due_on` recomputed to the voided job's own due date (no valid prior), recompute audited, **replacement job generated for the same period** |
 | I-VOID-08 | Post-archive void with an earlier still-valid completion | schedule falls back exactly to the state derived from that completion |
 | I-VOID-09 | Pre-archive void of a generated job | next tick regenerates the period (voided rows no longer occupy the partial unique key) |
 | I-VOID-10 | Escalation timers at post-archive void | none exist at archive; void leaves none — proven no-op |
 | I-VOID-11 | PDF of a voided-archived record | renders VOID watermark/banner/footer with reason + voider name over the untouched content |
+| I-VOID-12 | Complete → void → regenerate → complete the replacement (review V-1 / probe P5) | compliance reads ONE period, completed — never `due=2, completed=1, notCompleted=1` |
 
 ---
 
