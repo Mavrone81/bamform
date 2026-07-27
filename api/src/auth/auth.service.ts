@@ -260,6 +260,18 @@ export class AuthService {
     }
 
     const user = await this.prisma.appUser.findUniqueOrThrow({ where: { id: userId } });
+
+    // CR-13 (crypto-review-2026-07-27) — step-up shares the account-lockout
+    // counter with login and MFA (`AccountLockoutService`'s header: every
+    // credential-checking path must feed the SAME `failed_login_count`).
+    // Until this slice step-up was the one path left out: a stolen access
+    // token (threat S-4, the unattended shop-floor tablet) allowed password
+    // guessing at 10/min indefinitely with no lockout and no symptom for the
+    // legitimate user. This supersedes the earlier "rate-limit-only,
+    // spec-correct per API_SPEC §9" decision, which predates the shared
+    // lockout primitive.
+    this.lockout.assertNotLocked(user);
+
     const valid = user.passwordHash
       ? await this.passwordService.verify(user.passwordHash, password)
       : false;
@@ -271,12 +283,21 @@ export class AuthService {
         sourceIp: meta.sourceIp,
         requestId: meta.requestId,
       });
-      throw invalidCredentialsProblem();
+      // Same failure path as login/MFA: increments the shared counter, locks
+      // at the threshold, and RETURNS the exception to throw (429 with
+      // Retry-After when this attempt caused the lock, opaque 401 otherwise).
+      throw await this.lockout.recordFailure(this.prisma, user, meta);
     }
 
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
-      await tx.appUser.update({ where: { id: userId }, data: { lastAuthenticatedAt: now } });
+      await tx.appUser.update({
+        where: { id: userId },
+        // A successful step-up is a successful password authentication —
+        // reset the shared failure counter exactly as a successful login
+        // does (`SessionIssuerService` sets failedLoginCount: 0).
+        data: { lastAuthenticatedAt: now, failedLoginCount: 0, lockedUntil: null },
+      });
       await this.securityAudit.recordStepUp(tx, {
         userId,
         success: true,

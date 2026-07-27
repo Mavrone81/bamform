@@ -336,6 +336,232 @@ describe('Users/roles administration — /users, /roles', () => {
     expect(rowsAfterRegrant.rowCount).toBe(2); // still exactly 2 rows, never a duplicate insert.
   });
 
+  // ------------------------------------------------------------- SYS-11
+  // (system-review-2026-07-27): prod runs with exactly ONE admin — one
+  // mistaken PATCH (or one 13-UI-B toggle) used to lock all admin access out
+  // of production, with psql surgery the only recovery.
+
+  it('SYS-11: the LAST active ADMIN cannot deactivate their own account — 409, account untouched', async () => {
+    const { userId } = await createLoginableUser({
+      email: `sole-admin-${randomUUID()}@bevorasg.com`,
+      password: 'CorrectHorseBattery1!',
+      fullName: 'Sole Admin',
+      roleCodes: ['ADMIN'],
+    });
+    const token = await mintAccessToken(app, userId, ['ADMIN']);
+
+    const res = await request(app.getHttpServer())
+      .patch(`/api/v1/users/${userId}`)
+      .set(...authHeader(token))
+      .send({ active: false })
+      .expect(409);
+    expect(res.body.detail).toMatch(/last active ADMIN/i);
+
+    const row = await adminPool.query(`SELECT status FROM "app_user" WHERE id = $1`, [userId]);
+    expect(row.rows[0].status).toBe('active');
+  });
+
+  it('SYS-11: the LAST active ADMIN cannot drop their own ADMIN role — 409, roles untouched', async () => {
+    const { userId } = await createLoginableUser({
+      email: `sole-admin-role-${randomUUID()}@bevorasg.com`,
+      password: 'CorrectHorseBattery1!',
+      fullName: 'Sole Admin Role',
+      roleCodes: ['ADMIN'],
+    });
+    const token = await mintAccessToken(app, userId, ['ADMIN']);
+
+    const res = await request(app.getHttpServer())
+      .patch(`/api/v1/users/${userId}`)
+      .set(...authHeader(token))
+      .send({ roleCodes: ['ENGINEER'] })
+      .expect(409);
+    expect(res.body.detail).toMatch(/last active ADMIN/i);
+
+    const roles = await adminPool.query(
+      `SELECT r.code FROM "user_role" ur JOIN "role" r ON r.id = ur.role_id
+       WHERE ur.user_id = $1 AND ur.active`,
+      [userId],
+    );
+    expect(roles.rows.map((r) => r.code)).toEqual(['ADMIN']);
+  });
+
+  it('SYS-11: with a SECOND active ADMIN present, self-deactivation is permitted (the guard is last-admin, not self)', async () => {
+    const { userId: firstAdmin } = await createLoginableUser({
+      email: `admin-a-${randomUUID()}@bevorasg.com`,
+      password: 'CorrectHorseBattery1!',
+      fullName: 'Admin A',
+      roleCodes: ['ADMIN'],
+    });
+    await createLoginableUser({
+      email: `admin-b-${randomUUID()}@bevorasg.com`,
+      password: 'CorrectHorseBattery1!',
+      fullName: 'Admin B',
+      roleCodes: ['ADMIN'],
+    });
+    const token = await mintAccessToken(app, firstAdmin, ['ADMIN']);
+
+    const res = await request(app.getHttpServer())
+      .patch(`/api/v1/users/${firstAdmin}`)
+      .set(...authHeader(token))
+      .send({ active: false })
+      .expect(200);
+    expect(res.body).toMatchObject({ active: false, status: 'DEACTIVATED' });
+  });
+
+  // Review finding W-1: the original guard counted other admins OUTSIDE the
+  // update transaction, so two concurrent self-deactivations by the last TWO
+  // admins both saw "one other admin exists" and both succeeded — zero active
+  // admins remained (the reviewer proved it with a probe). The guard now runs
+  // inside the transaction over FOR-UPDATE-locked admin rows (ORDER BY id so
+  // racers serialise instead of deadlocking), which makes the invariant real:
+  // whatever the interleaving, at least one active ADMIN survives. The
+  // assertion is the INVARIANT, not which racer loses — under the old code
+  // this test fails with remaining=0; under the fix exactly one PATCH gets
+  // 409 and one succeeds.
+  it('SYS-11/W-1: two concurrent self-deactivations of the last two admins cannot reach zero admins', async () => {
+    const mk = async (label: string) => {
+      const { userId } = await createLoginableUser({
+        email: `admin-race-${label}-${randomUUID()}@bevorasg.com`,
+        password: 'CorrectHorseBattery1!',
+        fullName: `Race Admin ${label}`,
+        roleCodes: ['ADMIN'],
+      });
+      return { userId, token: await mintAccessToken(app, userId, ['ADMIN']) };
+    };
+    const a = await mk('a');
+    const b = await mk('b');
+
+    const [resA, resB] = await Promise.all([
+      request(app.getHttpServer())
+        .patch(`/api/v1/users/${a.userId}`)
+        .set(...authHeader(a.token))
+        .send({ active: false }),
+      request(app.getHttpServer())
+        .patch(`/api/v1/users/${b.userId}`)
+        .set(...authHeader(b.token))
+        .send({ active: false }),
+    ]);
+
+    const statuses = [resA.status, resB.status].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const remaining = await adminPool.query(
+      `SELECT count(*)::int AS n
+         FROM app_user u
+        WHERE u.status = 'active'
+          AND EXISTS (SELECT 1 FROM user_role ur JOIN role r ON r.id = ur.role_id
+                       WHERE ur.user_id = u.id AND ur.active AND r.code = 'ADMIN')
+          AND u.id IN ($1, $2)`,
+      [a.userId, b.userId],
+    );
+    expect(remaining.rows[0].n).toBeGreaterThanOrEqual(1);
+  });
+
+  it('SYS-11: a deactivated or admin-role-stripped OTHER admin does not count as cover — the last WORKING admin is protected', async () => {
+    const { userId: soleAdmin } = await createLoginableUser({
+      email: `admin-real-${randomUUID()}@bevorasg.com`,
+      password: 'CorrectHorseBattery1!',
+      fullName: 'Real Admin',
+      roleCodes: ['ADMIN'],
+    });
+    // A second "admin" who is deactivated, and a third whose ADMIN role was revoked.
+    const { userId: deadAdmin } = await createLoginableUser({
+      email: `admin-dead-${randomUUID()}@bevorasg.com`,
+      password: 'CorrectHorseBattery1!',
+      fullName: 'Deactivated Admin',
+      roleCodes: ['ADMIN'],
+    });
+    await adminPool.query(`UPDATE "app_user" SET status = 'deactivated' WHERE id = $1`, [
+      deadAdmin,
+    ]);
+    const { userId: exAdmin } = await createLoginableUser({
+      email: `admin-ex-${randomUUID()}@bevorasg.com`,
+      password: 'CorrectHorseBattery1!',
+      fullName: 'Ex Admin',
+      roleCodes: ['ADMIN', 'ENGINEER'],
+    });
+    await adminPool.query(
+      `UPDATE "user_role" SET active = false
+       WHERE user_id = $1 AND role_id = (SELECT id FROM "role" WHERE code = 'ADMIN')`,
+      [exAdmin],
+    );
+
+    const token = await mintAccessToken(app, soleAdmin, ['ADMIN']);
+    await request(app.getHttpServer())
+      .patch(`/api/v1/users/${soleAdmin}`)
+      .set(...authHeader(token))
+      .send({ active: false })
+      .expect(409);
+  });
+
+  // ------------------------------------------------------------- CR-5
+  // (crypto-review-2026-07-27, Critical): `audit_event` is append-only with
+  // 7-year retention and NO deletion path — decrypted names/emails written
+  // into `before`/`after` are a PERMANENT PR-SEC-02 violation that defeats
+  // the field encryption for every user administered through the API.
+  // PR-SEC-02: "records that the field changed and its ciphertext digest,
+  // not the value."
+
+  it('CR-5: NO decrypted name/email/employeeId ever appears in a user audit payload — create AND update paths; ciphertext digests are recorded instead', async () => {
+    const token = await adminToken();
+    const fullName = `Leak Canary ${randomUUID()}`;
+    const email = `leak-canary-${randomUUID()}@bevorasg.com`;
+    const employeeId = `EMP-LEAK-${randomUUID()}`;
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/users')
+      .set(...authHeader(token))
+      .send({
+        fullName,
+        email,
+        employeeId,
+        password: 'CorrectHorseBattery1!',
+        roleCodes: ['ENGINEER'],
+      })
+      .expect(201);
+    const userId = created.body.id as string;
+
+    const newName = `Renamed Canary ${randomUUID()}`;
+    const newEmail = `renamed-canary-${randomUUID()}@bevorasg.com`;
+    await request(app.getHttpServer())
+      .patch(`/api/v1/users/${userId}`)
+      .set(...authHeader(token))
+      .send({ fullName: newName, email: newEmail })
+      .expect(200);
+    // Also exercise the deactivation-path audit write.
+    await request(app.getHttpServer())
+      .patch(`/api/v1/users/${userId}`)
+      .set(...authHeader(token))
+      .send({ active: false })
+      .expect(200);
+
+    const rows = await adminPool.query(
+      `SELECT action, before, after FROM "audit_event" WHERE entity_type = 'user' AND entity_id = $1 ORDER BY sequence`,
+      [userId],
+    );
+    expect(rows.rowCount).toBeGreaterThanOrEqual(3); // create + 2 updates
+    const allPayloads = JSON.stringify(rows.rows);
+    for (const plaintext of [fullName, email, employeeId, newName, newEmail]) {
+      expect(allPayloads).not.toContain(plaintext);
+    }
+    // The email's local parts must not leak in any casing either.
+    expect(allPayloads.toLowerCase()).not.toContain('leak-canary');
+    expect(allPayloads.toLowerCase()).not.toContain('renamed-canary');
+
+    // PR-SEC-02's positive half: the payload still lets an auditor see THAT
+    // the encrypted fields changed — ciphertext digests, non-personal fields.
+    const createPayload = rows.rows[0].after as Record<string, unknown>;
+    expect(createPayload).toMatchObject({ id: userId, status: 'active' });
+    expect(typeof createPayload.fullNameCtSha256).toBe('string');
+    expect(typeof createPayload.emailCtSha256).toBe('string');
+    const updateRow = rows.rows.find((r) => r.action === 'update')!;
+    const beforeDigest = (updateRow.before as Record<string, unknown>).emailCtSha256;
+    const afterDigest = (updateRow.after as Record<string, unknown>).emailCtSha256;
+    expect(typeof beforeDigest).toBe('string');
+    expect(typeof afterDigest).toBe('string');
+    expect(beforeDigest).not.toEqual(afterDigest); // the change is still evident
+  });
+
   it('returns 404 for a PATCH/GET against an unknown userId', async () => {
     const token = await adminToken();
     await request(app.getHttpServer())

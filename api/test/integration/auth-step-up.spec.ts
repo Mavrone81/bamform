@@ -123,15 +123,38 @@ describe('S-07/S-08 step-up authentication (PR-091, threat S-4)', () => {
       .send({ password: 'definitely-wrong' })
       .expect(401);
 
+    // The step_up_failed event is still written; since CR-13 the SAME failed
+    // attempt also feeds the shared lockout counter, which records its own
+    // failure event after it — so assert presence, not last position.
     const auditRows = await adminPool.query(
-      `SELECT after FROM "audit_event" WHERE entity_type = 'app_user' AND entity_id = $1 ORDER BY sequence DESC LIMIT 1`,
+      `SELECT after FROM "audit_event"
+       WHERE entity_type = 'app_user' AND entity_id = $1 AND after->>'event' = 'step_up_failed'`,
       [userId],
     );
-    expect(auditRows.rows[0].after).toMatchObject({ event: 'step_up_failed' });
+    expect(auditRows.rowCount).toBe(1);
+
+    // CR-13: the failed step-up incremented the shared login-failure counter.
+    const row = await adminPool.query(`SELECT failed_login_count FROM "app_user" WHERE id = $1`, [
+      userId,
+    ]);
+    expect(row.rows[0].failed_login_count).toBe(1);
   });
 
-  it('S-08b step-up is rate limited at 10 attempts/min per user (PR-092, API_SPECIFICATION.md §9)', async () => {
-    await createLoginableUser({
+  // ------------------------------------------------------------- CR-13
+  // (crypto-review-2026-07-27): step-up was the ONE credential-checking path
+  // that never fed the account-lockout counter — a stolen 15-min access token
+  // (threat S-4: the unattended shop-floor tablet) allowed password guessing
+  // at 10/min indefinitely, with no lockout and no symptom for the real user.
+  // Step-up now shares `failed_login_count` with login and MFA, exactly as
+  // `AccountLockoutService`'s header prescribes for every credential check.
+  //
+  // NOTE: this supersedes the earlier "S-08b rate-limit-only" test — with the
+  // shared lockout, the 5th wrong password now locks the account (429) before
+  // the 10/min rate limiter is ever reached; the rate limiter still fronts
+  // the endpoint (last test below).
+
+  it('CR-13: N failed step-ups lock the account exactly as N failed logins do — and the lock applies to LOGIN too (shared counter)', async () => {
+    const { userId } = await createLoginableUser({
       email: 's08d@bevorasg.com',
       password: 'CorrectHorseBattery1!',
       roleCodes: ['ENGINEER'],
@@ -143,27 +166,111 @@ describe('S-07/S-08 step-up authentication (PR-091, threat S-4)', () => {
       .expect(200);
     const accessToken = loginRes.body.accessToken as string;
 
-    // Attempts 1-10 are UNDER the limit: the request still runs the real
-    // password check (proved here by using a wrong password and getting a
-    // genuine 401, not a 429) — this is the brute-force scenario the
-    // reviewer flagged: without a rate limiter, a stolen access token lets
-    // an attacker guess the password indefinitely via step-up.
-    for (let attempt = 1; attempt <= 10; attempt += 1) {
+    // LOGIN_MAX_ATTEMPTS default 5 — attempts 1-4 run the real password
+    // check and fail 401; the 5th crosses the threshold and is 429 directly
+    // (same shape as auth-lockout.spec's login behaviour).
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
       await request(server)
         .post('/api/v1/auth/step-up')
         .set('Authorization', `Bearer ${accessToken}`)
         .send({ password: 'wrong-password-attempt' })
         .expect(401);
     }
+    const fifth = await request(server)
+      .post('/api/v1/auth/step-up')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ password: 'wrong-password-attempt' })
+      .expect(429);
+    expect(fifth.body).toMatchObject({ type: '/errors/rate-limited' });
+    expect(Number(fifth.headers['retry-after'])).toBeGreaterThan(0);
 
-    // 11th attempt in the same 60s window: rate-limited regardless of
-    // whether the password is correct — this is what closes the hole.
+    const row = await adminPool.query(
+      `SELECT failed_login_count, locked_until FROM "app_user" WHERE id = $1`,
+      [userId],
+    );
+    expect(row.rows[0].failed_login_count).toBe(5);
+    expect(row.rows[0].locked_until).not.toBeNull();
+
+    // Even the CORRECT password is refused while locked — step-up AND login.
+    await request(server)
+      .post('/api/v1/auth/step-up')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ password: 'CorrectHorseBattery1!' })
+      .expect(429);
+    await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: 's08d@bevorasg.com', password: 'CorrectHorseBattery1!' })
+      .expect(429);
+  });
+
+  it('CR-13: a successful step-up RESETS the shared failure counter (same convention as a successful login)', async () => {
+    const { userId } = await createLoginableUser({
+      email: 's08e@bevorasg.com',
+      password: 'CorrectHorseBattery1!',
+      roleCodes: ['ENGINEER'],
+    });
+    const server = app.getHttpServer();
+    const loginRes = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: 's08e@bevorasg.com', password: 'CorrectHorseBattery1!' })
+      .expect(200);
+    const accessToken = loginRes.body.accessToken as string;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await request(server)
+        .post('/api/v1/auth/step-up')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ password: 'wrong-password-attempt' })
+        .expect(401);
+    }
+    const mid = await adminPool.query(`SELECT failed_login_count FROM "app_user" WHERE id = $1`, [
+      userId,
+    ]);
+    expect(mid.rows[0].failed_login_count).toBe(3);
+
+    await request(server)
+      .post('/api/v1/auth/step-up')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ password: 'CorrectHorseBattery1!' })
+      .expect(200);
+
+    const after = await adminPool.query(
+      `SELECT failed_login_count, locked_until FROM "app_user" WHERE id = $1`,
+      [userId],
+    );
+    expect(after.rows[0].failed_login_count).toBe(0);
+    expect(after.rows[0].locked_until).toBeNull();
+  });
+
+  it('S-08b: the 10/min per-user rate limiter still fronts step-up — the 11th request in a minute is limited BEFORE any credential/lockout logic', async () => {
+    await createLoginableUser({
+      email: 's08f@bevorasg.com',
+      password: 'CorrectHorseBattery1!',
+      roleCodes: ['ENGINEER'],
+    });
+    const server = app.getHttpServer();
+    const loginRes = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: 's08f@bevorasg.com', password: 'CorrectHorseBattery1!' })
+      .expect(200);
+    const accessToken = loginRes.body.accessToken as string;
+
+    // 10 requests consume the window (the later ones answered by the
+    // account lockout, which reports the lock, not the rate limit).
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      await request(server)
+        .post('/api/v1/auth/step-up')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ password: 'wrong-password-attempt' });
+    }
     const eleventh = await request(server)
       .post('/api/v1/auth/step-up')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ password: 'CorrectHorseBattery1!' })
       .expect(429);
     expect(eleventh.body).toMatchObject({ type: '/errors/rate-limited' });
-    expect(Number(eleventh.headers['retry-after'])).toBeGreaterThan(0);
+    // The rate limiter's message, not the lockout's — proves the 429 came
+    // from the per-minute window (checked FIRST), not the account lock.
+    expect(eleventh.body.detail).toMatch(/Too many step-up attempts/);
   });
 });

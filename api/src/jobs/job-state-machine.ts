@@ -24,8 +24,14 @@ export type JobTransition =
 
 const LEGAL_TRANSITIONS: Record<JobStatusT, readonly JobTransition[]> = {
   [JobStatusT.scheduled]: ['ASSIGN', 'VOID'],
-  [JobStatusT.assigned]: ['START', 'VOID'],
-  [JobStatusT.in_progress]: ['SUBMIT', 'VOID'],
+  // Slice 15-SYSWIRE (SYS-2) — UR-029 says "assignable ... and REASSIGNABLE":
+  // `ASSIGN` from ASSIGNED or IN_PROGRESS is a reassignment — the assignee is
+  // replaced and the status does NOT change (PRD §5.1's SCHEDULED->ASSIGNED
+  // edge is the only status effect of assignment). Without these edges a job
+  // whose assignee is deactivated (13a) is permanently stranded: its only
+  // exit would be VOID, losing the record.
+  [JobStatusT.assigned]: ['ASSIGN', 'START', 'VOID'],
+  [JobStatusT.in_progress]: ['ASSIGN', 'SUBMIT', 'VOID'],
   [JobStatusT.submitted]: ['VERIFY_ADVANCE', 'VERIFY_FINAL', 'RETURN', 'RECALL', 'VOID'],
   // PR-041: ARCHIVED is terminal — no transition out of it exists in code.
   // VERIFIED never rests as a `job.status` value (PR-042) but is listed here,

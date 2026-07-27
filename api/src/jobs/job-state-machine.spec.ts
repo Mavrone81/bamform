@@ -11,8 +11,11 @@ import {
 describe('job-state-machine (PRD §5.1, U-STM-01..03)', () => {
   const EXPECTED_LEGAL: Record<JobStatusT, JobTransition[]> = {
     [JobStatusT.scheduled]: ['ASSIGN', 'VOID'],
-    [JobStatusT.assigned]: ['START', 'VOID'],
-    [JobStatusT.in_progress]: ['SUBMIT', 'VOID'],
+    // Slice 15-SYSWIRE — UR-029 "assignable ... and REASSIGNABLE": `ASSIGN`
+    // from ASSIGNED/IN_PROGRESS is a reassignment (assignee replaced, status
+    // unchanged) — the exit for a job whose assignee was deactivated (SYS-2).
+    [JobStatusT.assigned]: ['ASSIGN', 'START', 'VOID'],
+    [JobStatusT.in_progress]: ['ASSIGN', 'SUBMIT', 'VOID'],
     [JobStatusT.submitted]: ['VERIFY_ADVANCE', 'VERIFY_FINAL', 'RETURN', 'RECALL', 'VOID'],
     [JobStatusT.verified]: [],
     [JobStatusT.archived]: [],

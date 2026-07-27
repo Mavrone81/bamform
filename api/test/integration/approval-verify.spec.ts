@@ -127,6 +127,83 @@ describe('Jobs — POST /jobs/{id}/verify (two-stage approval, PR-041..046/093/0
     expect(jobRow.rows[0].status).toBe('submitted'); // unchanged
   });
 
+  it('SYS-8: one person holding TEAM_LEADER + ENGINEER cannot supply BOTH verification signatures — stage 2 by the stage-1 verifier is 409', async () => {
+    const { jobId } = await makeSubmittedJob();
+    // One human with both verifier roles — before slice 15-SYSWIRE they could
+    // sign stage 1 AND stage 2 and archive a "two-verifier" record alone.
+    const bothId = await createUser('supervisor-both-roles');
+    await grantRole(bothId, 'TEAM_LEADER');
+    await grantRole(bothId, 'ENGINEER');
+    await adminPool.query(`UPDATE "app_user" SET "last_authenticated_at" = now() WHERE id = $1`, [
+      bothId,
+    ]);
+    const token = await mintAccessToken(app, bothId, ['TEAM_LEADER', 'ENGINEER']);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(409);
+    expect(res.body).toMatchObject({ type: '/errors/self-approval' });
+
+    // Stage 2 is still open — a DIFFERENT engineer completes it.
+    const jobRow = await adminPool.query(
+      'SELECT status, current_stage_ordinal FROM "job" WHERE id = $1',
+      [jobId],
+    );
+    expect(jobRow.rows[0]).toEqual({ status: 'submitted', current_stage_ordinal: 2 });
+    const eng = await stepUpVerifier('ENGINEER', 'eng-distinct');
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(eng.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+  });
+
+  it("SYS-8 cycle semantics: after a RETURN + resubmit, the previous cycle's stage-1 verifier may verify stage 1 again", async () => {
+    const maintainerId = await createUser('maintainer-rework');
+    await grantRole(maintainerId, 'MAINTAINER');
+    const { jobId } = await createJobFixture(`PM-REWORK-${randomUUID()}`, 'submitted', {
+      assignedTo: maintainerId,
+      submittedBy: maintainerId,
+      submittedAt: new Date(),
+      currentStageOrdinal: 1,
+    });
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-cycle');
+    const otherTl = await stepUpVerifier('TEAM_LEADER', 'tl-returner');
+    const maintainerToken = await mintAccessToken(app, maintainerId, ['MAINTAINER']);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/return`)
+      .set(...authHeader(otherTl.token))
+      .send({ reason: 'please recheck the readings' })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/submit`)
+      .set(...authHeader(maintainerToken))
+      .expect(200);
+
+    // A fresh submission restarts BOTH stages; the distinct-person rule
+    // applies within the CURRENT cycle only — tl's old (superseded) stage-1
+    // signature does not block them from signing the reworked content.
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+  });
+
   it('S-07-equivalent: step-up required — a verifier who has not recently authenticated gets 403 step-up-required', async () => {
     const { jobId } = await makeSubmittedJob();
     const tlId = await createUser('tl-stale');
