@@ -1,5 +1,14 @@
 @import './tokens.css';
 
+/* ==========================================================================
+ * BamForm component layer — industrial clarity.
+ *
+ * Organisation (top to bottom): base → primitives (buttons, fields, chips,
+ * banners, cards, dialogs, lists, empty/loading) → capture controls →
+ * navigation shell → screen-scoped patterns. 13-UI-B builds admin CRUD from
+ * the primitives; every class here is documented in web/DESIGN.md.
+ * ======================================================================== */
+
 *,
 *::before,
 *::after {
@@ -17,15 +26,20 @@ html {
    * scroll (E-RSP-01) — inner regions that must scroll opt in explicitly
    * with their own `overflow-x: auto` container. */
   overflow-x: hidden;
+  /* Anything scrolled into view (keyboard focus, test automation, anchor
+   * jumps) lands clear of the sticky app bar and the fixed tab bar. */
+  scroll-padding-top: calc(var(--appbar-height) + 12px);
+  scroll-padding-bottom: calc(var(--tabbar-height) + 24px);
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
-  background: var(--color-surface);
+  background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-body);
-  font-size: 1rem;
-  line-height: 1.5;
+  font-size: var(--text-md);
+  line-height: var(--leading-body);
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -33,19 +47,18 @@ h1,
 h2,
 h3 {
   font-family: var(--font-display);
-  font-weight: 600;
-  line-height: 1.2;
+  font-weight: 700;
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-display);
   margin: 0 0 var(--space-3);
 }
 
-.app-shell {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: var(--space-4);
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
+h1 {
+  font-size: var(--text-xl);
+}
+
+h2 {
+  font-size: var(--text-lg);
 }
 
 a,
@@ -57,6 +70,27 @@ textarea {
   color: inherit;
 }
 
+/* Uppercase micro-label — section eyebrows, meta labels, nav captions. */
+.microlabel {
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--color-ink-faint);
+}
+
+/* Codes and numbers always ride the mono stack with tabular figures. */
+.job-code,
+.numeric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.text-soft {
+  color: var(--color-ink-soft);
+}
+
 /* Every interactive element gets a visible, high-contrast focus ring
  * (A-06). Never removed, only restyled per-component. */
 :focus-visible {
@@ -64,18 +98,38 @@ textarea {
   outline-offset: 2px;
 }
 
+/* ---- Buttons ------------------------------------------------------------
+ * Default <button> = secondary: white plate, strong border. Modifiers:
+ * .btn-primary (engineering blue, THE action), .btn-destructive (solid
+ * signal red — only ever behind a confirmation), .btn-quiet (borderless,
+ * for back links and in-card actions), .btn-block (full width).
+ * ------------------------------------------------------------------------ */
 button {
-  min-height: var(--tap-min);
+  min-height: var(--tap-comfort);
   min-width: var(--tap-min);
   cursor: pointer;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-1);
+  background: var(--color-panel);
+  color: var(--color-ink);
   padding: var(--space-2) var(--space-4);
+  font-weight: 600;
+  touch-action: manipulation; /* no double-tap-zoom delay on capture taps */
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
+}
+
+button:hover:not(:disabled) {
+  background: var(--color-panel-sunken);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -83,9 +137,47 @@ button:disabled {
   background: var(--color-accent);
   color: var(--color-accent-ink);
   border-color: var(--color-accent);
-  font-weight: 600;
+  font-weight: 700;
 }
 
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btn-destructive {
+  background: var(--color-destructive);
+  color: var(--color-destructive-ink);
+  border-color: var(--color-destructive);
+  font-weight: 700;
+}
+
+.btn-destructive:hover:not(:disabled) {
+  background: var(--color-destructive-hover);
+  border-color: var(--color-destructive-hover);
+}
+
+.btn-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-ink-soft);
+}
+
+.btn-quiet:hover:not(:disabled) {
+  background: var(--signal-neutral-tint);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+/* The one action a gloved thumb must never miss. */
+.btn-capture {
+  min-height: var(--tap-capture);
+  font-size: var(--text-lg);
+}
+
+/* ---- Form fields --------------------------------------------------------- */
 .field {
   display: flex;
   flex-direction: column;
@@ -95,103 +187,180 @@ button:disabled {
 
 .field label {
   font-weight: 600;
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
+  color: var(--color-ink-soft);
 }
 
-.field input {
-  min-height: var(--tap-min);
+.field input,
+.field textarea,
+.field select {
+  min-height: var(--tap-comfort);
   width: 100%;
   padding: var(--space-2) var(--space-3);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-1);
+  background: var(--color-panel);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  transition: border-color var(--motion-fast) var(--motion-ease);
+}
+
+.field input:focus-visible,
+.field textarea:focus-visible {
+  border-color: var(--color-focus);
+}
+
+.field-hint {
+  font-size: var(--text-sm);
+  color: var(--color-ink-faint);
 }
 
 .field-error {
-  color: var(--color-signal-bad);
-  font-size: 0.875rem;
+  color: var(--signal-bad-ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
-.job-code,
-.numeric {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-weight: 400;
 }
 
-/* ---- Status chip: text + icon, never colour alone (A-05) ---- */
+.checkbox-field input[type='checkbox'] {
+  /* Meets the 44px tap target (A-04) without the width:100% the other
+   * `.field input` rules apply. */
+  width: var(--tap-min);
+  height: var(--tap-min);
+  min-height: var(--tap-min);
+  flex: 0 0 auto;
+  accent-color: var(--color-accent);
+}
+
+/* ---- Status chips (A-05: icon + words, never colour alone) --------------- */
 .status-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 32px;
+  min-height: 28px;
   padding: var(--space-1) var(--space-3);
-  border-radius: 999px;
-  border: var(--border-width) solid var(--color-border);
-  background: var(--color-chip-bg);
-  font-size: 0.8125rem;
-  font-weight: 600;
+  border-radius: var(--radius-1);
+  border: var(--border-width) solid var(--signal-neutral-edge);
+  background: var(--signal-neutral-tint);
+  color: var(--signal-neutral-ink);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  font-weight: 700;
   white-space: nowrap;
 }
 
 .status-chip[data-tone='good'] {
-  border-color: var(--color-signal-good);
-  color: var(--color-signal-good);
+  border-color: var(--signal-good-edge);
+  background: var(--signal-good-tint);
+  color: var(--signal-good-ink);
 }
+
 .status-chip[data-tone='attention'] {
-  border-color: var(--color-signal-attention);
-  color: var(--color-signal-attention);
+  border-color: var(--signal-attention-edge);
+  background: var(--signal-attention-tint);
+  color: var(--signal-attention-ink);
 }
+
 .status-chip[data-tone='bad'] {
-  border-color: var(--color-signal-bad);
-  color: var(--color-signal-bad);
-}
-.status-chip[data-tone='neutral'] {
-  color: var(--color-ink-soft);
+  border-color: var(--signal-bad-edge);
+  background: var(--signal-bad-tint);
+  color: var(--signal-bad-ink);
 }
 
-/* ---- Segmented one-tap status control (checklist items) ---- */
-.segmented {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-2);
+.status-chip[data-tone='info'] {
+  border-color: var(--signal-info-edge);
+  background: var(--signal-info-tint);
+  color: var(--signal-info-ink);
 }
 
-.segmented button {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
+/* ---- Banners / inline alerts --------------------------------------------
+ * Left rule + tinted plate + icon + words. data-tone: attention | bad | good
+ * | info. Also the toast idiom — there is no floating toast layer by design:
+ * an instrument reports state where the operator is looking, inline.
+ * ------------------------------------------------------------------------ */
+.banner {
+  border: var(--border-width) solid var(--signal-attention-edge);
+  border-left-width: var(--rule-width);
+  border-radius: var(--radius-2);
+  background: var(--signal-attention-tint);
+  color: var(--signal-attention-ink);
+  padding: var(--space-3) var(--space-4);
   font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
 }
 
-.segmented button[aria-pressed='true'][data-tone='good'] {
-  background: var(--color-signal-good);
-  border-color: var(--color-signal-good);
-  color: var(--color-surface-raised);
-}
-.segmented button[aria-pressed='true'][data-tone='bad'] {
-  background: var(--color-signal-bad);
-  border-color: var(--color-signal-bad);
-  color: var(--color-surface-raised);
-}
-.segmented button[aria-pressed='true'][data-tone='neutral'] {
-  background: var(--color-ink-soft);
-  border-color: var(--color-ink-soft);
-  color: var(--color-surface-raised);
+.banner[data-tone='bad'] {
+  border-color: var(--signal-bad-edge);
+  background: var(--signal-bad-tint);
+  color: var(--signal-bad-ink);
 }
 
-/* ---- Cards (job list rows become cards below md — E-RSP-05) ---- */
+.banner[data-tone='good'] {
+  border-color: var(--signal-good-edge);
+  background: var(--signal-good-tint);
+  color: var(--signal-good-ink);
+}
+
+.banner[data-tone='info'] {
+  border-color: var(--signal-info-edge);
+  background: var(--signal-info-tint);
+  color: var(--signal-info-ink);
+}
+
+/* ---- Cards / panels ------------------------------------------------------ */
 .card {
   border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-raised);
+  border-radius: var(--radius-2);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-1);
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* A card that is a single tap target (job rows, queue rows). data-rule
+ * paints the left status rule: neutral | bad | attention | good | info. */
+.card-button {
+  width: 100%;
+  text-align: left;
+  align-items: stretch;
+  border-left-width: var(--rule-width);
+  border-left-color: var(--signal-neutral-edge);
+  min-height: var(--tap-capture);
+  font-weight: 400;
+}
+
+.card-button:hover:not(:disabled) {
+  background: var(--color-panel);
+  border-color: var(--color-border-strong);
+  border-left-color: var(--signal-neutral-edge);
+  box-shadow: var(--shadow-2);
+}
+
+.card-button[data-rule='bad'],
+.card-button[data-rule='bad']:hover:not(:disabled) {
+  border-left-color: var(--signal-bad-edge);
+}
+
+.card-button[data-rule='attention'],
+.card-button[data-rule='attention']:hover:not(:disabled) {
+  border-left-color: var(--signal-attention-edge);
+}
+
+.card-button[data-rule='good'],
+.card-button[data-rule='good']:hover:not(:disabled) {
+  border-left-color: var(--signal-good-edge);
 }
 
 .card-row {
@@ -202,35 +371,631 @@ button:disabled {
   flex-wrap: wrap;
 }
 
-.checklist-item {
-  border-bottom: var(--border-width) solid var(--color-border);
-  padding: var(--space-4) 0;
+.card-title {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+
+/* ---- Data list (cards in a column — the mobile-first "table") ------------ */
+.data-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
-.checklist-item:last-child {
-  border-bottom: none;
+/* ---- Definition rows (label left, value right — review/meta surfaces) ---- */
+.kv-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
 }
 
-.banner {
-  border: var(--border-width) solid var(--color-signal-attention);
-  border-radius: var(--radius);
-  background: var(--color-surface-raised);
-  color: var(--color-signal-attention);
-  padding: var(--space-3) var(--space-4);
+.kv-row dt,
+.kv-label {
+  font-size: var(--text-sm);
+  color: var(--color-ink-soft);
+}
+
+.kv-row dd,
+.kv-value {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
+  text-align: right;
+}
+
+/* ---- Dialog / confirm panel ---------------------------------------------
+ * Inline modal idiom (step-up, destructive confirmations): a raised panel
+ * with a heavy border that visually interrupts the page flow. The screens
+ * keep focus inside it by rendering nothing else actionable while open.
+ * ------------------------------------------------------------------------ */
+.dialog {
+  border: var(--border-width-strong) solid var(--color-ink);
+  border-radius: var(--radius-2);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-5);
   display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dialog h2 {
+  margin-bottom: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+/* Native modal variant (<dialog> + showModal): the browser's top layer
+ * provides the real modality — focus trapped inside, everything else inert,
+ * Esc cancels — so the assistive-tech contract and the keyboard reality
+ * finally agree (review D-3). */
+dialog.dialog {
+  width: min(100% - 2rem, var(--shell-max-form));
+  margin: auto;
+}
+
+dialog.dialog::backdrop {
+  background: rgba(15, 20, 26, 0.55);
+}
+
+/* ---- Empty / loading states ---------------------------------------------- */
+.empty-state {
+  border: var(--border-width) dashed var(--color-border-strong);
+  border-radius: var(--radius-2);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--color-ink-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.empty-state-glyph {
+  font-size: var(--text-2xl);
+  line-height: 1;
+  color: var(--color-ink-faint);
+}
+
+.empty-state-title {
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-ink-soft);
+  padding: var(--space-4) 0;
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-round);
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .loading-spinner {
+    animation: bf-spin 900ms linear infinite;
+  }
+
+  @keyframes bf-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}
+
+/* ---- Capture controls -----------------------------------------------------
+ * The crown jewel: one-tap segmented status, 56px per segment, pressed
+ * state is a solid signal fill with white ink — readable at arm's length.
+ * ------------------------------------------------------------------------ */
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+.segmented button {
+  min-height: var(--tap-capture);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-weight: 700;
+  border-width: var(--border-width);
+}
+
+.segmented button[aria-pressed='true'][data-tone='good'] {
+  background: var(--signal-good-solid);
+  border-color: var(--signal-good-solid);
+  color: var(--signal-solid-ink);
+}
+
+.segmented button[aria-pressed='true'][data-tone='bad'] {
+  background: var(--signal-bad-solid);
+  border-color: var(--signal-bad-solid);
+  color: var(--signal-solid-ink);
+}
+
+.segmented button[aria-pressed='true'][data-tone='neutral'] {
+  background: var(--signal-neutral-solid);
+  border-color: var(--signal-neutral-solid);
+  color: var(--signal-solid-ink);
+}
+
+.checklist-item {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.checklist-item + .checklist-item {
+  margin-top: var(--space-3);
+}
+
+.checklist-instruction {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  margin: 0;
+}
+
+.item-no {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--color-ink-soft);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-1);
+  padding: 0 var(--space-2);
+  min-width: 2.25rem;
+  text-align: center;
+  flex: 0 0 auto;
+}
+
+/* Recorded-progress readout on the capture screen. */
+.progress-plate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.progress-track {
+  height: 8px;
+  border-radius: var(--radius-round);
+  background: var(--signal-neutral-tint);
+  border: var(--border-width) solid var(--color-border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width var(--motion-med) var(--motion-ease);
+}
+
+/* End-of-flow action bar: heavy top rule, the primary action full width. */
+.action-bar {
+  border-top: var(--border-width-strong) solid var(--color-ink);
+  padding-top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ---- Screen header -------------------------------------------------------- */
+.screen-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.screen-header .card-row {
+  align-items: center;
+}
+
+.screen-meta {
+  margin: 0;
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+}
+
+.back-link {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap-min);
+  padding-left: var(--space-2);
+  padding-right: var(--space-3);
+}
+
+/* ---- Sign-in brand lockup -------------------------------------------------- */
+.signin-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+  padding-top: var(--space-5);
+}
+
+.signin-mark {
+  width: 64px;
+  height: 64px;
+}
+
+.signin-brand .brand-word {
+  font-size: var(--text-2xl);
+  color: var(--color-ink);
+}
+
+/* ==========================================================================
+ * Navigation shell
+ * Phone (<768px): sticky graphite app bar + fixed bottom tab bar.
+ * Tablet/desktop (>=768px): fixed graphite side rail; app bar and tab bar
+ * are display:none (and therefore absent from the accessibility tree).
+ * ======================================================================== */
+.shell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  /* Keep content clear of the fixed tab bar, the home indicator, and — in
+   * landscape on a notched phone (manifest allows any orientation) — the
+   * notch itself (review D-5). */
+  padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom, 0px) + var(--space-5));
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* The content column every screen renders into. */
+.app-shell {
+  width: 100%;
+  max-width: var(--shell-max-content);
+  margin: 0 auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Focused single-task screens: sign-in, password gates, recovery codes. */
+.app-shell--focus {
+  max-width: var(--shell-max-form);
+}
+
+/* Unauthenticated / gate screens render without the shell chrome; give the
+ * column its own breathing room on tall phones and keep clear of notches in
+ * any orientation. */
+.app-shell--standalone {
+  padding-top: max(var(--space-6), env(safe-area-inset-top, 0px));
+  padding-left: calc(var(--space-4) + env(safe-area-inset-left, 0px));
+  padding-right: calc(var(--space-4) + env(safe-area-inset-right, 0px));
+  min-height: 100%;
+}
+
+/* ---- App bar (phone) ------------------------------------------------------ */
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-appbar);
+  background: var(--color-chrome);
+  color: var(--color-chrome-ink);
+  padding: calc(env(safe-area-inset-top, 0px) + var(--space-2))
+    calc(var(--space-4) + env(safe-area-inset-right, 0px)) var(--space-2)
+    calc(var(--space-4) + env(safe-area-inset-left, 0px));
+  min-height: var(--appbar-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.brand-lockup {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.banner[data-tone='bad'] {
-  border-color: var(--color-signal-bad);
-  color: var(--color-signal-bad);
+.brand-mark {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
 }
 
+.brand-word {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+/* ---- Connectivity chip (permanent, unobtrusive) --------------------------- */
+.online-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--color-chrome-ink);
+  border: var(--border-width) solid var(--color-chrome-line);
+  border-radius: var(--radius-1);
+  padding: var(--space-1) var(--space-2);
+}
+
+.online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-round);
+  background: var(--color-chrome-ink-soft);
+}
+
+.online-chip[data-tone='good'] .online-dot {
+  background: var(--signal-good-chrome);
+}
+
+.online-chip[data-tone='attention'] .online-dot {
+  background: var(--color-brand-amber);
+}
+
+/* ---- Bottom tab bar (phone) ----------------------------------------------- */
+.nav-tabs {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-nav);
+  display: flex;
+  background: var(--color-chrome);
+  box-shadow: var(--shadow-nav);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.nav-tabs .nav-item {
+  flex: 1;
+  min-height: var(--tabbar-height);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  border-top: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-chrome-ink-soft);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.nav-tabs .nav-item:hover:not(:disabled) {
+  background: var(--color-chrome-line);
+}
+
+.nav-tabs .nav-item[aria-current='page'] {
+  color: var(--color-chrome-ink);
+  border-top-color: var(--color-brand-amber);
+}
+
+.nav-icon {
+  width: 22px;
+  height: 22px;
+}
+
+/* ---- Side rail (tablet/desktop) ------------------------------------------- */
+.nav-rail {
+  display: none;
+}
+
+/* Focus rings on graphite chrome need a light ring to stay visible. */
+.nav-tabs .nav-item:focus-visible,
+.nav-rail .nav-item:focus-visible {
+  outline-color: var(--color-focus-chrome);
+  outline-offset: -3px;
+}
+
+@media (min-width: 768px) {
+  .appbar,
+  .nav-tabs {
+    display: none;
+  }
+
+  .shell-main {
+    margin-left: var(--rail-width);
+    padding-bottom: var(--space-6);
+  }
+
+  .app-shell {
+    padding: var(--space-6);
+  }
+
+  .nav-rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: var(--rail-width);
+    z-index: var(--z-nav);
+    display: flex;
+    flex-direction: column;
+    background: var(--color-chrome);
+    color: var(--color-chrome-ink);
+    padding: var(--space-5) var(--space-3) calc(env(safe-area-inset-bottom, 0px) + var(--space-4))
+      calc(var(--space-3) + env(safe-area-inset-left, 0px));
+    gap: var(--space-2);
+  }
+
+  .nav-rail .brand-lockup {
+    padding: 0 var(--space-3) var(--space-4);
+    border-bottom: var(--border-width) solid var(--color-chrome-line);
+    margin-bottom: var(--space-3);
+  }
+
+  .nav-rail .brand-word {
+    font-size: var(--text-lg);
+  }
+
+  .nav-rail .nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--tap-comfort);
+    padding: var(--space-2) var(--space-3);
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: var(--radius-1);
+    background: transparent;
+    color: var(--color-chrome-ink-soft);
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: var(--tracking-display);
+    text-align: left;
+  }
+
+  .nav-rail .nav-item:hover:not(:disabled) {
+    background: var(--color-chrome-line);
+    color: var(--color-chrome-ink);
+  }
+
+  .nav-rail .nav-item[aria-current='page'] {
+    color: var(--color-chrome-ink);
+    border-left-color: var(--color-brand-amber);
+    background: var(--color-chrome-line);
+  }
+
+  .nav-rail-foot {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border-top: var(--border-width) solid var(--color-chrome-line);
+  }
+
+  .nav-rail-user {
+    font-size: var(--text-sm);
+    color: var(--color-chrome-ink);
+    overflow-wrap: anywhere;
+  }
+
+  .nav-rail-roles {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-caps);
+    color: var(--color-chrome-ink-soft);
+    text-transform: uppercase;
+  }
+}
+
+/* Wider desks get a wider bench gutter. */
+@media (min-width: 1280px) {
+  .app-shell {
+    padding: var(--space-7) var(--space-6);
+  }
+}
+
+/* ---- Menu screen ----------------------------------------------------------- */
+.menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.menu-item {
+  width: 100%;
+  min-height: var(--tap-capture);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  text-align: left;
+}
+
+.menu-item .chevron {
+  color: var(--color-ink-faint);
+}
+
+.identity-plate {
+  border-left: var(--rule-width) solid var(--color-brand-amber);
+}
+
+/* The rail foot already shows the signed-in identity at >=768px — showing
+ * the same name/roles twice a few centimetres apart is noise (review D-8). */
+@media (min-width: 768px) {
+  .menu-identity {
+    display: none;
+  }
+}
+
+/* ---- Install hint ---------------------------------------------------------- */
+.install-hint {
+  border: var(--border-width) solid var(--signal-info-edge);
+  border-left-width: var(--rule-width);
+  border-radius: var(--radius-2);
+  background: var(--signal-info-tint);
+  color: var(--signal-info-ink);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.install-hint p {
+  margin: 0;
+}
+
+.install-hint-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* ---- Skip link -------------------------------------------------------------- */
 .skip-link {
   position: absolute;
   left: -999px;
@@ -238,7 +1003,8 @@ button:disabled {
   background: var(--color-accent);
   color: var(--color-accent-ink);
   padding: var(--space-2) var(--space-4);
-  z-index: 100;
+  z-index: var(--z-skip);
+  font-weight: 700;
 }
 
 .skip-link:focus {
@@ -246,21 +1012,20 @@ button:disabled {
   top: var(--space-2);
 }
 
-/* ---- Signature pad (slice 11b) ---- */
+/* ---- Signature pad (slice 11b) ---------------------------------------------- */
 .signature-pad-canvas {
   display: block;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-raised);
+  border: var(--border-width-strong) solid var(--color-ink);
+  border-radius: var(--radius-2);
+  background: var(--color-panel);
   touch-action: none;
   cursor: crosshair;
 }
 
-/* ---- MFA enrolment + recovery codes (slice 13-UI-A) ---- */
+/* ---- MFA enrolment + recovery codes (slice 13-UI-A) ------------------------- */
 
 /* The symbol needs a light quiet zone to scan, so it carries its own white
- * plate rather than inheriting the surface colour — this keeps it readable
- * in a dark theme too. */
+ * plate rather than inheriting the surface colour. */
 .qr-frame {
   display: flex;
   justify-content: center;
@@ -270,15 +1035,15 @@ button:disabled {
 .qr-code {
   background: #ffffff;
   border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-2);
   max-width: 100%;
   height: auto;
 }
 
 .manual-entry {
   border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-raised);
+  border-radius: var(--radius-2);
+  background: var(--color-panel-sunken);
   padding: var(--space-3) var(--space-4);
 }
 
@@ -298,8 +1063,8 @@ button:disabled {
   margin: var(--space-3) 0 0;
   padding: var(--space-3);
   border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-raised);
+  border-radius: var(--radius-2);
+  background: var(--color-panel);
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(11ch, 1fr));
   gap: var(--space-2);
@@ -309,32 +1074,89 @@ button:disabled {
   overflow-x: auto;
 }
 
-.checkbox-field {
+/* ---- Read-only record review (slice 11b) ------------------------------------- */
+
+/* One reviewed checklist item: instruction + result chip + optional remark.
+ * The instruction has a wide flex-basis so on narrow phones the nowrap chip
+ * wraps onto its own line (right-aligned) instead of squeezing the text into
+ * a one-word column (review D-1); side-by-side again from ~30rem of row. */
+.review-item {
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  font-weight: 400;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--color-border);
 }
 
-.checkbox-field input[type='checkbox'] {
-  /* Meets the 44px tap target (A-04) without the width:100% the other
-   * `.field input` rules apply. */
-  width: var(--tap-min);
-  height: var(--tap-min);
-  min-height: var(--tap-min);
-  flex: 0 0 auto;
+.review-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
-/* ---- Read-only record review (slice 11b) ---- */
+.review-item .checklist-instruction {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.review-item .status-chip {
+  margin-left: auto;
+}
+
+.review-remark {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-ink-soft);
+  padding-left: calc(2.25rem + var(--space-3)); /* aligns under the instruction text */
+}
+
 .readonly-value {
-  font-weight: 600;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-section {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-4);
+}
+
+.review-section > h2 {
+  margin-bottom: var(--space-3);
 }
 
 .approval-step {
-  border-bottom: var(--border-width) solid var(--color-border);
-  padding: var(--space-3) 0;
+  border-left: var(--rule-width) solid var(--color-border-strong);
+  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .approval-step:last-child {
-  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.approval-step p {
+  margin: 0 0 var(--space-1);
+}
+
+.approval-step-when {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  color: var(--color-ink-soft);
+}
+
+/* ---- Motion discipline -------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

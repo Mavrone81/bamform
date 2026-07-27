@@ -9,7 +9,9 @@ import { Delegations } from './screens/Delegations';
 import { ChangePassword } from './screens/ChangePassword';
 import { AdminMfaReset } from './screens/AdminMfaReset';
 import { RecoveryCodes } from './screens/RecoveryCodes';
+import { Menu } from './screens/Menu';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { NavShell } from './components/NavShell';
 import {
   getAccessToken,
   onTokenChange,
@@ -58,8 +60,11 @@ function Screens() {
 
   if (checkingSession) {
     return (
-      <main className="app-shell">
-        <p>Loading…</p>
+      <main className="app-shell app-shell--standalone">
+        <p className="loading-state">
+          <span className="loading-spinner" aria-hidden="true" />
+          Loading…
+        </p>
       </main>
     );
   }
@@ -68,22 +73,34 @@ function Screens() {
 
   // Shown once, ahead of everything else: there is no endpoint that can ever
   // reissue these, so nothing may take the screen away from the user first.
+  // Rendered WITHOUT the navigation shell, deliberately — it is a gate, and
+  // offering navigation away from it would defeat its purpose.
   if (recoveryCodes) return <RecoveryCodes codes={recoveryCodes} />;
 
   // Rendered in place of the whole app, not as a route: the user is
   // authenticated but every other endpoint is closed to them, so offering any
-  // other screen would only produce failures they cannot act on.
+  // other screen would only produce failures they cannot act on. Also shell-
+  // less: navigation controls to screens that all 403 would be noise.
   if (mustChangePassword) return <ChangePassword forced />;
 
-  const reviewParams = matchPath('/jobs/:id/review', path);
-  if (reviewParams) return <RecordReview jobId={reviewParams.id} />;
-  if (matchPath('/queue', path)) return <VerifierQueue />;
-  if (matchPath('/delegations', path)) return <Delegations />;
-  if (matchPath('/change-password', path)) return <ChangePassword />;
-  if (matchPath('/admin/mfa-reset', path)) return <AdminMfaReset />;
-  const jobParams = matchPath('/jobs/:id', path);
-  if (jobParams) return <RecordCapture jobId={jobParams.id} />;
-  return <JobList />;
+  // Everything below lives inside the navigation shell (slice 14-DESIGN):
+  // bottom tabs on phones, side rail on tablet/desktop. The shell is
+  // presentation only — routing stays exactly this path matcher, and every
+  // screen stays reachable by URL regardless of which tabs are offered.
+  const screen = (() => {
+    const reviewParams = matchPath('/jobs/:id/review', path);
+    if (reviewParams) return <RecordReview jobId={reviewParams.id} />;
+    if (matchPath('/queue', path)) return <VerifierQueue />;
+    if (matchPath('/delegations', path)) return <Delegations />;
+    if (matchPath('/change-password', path)) return <ChangePassword />;
+    if (matchPath('/admin/mfa-reset', path)) return <AdminMfaReset />;
+    if (matchPath('/menu', path)) return <Menu />;
+    const jobParams = matchPath('/jobs/:id', path);
+    if (jobParams) return <RecordCapture jobId={jobParams.id} />;
+    return <JobList />;
+  })();
+
+  return <NavShell>{screen}</NavShell>;
 }
 
 export function App() {

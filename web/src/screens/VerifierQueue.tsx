@@ -35,19 +35,17 @@ export function VerifierQueue() {
 
   return (
     <main className="app-shell" aria-labelledby="queue-heading">
-      <div className="card-row">
-        <h1 id="queue-heading">Verifier queue</h1>
-        <button type="button" onClick={() => navigate('/jobs')}>
-          Your jobs
-        </button>
-      </div>
-      <button
-        type="button"
-        onClick={() => navigate('/delegations')}
-        style={{ width: 'fit-content' }}
-      >
-        Delegations
-      </button>
+      <header className="screen-header">
+        <span className="microlabel">Awaiting verification</span>
+        <div className="card-row">
+          <h1 id="queue-heading" style={{ marginBottom: 0 }}>
+            Verifier queue
+          </h1>
+          <button type="button" onClick={() => navigate('/delegations')}>
+            Delegations
+          </button>
+        </div>
+      </header>
 
       {error && (
         <p className="banner" data-tone="attention" role="alert">
@@ -55,27 +53,29 @@ export function VerifierQueue() {
         </p>
       )}
 
-      {entries === null && <p>Loading…</p>}
+      {entries === null && (
+        <p className="loading-state">
+          <span className="loading-spinner" aria-hidden="true" />
+          Loading…
+        </p>
+      )}
       {entries !== null && entries.length === 0 && !error && (
-        <p>No records awaiting your verification.</p>
+        <div className="empty-state">
+          <span className="empty-state-glyph" aria-hidden="true">
+            ✓
+          </span>
+          <p className="empty-state-title">No records awaiting your verification.</p>
+          <p>Submitted records that need your signature will queue here.</p>
+        </div>
       )}
 
-      <ul
-        style={{
-          listStyle: 'none',
-          margin: 0,
-          padding: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 'var(--space-3)',
-        }}
-      >
+      <ul className="data-list">
         {entries?.map((entry) => (
           <li key={entry.id}>
             <button
               type="button"
-              className="card"
-              style={{ width: '100%', textAlign: 'left', alignItems: 'stretch' }}
+              className="card card-button"
+              data-rule={entry.escalated ? 'bad' : 'attention'}
               onClick={() =>
                 navigate(
                   entry.onBehalfOf
@@ -85,21 +85,25 @@ export function VerifierQueue() {
               }
             >
               <div className="card-row">
-                <span className="job-code">{entry.jobNumber}</span>
-                <span className="job-code">{entry.assetCode}</span>
+                <span className="card-title">{entry.jobNumber}</span>
+                <span className="job-code text-soft">{entry.assetCode}</span>
               </div>
               <div className="card-row">
-                <span>Submitted {new Date(entry.submittedAt).toLocaleString()}</span>
+                <span className="numeric text-soft">
+                  Submitted {new Date(entry.submittedAt).toLocaleString()}
+                </span>
                 {entry.escalated && (
                   <span className="status-chip" data-tone="bad">
-                    <span aria-hidden="true">⚠</span> Escalated
+                    <span aria-hidden="true">⚠</span>
+                    <span>Escalated</span>
                   </span>
                 )}
               </div>
               {entry.onBehalfOf && (
                 <div className="card-row">
-                  <span className="status-chip" data-tone="neutral">
-                    <span aria-hidden="true">◈</span> Acting on behalf of delegator
+                  <span className="status-chip" data-tone="info">
+                    <span aria-hidden="true">◈</span>
+                    <span>Acting on behalf of delegator</span>
                   </span>
                 </div>
               )}

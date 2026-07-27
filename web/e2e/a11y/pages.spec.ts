@@ -141,6 +141,8 @@ test('A-01: the recovery-codes screen has zero axe violations', async ({ page, s
 });
 
 test('A-01: the change-password screen has zero axe violations', async ({ signedInPage: page }) => {
+  // Slice 14-DESIGN: account actions live on the Menu tab of the nav shell.
+  await page.getByRole('button', { name: 'Menu' }).click();
   const link = page.getByRole('button', { name: 'Change password' });
   await link.scrollIntoViewIfNeeded();
   await link.click();
@@ -178,6 +180,8 @@ test('A-01: the admin MFA-reset screen has zero axe violations, including its co
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
+  // Slice 14-DESIGN: the admin reset entry lives on the Menu tab.
+  await page.getByRole('button', { name: 'Menu' }).click();
   const entry = page.getByRole('button', { name: /Reset a user/i });
   await entry.scrollIntoViewIfNeeded();
   await entry.click();

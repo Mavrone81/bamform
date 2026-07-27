@@ -53,15 +53,18 @@ export function AdminMfaReset() {
   }
 
   return (
-    <main className="app-shell" aria-labelledby="mfa-reset-heading">
-      <div className="card-row">
-        <h1 id="mfa-reset-heading">Reset a user&rsquo;s authenticator</h1>
-        <button type="button" onClick={() => navigate('/jobs')}>
-          Back to your jobs
+    <main className="app-shell app-shell--focus" aria-labelledby="mfa-reset-heading">
+      <header className="screen-header">
+        <button type="button" className="back-link btn-quiet" onClick={() => navigate('/menu')}>
+          <span aria-hidden="true">‹</span> Back to menu
         </button>
-      </div>
+        <span className="microlabel">Administration</span>
+        <h1 id="mfa-reset-heading" style={{ marginBottom: 0 }}>
+          Reset a user&rsquo;s authenticator
+        </h1>
+      </header>
 
-      <p>
+      <p className="text-soft">
         Use this only when someone has lost both their authenticator app and their recovery codes.
         Nobody — including you — can read another person&rsquo;s authenticator secret or recovery
         codes, so a reset is the only way back in.
@@ -97,27 +100,27 @@ export function AdminMfaReset() {
       {!confirming ? (
         <button
           type="button"
+          className="btn-block"
           disabled={userId.trim().length === 0}
           onClick={() => setConfirming(true)}
-          style={{ width: '100%' }}
         >
           Reset this user&rsquo;s authenticator
         </button>
       ) : (
-        <section aria-label="Confirm reset" role="group">
+        <section aria-label="Confirm reset" role="group" className="dialog">
           <p className="banner" data-tone="bad" role="alert">
             <span aria-hidden="true">⚠</span> This erases {userId.trim()}&rsquo;s authenticator
             setup and voids all ten of their recovery codes. They will be locked out until they
             enrol a new authenticator, and the action is recorded in the audit log against your
             name.
           </p>
-          <div className="card-row">
+          <div className="dialog-actions">
             <button type="button" onClick={() => setConfirming(false)} disabled={submitting}>
               Cancel
             </button>
             <button
               type="button"
-              className="btn-primary"
+              className="btn-destructive"
               onClick={() => void handleReset()}
               disabled={submitting}
             >
