@@ -173,11 +173,17 @@ export class ReportsService {
         notCompleted: 0,
       };
       bucket.due += 1;
-      if (row.archivedAt) {
+      // Slice 17-VOID: a voided job NEVER counts as completed (owner decision
+      // 2026-07-27 — the schedule behaves as if that PM never happened). A
+      // post-archive void keeps `archived_at` set on the untouched record, so
+      // the timestamp alone no longer implies a valid completion — status
+      // must be checked too.
+      if (row.archivedAt && row.status !== 'voided') {
         if (row.archivedAt.getTime() <= row.dueOn.getTime()) bucket.onTime += 1;
         else bucket.late += 1;
       } else {
-        // Still open (voided, or overdue-and-incomplete as of `now`) — not completed for this period.
+        // Voided (pre- or post-archive), or overdue-and-incomplete as of
+        // `now` — not completed for this period.
         bucket.notCompleted += 1;
       }
       byArea.set(key, bucket);

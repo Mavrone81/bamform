@@ -22,6 +22,16 @@ export const listRecordsQuerySchema = z.object({
   archivedTo: z.string().optional(),
   technician: z.string().uuid().optional(),
   approver: z.string().uuid().optional(),
+  /**
+   * Slice 17-VOID — omitted: whole archive INCLUDING voided-archived records
+   * (auditors must see voids); `true`: only voided; `false`: exclude voided.
+   * Accepts the string forms a query string delivers (same convention as
+   * `listJobsQuerySchema.overdue`).
+   */
+  voided: z
+    .union([z.boolean(), z.string()])
+    .transform((v) => (typeof v === 'string' ? v === 'true' : v))
+    .optional(),
 });
 export type ListRecordsQuery = z.infer<typeof listRecordsQuerySchema>;
 

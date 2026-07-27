@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { JobStatusT } from '@prisma/client';
 import type { IntegrityResult } from '@bamform/shared';
 import { notFoundProblem } from '../common/domain-problems';
 import { computeContentHash } from '../crypto/content-hash';
@@ -103,10 +104,18 @@ export class IntegrityService {
     });
 
     const intact = mismatches.length === 0;
+    // Slice 17-VOID — truthfulness for a voided record: `intact` speaks ONLY
+    // to cryptographic integrity (the content never changed, so signatures
+    // still verify), while `voided` states the record's standing. Both are
+    // reported; neither masks the other.
+    const voided = job.status === JobStatusT.voided;
     return {
       recordId,
       intact,
       checkedAt: new Date().toISOString(),
+      voided,
+      voidReason: voided ? job.voidReason : null,
+      voidedAt: voided && job.voidedAt ? job.voidedAt.toISOString() : null,
       signatures,
       mismatchDetail: intact ? null : mismatches.join(' '),
     };

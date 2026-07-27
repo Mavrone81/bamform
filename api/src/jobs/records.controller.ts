@@ -45,6 +45,7 @@ export class RecordsController {
     @Query('archivedTo') archivedTo?: string,
     @Query('technician') technician?: string,
     @Query('approver') approver?: string,
+    @Query('voided') voided?: string,
   ) {
     return this.records.list(user.sub, user.roles, {
       limit,
@@ -57,6 +58,9 @@ export class RecordsController {
       archivedTo,
       technician,
       approver,
+      // Slice 17-VOID — omitted: include voided-archived records (auditors
+      // must see voids); 'true': only voided; 'false': exclude them.
+      voided: voided === undefined ? undefined : voided === 'true',
     });
   }
 

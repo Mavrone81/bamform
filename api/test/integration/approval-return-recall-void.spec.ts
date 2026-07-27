@@ -188,18 +188,26 @@ describe('Jobs — return/recall/void (PR-046/074/075)', () => {
       });
     });
 
-    it('U-STM-03: void is rejected once a job is ARCHIVED (no transition out of ARCHIVED)', async () => {
+    it('U-STM-03 (amended, slice 17): void from ARCHIVED is ADMIN-only — a TEAM_LEADER is refused 403 and the record is untouched', async () => {
+      // The owner's 2026-07-27 decision made ARCHIVED -> VOIDED legal (the
+      // annotation transition) — see approval-void-post-archive.spec.ts for
+      // the full post-archive suite (I-VOID-01..10). What this spec keeps
+      // pinning: the PRE-archive role set gains nothing — a non-ADMIN
+      // verifier role cannot void an archived record.
       const { jobId } = await createJobFixture(`PM-VOID-ARCHIVED-${randomUUID()}`, 'archived', {
         archivedAt: new Date(),
       });
-      const { token } = await verifierToken('ADMIN', 'admin-void-archived');
+      const { token } = await verifierToken('TEAM_LEADER', 'tl-void-archived');
 
       const res = await request(app.getHttpServer())
         .post(`/api/v1/jobs/${jobId}/void`)
         .set(...authHeader(token))
-        .send({ reason: 'attempting to void an archived record' })
-        .expect(409);
-      expect(res.body).toMatchObject({ type: '/errors/invalid-transition' });
+        .send({ reason: 'attempting a post-archive void without ADMIN' })
+        .expect(403);
+      expect(res.body).toMatchObject({ type: '/errors/forbidden' });
+
+      const jobRow = await adminPool.query('SELECT status FROM "job" WHERE id = $1', [jobId]);
+      expect(jobRow.rows[0].status).toBe('archived');
     });
 
     it('void is legal from SCHEDULED (before any capture begins)', async () => {

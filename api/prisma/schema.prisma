@@ -656,6 +656,7 @@ model Job {
   archivedAt          DateTime?    @map("archived_at") @db.Timestamptz(6)
   voidReason          String?      @map("void_reason")
   voidedBy            String?      @map("voided_by") @db.Uuid
+  voidedAt            DateTime?    @map("voided_at") @db.Timestamptz(6)
   draftVersion        Int          @default(0) @map("draft_version")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -675,10 +676,17 @@ model Job {
   approvalSteps      ApprovalStep[]
 
   @@index([assetId, dueOn(sort: Desc)])
-  // PR-052 idempotency key (I-INV-14). Added via a hand-written CONCURRENTLY
-  // migration (job is a large table, M-06) — see
-  // 20260724030000_job_asset_frequency_scope_due_on_key_concurrent.
-  @@unique([assetId, frequencyScope, dueOn], map: "job_asset_frequency_scope_due_on_key")
+  // PR-052 idempotency key (I-INV-14) — since slice 17-VOID a PARTIAL unique
+  // index, `job_asset_frequency_scope_due_on_not_voided_key` ON (asset_id,
+  // frequency_scope, due_on) WHERE status <> 'voided': a VOIDED job never
+  // occupies its schedule period (SYS-19, owner decision 2026-07-27), so the
+  // scheduler can generate the replacement. Prisma's DSL cannot express
+  // partial unique indexes (same as INV-01's one-current-revision index), so
+  // it lives ONLY in raw SQL — see migrations 20260728000010 (create
+  // partial) + 20260728000020 (drop the old full `@@unique`). Violations
+  // still surface as P2002 (job-generation.service.ts's idempotent-no-op
+  // path); no code used the generated compound-unique input, so dropping the
+  // `@@unique` declaration changes no call site.
   @@map("job")
 }
 

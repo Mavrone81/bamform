@@ -18,7 +18,11 @@ describe('job-state-machine (PRD §5.1, U-STM-01..03)', () => {
     [JobStatusT.in_progress]: ['ASSIGN', 'SUBMIT', 'VOID'],
     [JobStatusT.submitted]: ['VERIFY_ADVANCE', 'VERIFY_FINAL', 'RETURN', 'RECALL', 'VOID'],
     [JobStatusT.verified]: [],
-    [JobStatusT.archived]: [],
+    // Slice 17-VOID — the owner's 2026-07-27 decision: "Void is also possible
+    // after the full process is completed." ARCHIVED's ONLY exit is VOID
+    // (ADMIN-only, service-enforced), and the transition is an ANNOTATION —
+    // the archived record's content/signatures/hash are untouched.
+    [JobStatusT.archived]: ['VOID'],
     [JobStatusT.voided]: [],
   };
 
@@ -52,12 +56,21 @@ describe('job-state-machine (PRD §5.1, U-STM-01..03)', () => {
     expect(illegalCount).toBeGreaterThan(30);
   });
 
-  it('U-STM-03: no transition exists out of ARCHIVED, VERIFIED or VOIDED (terminal / never-resting states)', () => {
+  it('U-STM-03 (amended, slice 17): VERIFIED and VOIDED are terminal; ARCHIVED admits exactly VOID and nothing else', () => {
     for (const transition of ALL_TRANSITIONS) {
-      expect(isLegalTransition(JobStatusT.archived, transition)).toBe(false);
       expect(isLegalTransition(JobStatusT.verified, transition)).toBe(false);
       expect(isLegalTransition(JobStatusT.voided, transition)).toBe(false);
+      expect(isLegalTransition(JobStatusT.archived, transition)).toBe(transition === 'VOID');
     }
+  });
+
+  it('U-VOID-01: VOID is legal from ARCHIVED (post-archive void, owner decision 2026-07-27)', () => {
+    expect(isLegalTransition(JobStatusT.archived, 'VOID')).toBe(true);
+    expect(() => assertLegalTransition(JobStatusT.archived, 'VOID')).not.toThrow();
+  });
+
+  it('U-VOID-02: VOID is NOT legal from VOIDED — a voided record cannot be re-voided', () => {
+    expect(isLegalTransition(JobStatusT.voided, 'VOID')).toBe(false);
   });
 
   it('VERIFY_FINAL and VERIFY_ADVANCE are both only legal from SUBMITTED', () => {

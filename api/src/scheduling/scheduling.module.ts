@@ -6,6 +6,7 @@ import { JobGenerationService } from './job-generation.service';
 import { ScheduleRuleBootstrapService } from './schedule-rule-bootstrap.service';
 import { SchedulerLockService } from './scheduler-lock.service';
 import { SchedulerService } from './scheduler.service';
+import { VoidScheduleRecomputeService } from './void-schedule-recompute.service';
 
 /**
  * Slice 5 — scheduling engine (PR-050..058). Imported by BOTH `AppModule`
@@ -26,12 +27,14 @@ import { SchedulerService } from './scheduler.service';
     SchedulerLockService,
     SchedulerService,
     CompletionCascadeService,
+    VoidScheduleRecomputeService,
   ],
   exports: [
     SchedulerService,
     ScheduleRuleBootstrapService,
     JobGenerationService,
     CompletionCascadeService,
+    VoidScheduleRecomputeService,
   ],
 })
 export class SchedulingModule {}

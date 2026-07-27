@@ -22,6 +22,12 @@ export interface RecordListFilters {
   archivedTo?: string;
   technician?: string;
   approver?: string;
+  /**
+   * Slice 17-VOID: `undefined` (default) → the WHOLE archive, voided-archived
+   * records INCLUDED (an auditor must see voids, not lose them); `true` →
+   * only voided-archived; `false` → only live archived records.
+   */
+  voided?: boolean;
   afterId?: string;
   /** `POST /records/export`'s explicit `recordIds` selection (`records-export.service.ts`) — re-validated against area/role scope like every other filter here, never trusted bare. */
   ids?: string[];
@@ -45,7 +51,13 @@ export class RecordsRepository {
     const archivedAtFilter = buildArchivedAtFilter(filters.archivedFrom, filters.archivedTo);
 
     const where: Prisma.JobWhereInput = {
-      status: 'archived',
+      // Slice 17-VOID — "an archived record IS a job row with status =
+      // archived" grows one sibling: a job voided AFTER archive keeps its
+      // full double-signed record (`archived_at` remains set on the
+      // untouched row) and stays part of the archive, annotated VOIDED.
+      // Pre-archive voids (never verified, `archived_at IS NULL`) are NOT
+      // archive records and stay out, exactly as before.
+      AND: [archiveStatusWhere(filters.voided)],
       assetId: filters.assetId,
       frequency: filters.frequency,
       assignedTo: restrictToAssignee ?? undefined,
@@ -86,10 +98,21 @@ export class RecordsRepository {
 
   findByIdForRecord(id: string) {
     return this.prisma.job.findFirst({
-      where: { id, status: 'archived' },
+      where: { id, AND: [archiveStatusWhere(undefined)] },
       include: JOB_FULL_INCLUDE,
     });
   }
+}
+
+/** Slice 17-VOID — see `RecordListFilters.voided`. */
+function archiveStatusWhere(voided: boolean | undefined): Prisma.JobWhereInput {
+  if (voided === true) {
+    return { status: 'voided', archivedAt: { not: null } };
+  }
+  if (voided === false) {
+    return { status: 'archived' };
+  }
+  return { OR: [{ status: 'archived' }, { status: 'voided', archivedAt: { not: null } }] };
 }
 
 function buildArchivedAtFilter(from?: string, to?: string): Prisma.DateTimeFilter | undefined {

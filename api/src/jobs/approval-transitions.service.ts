@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ApprovalActionT, AuditActionT, JobStatusT } from '@prisma/client';
-import type { Job, ReturnJobRequest, VoidJobRequest } from '@bamform/shared';
+import { ApprovalActionT, AuditActionT, JobStatusT, type Prisma } from '@prisma/client';
+import type { Frequency, Job, ReturnJobRequest, VoidJobRequest } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import { forbiddenProblem } from '../common/domain-problems';
@@ -11,6 +11,7 @@ import { RECORD_SIGNING_SERVICE } from '../crypto/crypto.tokens';
 import type { RecordSigningService } from '../crypto/record-signer';
 import { NotificationQueueService } from '../notifications/notification-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { VoidScheduleRecomputeService } from '../scheduling/void-schedule-recompute.service';
 import { ApprovalRepository } from './approval.repository';
 import { buildCanonicalJobRecord } from './canonical-job-record';
 import { JOB_STATUS_FROM_DB, JUDGEMENT_FROM_DB } from './job-enums';
@@ -40,6 +41,7 @@ export class ApprovalTransitionsService {
     private readonly idempotency: IdempotencyService,
     @Inject(RECORD_SIGNING_SERVICE) private readonly recordSigner: RecordSigningService,
     private readonly notificationQueue: NotificationQueueService,
+    private readonly voidScheduleRecompute: VoidScheduleRecomputeService,
   ) {}
 
   async return_(
@@ -136,6 +138,20 @@ export class ApprovalTransitionsService {
     // PR-046: void leaves the record visible/queryable — a soft terminal
     // status, never a delete (no-DELETE non-negotiable).
     const stageOrdinal = job.currentStageOrdinal ?? 0;
+    const now = new Date();
+
+    // Slice 17-VOID — the owner's 2026-07-27 decision: void is reachable
+    // AFTER archive too, as an ANNOTATION on the untouched double-signed
+    // record (the amended INV-09 trigger enforces byte-identity of every
+    // non-annotation column at the database). Post-archive void is
+    // ADMIN-only; the pre-archive role set (route-level TL/ENG/ADMIN) is
+    // unchanged. `reason` is mandatory for both (INV-12, >= 10 chars).
+    const isPostArchive = job.status === JobStatusT.archived;
+    if (isPostArchive && !roles.includes('ADMIN')) {
+      throw forbiddenProblem(
+        'Voiding an archived record is ADMIN-only (owner decision 2026-07-27, slice 17).',
+      );
+    }
 
     return this.runTransition(job, {
       jobId,
@@ -149,24 +165,54 @@ export class ApprovalTransitionsService {
       // SYS-18 (slice 15-SYSWIRE) — void previously passed `{}` here, making
       // it the one transition whose guarded WHERE re-asserted nothing: a
       // concurrent archive/void committing inside the read->write window
-      // would be overwritten. Re-assert VOID's whole legal-from set (any of
-      // them is still a valid void source, so pinning the exact pre-read
-      // status would reject a harmless SCHEDULED->ASSIGNED race).
-      dbUpdateWhereExtra: {
-        status: {
-          in: [
-            JobStatusT.scheduled,
-            JobStatusT.assigned,
-            JobStatusT.in_progress,
-            JobStatusT.submitted,
-          ],
-        },
+      // would be overwritten. Re-assert VOID's legal-from set for the path
+      // taken: post-archive pins `archived` exactly (an ADMIN-authorised
+      // post-archive void must not silently absorb a pre-archive race, whose
+      // authorisation and schedule semantics differ); pre-archive keeps the
+      // whole pre-terminal set (any of them is still a valid void source, so
+      // pinning the exact pre-read status would reject a harmless
+      // SCHEDULED->ASSIGNED race).
+      dbUpdateWhereExtra: isPostArchive
+        ? { status: JobStatusT.archived }
+        : {
+            status: {
+              in: [
+                JobStatusT.scheduled,
+                JobStatusT.assigned,
+                JobStatusT.in_progress,
+                JobStatusT.submitted,
+              ],
+            },
+          },
+      dbUpdateData: {
+        status: JobStatusT.voided,
+        voidReason: dto.reason,
+        voidedBy: actor.actorId,
+        voidedAt: now,
       },
-      dbUpdateData: { status: JobStatusT.voided, voidReason: dto.reason, voidedBy: actor.actorId },
       canonicalStatus: 'VOIDED',
       auditBefore: { status: JOB_STATUS_FROM_DB[job.status] },
-      auditAfter: { status: 'VOIDED', reason: dto.reason },
+      auditAfter: isPostArchive
+        ? { status: 'VOIDED', reason: dto.reason, postArchive: true }
+        : { status: 'VOIDED', reason: dto.reason },
       actorRoleCode: roles.join('+') || 'UNKNOWN',
+      // Owner decision consequence 1: the schedule behaves as if the voided
+      // PM never happened — recomputed IN THE SAME TRANSACTION as the void
+      // annotation (a void without its recompute would leave the schedule
+      // crediting a completion the plant just disowned). Pre-archive voids
+      // never advanced the schedule, so there is nothing to undo there —
+      // regeneration for those is handled purely by the partial period key
+      // (20260728000010).
+      afterGuardedUpdateInTx: isPostArchive
+        ? (tx) =>
+            this.voidScheduleRecompute.apply(tx, {
+              jobId,
+              assetId: job.assetId,
+              frequencyScope: job.frequencyScope as Frequency[],
+              voidedJobDueOn: job.dueOn,
+              actorId: actor.actorId,
+            })
+        : undefined,
     });
   }
 
@@ -194,6 +240,13 @@ export class ApprovalTransitionsService {
       auditBefore: Record<string, unknown>;
       auditAfter: Record<string, unknown>;
       actorRoleCode: string;
+      /**
+       * Slice 17 — runs INSIDE the transaction, immediately after the guarded
+       * status update succeeds (mirrors where `VerificationService` calls the
+       * forward completion cascade). Used by the post-archive void to
+       * recompute the asset's schedule atomically with the annotation.
+       */
+      afterGuardedUpdateInTx?: (tx: Prisma.TransactionClient) => Promise<void>;
     },
   ): Promise<Job> {
     const approvalStepId = randomUUID();
@@ -209,6 +262,10 @@ export class ApprovalTransitionsService {
           throw forbiddenProblem(
             'This record changed state before this action could be applied — reload and retry.',
           );
+        }
+
+        if (params.afterGuardedUpdateInTx) {
+          await params.afterGuardedUpdateInTx(tx);
         }
 
         const priorSteps = await this.approvalRepo.listApprovalSteps(params.jobId, tx);
