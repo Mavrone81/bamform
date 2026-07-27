@@ -25,6 +25,7 @@ USER root
 RUN deluser nginx 2>/dev/null || true; \
     addgroup -g 10001 -S bamform && adduser -u 10001 -S bamform -G bamform
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY web/security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY --from=build --chown=10001:10001 /app/web/dist /usr/share/nginx/html
 USER 10001:10001
 EXPOSE 8080
