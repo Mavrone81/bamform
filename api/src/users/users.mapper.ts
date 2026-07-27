@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AppUser, Role, UserRole } from '@prisma/client';
 import type { RoleCode, User, UserStatus } from '@bamform/shared';
 import { decodeIdentityField } from '../auth/crypto/identity-codec';
@@ -45,5 +46,40 @@ export function toUser(row: AppUserWithRoles, fieldEncryption: FieldEncryptionSe
     roles: row.userRoles.map((userRole) => userRole.role.code as RoleCode),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function ctSha256(bytes: Uint8Array | null | undefined): string | null {
+  return bytes ? createHash('sha256').update(bytes).digest('hex') : null;
+}
+
+/**
+ * CR-5 (crypto-review-2026-07-27) / PR-SEC-02 — the audit-payload projection
+ * of a user row. `audit_event.before`/`after` are append-only JSON with
+ * 7-year retention and no deletion path, so decrypted names/emails written
+ * there would be a PERMANENT plaintext copy that defeats the field
+ * encryption entirely (`toUser` above decrypts — it exists for API
+ * responses, never for audit payloads).
+ *
+ * PR-SEC-02: "Where an audit diff concerns an encrypted column, it records
+ * that the field changed and its ciphertext digest, not the value" — hence
+ * SHA-256 digests of the CIPHERTEXT columns: an auditor can see that/which
+ * fields changed (digest differs) without the payload holding any personal
+ * data, and the digest is of AEAD ciphertext so it is not brute-forceable
+ * the way a digest of a low-entropy plaintext (an email) would be.
+ */
+export function toUserAuditView(row: AppUserWithRoles): Record<string, unknown> {
+  return {
+    id: row.id,
+    status: row.status,
+    active: row.status === 'active',
+    roles: row.userRoles
+      .filter((userRole) => userRole.active)
+      .map((userRole) => userRole.role.code),
+    mustChangePassword: row.mustChangePassword,
+    dekVersion: row.dekVersion,
+    fullNameCtSha256: ctSha256(row.fullNameCt),
+    emailCtSha256: ctSha256(row.emailCt),
+    employeeIdCtSha256: ctSha256(row.employeeIdCt),
   };
 }
