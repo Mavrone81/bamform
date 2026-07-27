@@ -6,6 +6,7 @@ import { RECORD_SIGNING_SERVICE } from '../crypto/crypto.tokens';
 import type { RecordSigningService } from '../crypto/record-signer';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildCanonicalJobRecord } from './canonical-job-record';
+import { JobAccessService } from './job-access';
 import { JOB_STATUS_FROM_DB, JUDGEMENT_FROM_DB } from './job-enums';
 import { JOB_FULL_INCLUDE, type JobFullRow } from './job-include';
 
@@ -35,9 +36,13 @@ export class IntegrityService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(RECORD_SIGNING_SERVICE) private readonly recordSigner: RecordSigningService,
+    private readonly access: JobAccessService,
   ) {}
 
-  async checkIntegrity(recordId: string): Promise<IntegrityResult> {
+  async checkIntegrity(
+    recordId: string,
+    actor: { userId: string; roles: string[] },
+  ): Promise<IntegrityResult> {
     const job = await this.prisma.job.findUnique({
       where: { id: recordId },
       include: JOB_FULL_INCLUDE,
@@ -45,6 +50,22 @@ export class IntegrityService {
     if (!job) {
       throw notFoundProblem('Record', recordId);
     }
+
+    // SYS-9 (slice 15-SYSWIRE) — object-level authorisation. This was the
+    // one record read that never received the caller: any authenticated user
+    // could probe arbitrary UUIDs and learn record existence, approval-step
+    // ids/timestamps, signingKeyId and mismatchDetail (IDOR). Same contour
+    // as every sibling job/record read: 403 out-of-scope (area), 403
+    // forbidden (MAINTAINER and not the assignee — "View archive: own",
+    // §4.1). `JobAccessService` rather than `RecordsService#assertAccessible`
+    // because integrity legitimately serves NON-archived jobs too (a
+    // submitted record's steps are checkable) and the two rules are
+    // identical for the roles involved; RecordsService lives in a module
+    // that imports THIS one, so using it here would create an import cycle.
+    await this.access.assertAccessible(actor, {
+      assignedTo: job.assignedTo,
+      areaId: job.asset.areaId,
+    });
 
     const steps = job.approvalSteps;
     const mismatches: string[] = [];

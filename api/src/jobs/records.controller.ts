@@ -66,8 +66,12 @@ export class RecordsController {
   }
 
   @Get(':recordId/integrity')
-  checkIntegrity(@Param('recordId') recordId: string) {
-    return this.integrity.checkIntegrity(recordId);
+  checkIntegrity(@Param('recordId') recordId: string, @CurrentUser() user: AccessTokenClaims) {
+    // SYS-9 (slice 15-SYSWIRE): the caller is now passed through so
+    // IntegrityService applies the same object-level scope/role gate its
+    // sibling record reads always had — previously any authenticated user
+    // could probe any UUID (IDOR).
+    return this.integrity.checkIntegrity(recordId, { userId: user.sub, roles: user.roles });
   }
 
   /** PR-116/117/118 — rendered on the worker, streamed back through `api` (never blocking `api` on Chromium — see `pdf-coordinator.service.ts`). */

@@ -146,7 +146,22 @@ export class ApprovalTransitionsService {
       action: ApprovalActionT.voidedAction,
       stageOrdinal,
       reason: dto.reason,
-      dbUpdateWhereExtra: {},
+      // SYS-18 (slice 15-SYSWIRE) — void previously passed `{}` here, making
+      // it the one transition whose guarded WHERE re-asserted nothing: a
+      // concurrent archive/void committing inside the read->write window
+      // would be overwritten. Re-assert VOID's whole legal-from set (any of
+      // them is still a valid void source, so pinning the exact pre-read
+      // status would reject a harmless SCHEDULED->ASSIGNED race).
+      dbUpdateWhereExtra: {
+        status: {
+          in: [
+            JobStatusT.scheduled,
+            JobStatusT.assigned,
+            JobStatusT.in_progress,
+            JobStatusT.submitted,
+          ],
+        },
+      },
       dbUpdateData: { status: JobStatusT.voided, voidReason: dto.reason, voidedBy: actor.actorId },
       canonicalStatus: 'VOIDED',
       auditBefore: { status: JOB_STATUS_FROM_DB[job.status] },

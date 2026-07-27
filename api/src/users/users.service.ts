@@ -19,7 +19,7 @@ import { toBytes } from '../common/prisma-bytes';
 import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
 import type { FieldEncryptionService } from '../crypto/field-encryption';
 import { PrismaService } from '../prisma/prisma.service';
-import { toUser, type AppUserWithRoles } from './users.mapper';
+import { toUser, toUserAuditView, type AppUserWithRoles } from './users.mapper';
 
 export interface ListUsersParams {
   limit?: unknown;
@@ -184,7 +184,11 @@ export class UsersService {
           action: AuditActionT.create,
           entityType: 'user',
           entityId: row.id,
-          after,
+          // CR-5/PR-SEC-02 — NEVER the decrypted `User` object: audit rows
+          // are append-only, 7-year-retained JSON, so a decrypted name/email
+          // written here is a permanent plaintext copy. The audit view holds
+          // non-personal fields + ciphertext digests only.
+          after: toUserAuditView(withRoles),
           sourceIp: actor.sourceIp,
           requestId: actor.requestId,
         });
@@ -216,6 +220,37 @@ export class UsersService {
 
     const personalFieldsChanged = dto.fullName !== undefined || dto.email !== undefined;
     const activeChanged = dto.active !== undefined;
+
+    // SYS-11 (slice 15-SYSWIRE) — with one admin in production, a single
+    // mistaken self-PATCH (deactivate, or drop own ADMIN role) is instant
+    // total admin lockout; 13a's enforcement makes it bite at the next token
+    // refresh and recovery is psql surgery on the box. Guard: acting on
+    // YOURSELF in a way that removes your admin capability is rejected when
+    // no OTHER active user holds an active ADMIN role. Deliberately
+    // last-admin-scoped, not a blanket self-deactivation ban — with a second
+    // admin present, deactivating yourself is legitimate (and the MFA
+    // runbook's "create a second ADMIN first" advice becomes enforced).
+    if (id === actor.actorId) {
+      const isSelfDeactivation = dto.active === false;
+      const dropsOwnAdmin =
+        dto.roleCodes !== undefined &&
+        before.roles.includes('ADMIN') &&
+        !dto.roleCodes.includes('ADMIN');
+      if (isSelfDeactivation || dropsOwnAdmin) {
+        const otherActiveAdmins = await this.prisma.appUser.count({
+          where: {
+            id: { not: id },
+            status: UserStatusT.active,
+            userRoles: { some: { active: true, role: { code: 'ADMIN' } } },
+          },
+        });
+        if (otherActiveAdmins === 0) {
+          throw conflictProblem(
+            'You are the last active ADMIN — deactivating yourself or dropping your own ADMIN role would lock all administrative access out of the system (SYS-11). Create another active ADMIN first.',
+          );
+        }
+      }
+    }
 
     const currentEmployeeId = existing.employeeIdCt
       ? decodeIdentityField(
@@ -317,8 +352,12 @@ export class UsersService {
             action: AuditActionT.update,
             entityType: 'user',
             entityId: row.id,
-            before,
-            after,
+            // CR-5/PR-SEC-02 — see `toUserAuditView`: ciphertext digests,
+            // never decrypted personal fields, in the append-only audit
+            // payload. A changed field is still evident (its digest differs
+            // between `before` and `after`).
+            before: toUserAuditView(existing),
+            after: toUserAuditView(refreshed),
             sourceIp: actor.sourceIp,
             requestId: actor.requestId,
           });
