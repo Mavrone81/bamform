@@ -7,14 +7,17 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import {
+  userAreaScopeSetSchema,
   userCreateSchema,
   userUpdateSchema,
+  type UserAreaScopeSet,
   type UserCreate,
   type UserUpdate,
 } from '@bamform/shared';
@@ -84,6 +87,23 @@ export class UsersController {
     @Req() req: Request,
   ): Promise<void> {
     await this.mfa.resetForUser(userId, { actorId: user.sub, ...requestMeta(req) });
+  }
+
+  /**
+   * Slice 13-UI-B (SYS-10) — sets/REPLACES the user's area-scope set
+   * (PR-API-10's write path; `API_SPECIFICATION.md` §10.9's user-roles
+   * conventions applied to `user_area_scope`). `[]` clears every scope
+   * (unrestricted). Soft-remove semantics, `permission_change` audit —
+   * see `UsersService#setAreaScopes`.
+   */
+  @Put(':userId/area-scopes')
+  setAreaScopes(
+    @Param('userId') userId: string,
+    @Body(new ZodValidationPipe(userAreaScopeSetSchema)) dto: UserAreaScopeSet,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+  ) {
+    return this.users.setAreaScopes(userId, dto, { actorId: user.sub, ...requestMeta(req) });
   }
 
   @Patch(':userId')

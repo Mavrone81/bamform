@@ -325,6 +325,10 @@ model UserRole {
 model UserAreaScope {
   userId String @map("user_id") @db.Uuid
   areaId String @map("area_id") @db.Uuid
+  // Slice 13-UI-B (SYS-10): soft-remove flag — `PUT /users/{id}/area-scopes`
+  // revokes a scope by flipping this false (INV-16: no DELETE grant), same
+  // convention as `user_role.active`. Readers filter to `active: true`.
+  active Boolean @default(true)
 
   user AppUser @relation(fields: [userId], references: [id])
   area Area    @relation(fields: [areaId], references: [id])

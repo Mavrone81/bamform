@@ -124,6 +124,23 @@ test('E-06: an unenrolled ADMIN scans, confirms, saves the recovery codes and la
     await expect(codes).toHaveCount(10);
     await expect(page.getByRole('alert')).toContainText(/shown once/i);
 
+    // 13-UI-A review m5: Copy and Download are the ONLY mechanisms by which
+    // a user saves credentials that can never be shown again — both are
+    // exercised here for real, not assumed. The clipboard must end up
+    // holding all ten codes, and the download must produce the named file.
+    const codeTexts = await codes.allInnerTexts();
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.getByRole('button', { name: 'Copy codes' }).click();
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    for (const code of codeTexts) {
+      expect(clipboard).toContain(code.trim());
+    }
+
+    const downloadEvent = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download codes' }).click();
+    const download = await downloadEvent;
+    expect(download.suggestedFilename()).toBe('bamform-recovery-codes.txt');
+
     // Nothing moves until the user says they have saved them. The Continue
     // button is the only way forward and it is disabled.
     const proceed = page.getByRole('button', { name: 'Continue' });

@@ -26,14 +26,15 @@ type Problem = components['schemas']['Problem'];
 let required = false;
 const listeners = new Set<(required: boolean) => void>();
 
-/** The `type` the server sends. Compared with `includes` because the api
- * emits the relative form (`/errors/password-change-required`) while other
- * problem documents in this system carry the absolute
- * `https://form.bevorasg.com/...` prefix — the same convention
- * `RecordReview.tsx` already uses for `step-up-required`. */
+/** The `type` the server sends. Compared with `endsWith` (13-UI-A review
+ * m4): it tolerates the relative/absolute prefix split — the api emits the
+ * relative `/errors/password-change-required` while other problem documents
+ * carry the absolute `https://form.bevorasg.com/...` prefix — but, unlike
+ * the previous `includes`, it cannot latch the global gate for any problem
+ * whose type merely CONTAINS the phrase somewhere in the middle. */
 export function isPasswordChangeRequiredProblem(problem: unknown): boolean {
   const type = (problem as Problem | undefined)?.type;
-  return typeof type === 'string' && type.includes('password-change-required');
+  return typeof type === 'string' && type.endsWith('/errors/password-change-required');
 }
 
 export function markPasswordChangeRequired(): void {

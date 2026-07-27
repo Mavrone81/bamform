@@ -47,6 +47,13 @@ export const userSchema = z.object({
   /** Derived from `status === 'ACTIVE'` — the deactivation flag PR-039/UR-075 requires in place of hard delete. */
   active: z.boolean(),
   roles: z.array(roleCodeSchema),
+  /**
+   * Slice 13-UI-B (SYS-10) — the user's ACTIVE area scopes (PR-API-10).
+   * `[]` means UNRESTRICTED (sees every area), mirroring the read side's
+   * "absence of rows means unrestricted". Written via
+   * `PUT /users/{userId}/area-scopes`; soft-removed rows never appear here.
+   */
+  areaIds: z.array(z.string().uuid()),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -85,3 +92,17 @@ export const userUpdateSchema = z.object({
   roleCodes: z.array(roleCodeSchema).min(1).optional(),
 });
 export type UserUpdate = z.infer<typeof userUpdateSchema>;
+
+/**
+ * `api/openapi.yaml` `UserAreaScopeSet` — `PUT /users/{userId}/area-scopes`
+ * (slice 13-UI-B, SYS-10: the write path that makes PR-API-10's read-side
+ * enforcement reachable). REPLACES the user's area-scope set wholesale, the
+ * same way `UserUpdate.roleCodes` replaces roles. `[]` is legal and means
+ * "unrestricted" (clears every scope). Removal is a soft-remove
+ * (`user_area_scope.active = false`, INV-16: no DELETE grant), and the
+ * change produces a `permission_change` audit event.
+ */
+export const userAreaScopeSetSchema = z.object({
+  areaIds: z.array(z.string().uuid()),
+});
+export type UserAreaScopeSet = z.infer<typeof userAreaScopeSetSchema>;

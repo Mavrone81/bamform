@@ -24,13 +24,16 @@ describe('applyAreaScope (PR-API-10 mechanism)', () => {
 });
 
 describe('AreaScopeService', () => {
-  it('returns null (unrestricted) when the user has no user_area_scope rows', async () => {
+  it('returns null (unrestricted) when the user has no ACTIVE user_area_scope rows', async () => {
     const prisma = { userAreaScope: { findMany: jest.fn().mockResolvedValue([]) } };
     const service = new AreaScopeService(prisma as never);
 
     await expect(service.getAllowedAreaIds('user-1')).resolves.toBeNull();
+    // Slice 13-UI-B (SYS-10): the read filters to `active: true` — a
+    // soft-removed scope (INV-16: revocation cannot DELETE the row) must
+    // never count against the user.
     expect(prisma.userAreaScope.findMany).toHaveBeenCalledWith({
-      where: { userId: 'user-1' },
+      where: { userId: 'user-1', active: true },
       select: { areaId: true },
     });
   });

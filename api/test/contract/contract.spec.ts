@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  assetUpdateSchema,
   assignJobRequestSchema,
   listRecordsQuerySchema,
   mfaChallengeResponseSchema,
@@ -10,6 +11,7 @@ import {
   mfaRecoveryRequestSchema,
   mfaVerifyRequestSchema,
   passwordChangeRequestSchema,
+  userAreaScopeSetSchema,
 } from '@bamform/shared';
 import { enumerateRoutes } from './route-inventory';
 import { listOpenapiOperations, getSchema, loadOpenapiDocument } from './openapi-loader';
@@ -171,6 +173,8 @@ describe('test:contract — response-schema conformance', () => {
         'status',
         'active',
         'roles',
+        // Slice 13-UI-B (SYS-10) — active area scopes; [] = unrestricted.
+        'areaIds',
         'createdAt',
         'updatedAt',
       ],
@@ -403,6 +407,66 @@ describe('test:contract — slice 15-SYSWIRE assign schema matches its Zod DTO e
     expect(documented).toContain('POST /jobs/{jobId}/assign');
     const allowlisted = FUTURE_SLICE_OPENAPI_PATHS.map((gap) => `${gap.method} ${gap.path}`);
     expect(allowlisted).not.toContain('POST /jobs/{jobId}/assign');
+  });
+});
+
+/**
+ * Slice 13-UI-B (SYS-10) — `PUT /users/{userId}/area-scopes`. Same
+ * mechanical openapi-vs-Zod check the 13-MFA schemas get: keys AND
+ * required-ness, both directions, derived from the schema the server
+ * actually validates against.
+ */
+describe('test:contract — slice 13-UI-B area-scope schema matches its Zod DTO exactly', () => {
+  function zodShape(schema: z.ZodObject<z.ZodRawShape>): { keys: string[]; required: string[] } {
+    const shape = schema.shape as Record<string, z.ZodTypeAny>;
+    const keys = Object.keys(shape);
+    const required = keys.filter((key) => !shape[key].safeParse(undefined).success);
+    return { keys: keys.sort(), required: required.sort() };
+  }
+
+  it('openapi UserAreaScopeSet documents the same keys as userAreaScopeSetSchema', () => {
+    const schema = getSchema('UserAreaScopeSet');
+    expect(Object.keys(schema.properties as object).sort()).toEqual(
+      zodShape(userAreaScopeSetSchema).keys,
+    );
+  });
+
+  it('openapi UserAreaScopeSet marks the same fields required as userAreaScopeSetSchema', () => {
+    const schema = getSchema('UserAreaScopeSet') as { required?: string[] };
+    expect([...(schema.required ?? [])].sort()).toEqual(zodShape(userAreaScopeSetSchema).required);
+  });
+
+  it('userAreaScopeSetSchema accepts an EMPTY set — [] means "clear to unrestricted", so the contract must not quietly grow a minItems', () => {
+    expect(userAreaScopeSetSchema.safeParse({ areaIds: [] }).success).toBe(true);
+    const schema = getSchema('UserAreaScopeSet') as {
+      properties: { areaIds: { minItems?: number } };
+    };
+    expect(schema.properties.areaIds.minItems).toBeUndefined();
+  });
+
+  it('PUT /users/{userId}/area-scopes is documented and not parked in the future-work allowlist', () => {
+    const documented = listOpenapiOperations().map((op) => `${op.method} ${op.path}`);
+    expect(documented).toContain('PUT /users/{userId}/area-scopes');
+    const allowlisted = FUTURE_SLICE_OPENAPI_PATHS.map((gap) => `${gap.method} ${gap.path}`);
+    expect(allowlisted).not.toContain('PUT /users/{userId}/area-scopes');
+  });
+
+  it('User.areaIds is documented as required — toUser always emits it', () => {
+    const schema = getSchema('User') as { required?: string[] };
+    expect(schema.required).toContain('areaIds');
+  });
+
+  it('B-1: AssetUpdate.areaId is NULLABLE on both sides — explicit null clears the area assignment', () => {
+    // Zod: null accepted (clears), undefined accepted (no change), and a
+    // non-uuid string still rejected — nullability did not loosen the type.
+    expect(assetUpdateSchema.safeParse({ areaId: null }).success).toBe(true);
+    expect(assetUpdateSchema.safeParse({}).success).toBe(true);
+    expect(assetUpdateSchema.safeParse({ areaId: 'not-a-uuid' }).success).toBe(false);
+    // openapi mirrors it: `type: [string, 'null']`.
+    const schema = getSchema('AssetUpdate') as {
+      properties: { areaId: { type: string | string[] } };
+    };
+    expect(schema.properties.areaId.type).toEqual(['string', 'null']);
   });
 });
 

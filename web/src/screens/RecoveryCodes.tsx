@@ -43,7 +43,10 @@ export function RecoveryCodes({ codes }: { codes: readonly string[] }) {
     anchor.href = url;
     anchor.download = RECOVERY_CODES_FILENAME;
     anchor.click();
-    URL.revokeObjectURL(url);
+    // Deferred revoke (13-UI-A review m8): synchronous revocation right
+    // after click() is fine in Chromium but historically flaky elsewhere —
+    // a macrotask later, the download has started and the URL is safe to drop.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   return (

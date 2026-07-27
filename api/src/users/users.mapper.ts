@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto';
-import type { AppUser, Role, UserRole } from '@prisma/client';
+import type { AppUser, Role, UserAreaScope, UserRole } from '@prisma/client';
 import type { RoleCode, User, UserStatus } from '@bamform/shared';
 import { decodeIdentityField } from '../auth/crypto/identity-codec';
 import type { FieldEncryptionService } from '../crypto/field-encryption';
 
 export type UserRoleWithRole = UserRole & { role: Role };
-export type AppUserWithRoles = AppUser & { userRoles: UserRoleWithRole[] };
+export type AppUserWithRoles = AppUser & {
+  userRoles: UserRoleWithRole[];
+  /** Filtered to `active: true` BEFORE this mapper runs — same contract as `userRoles`. */
+  userAreaScopes: UserAreaScope[];
+};
 
 const STATUS_FROM_DB: Record<string, UserStatus> = {
   active: 'ACTIVE',
@@ -44,6 +48,9 @@ export function toUser(row: AppUserWithRoles, fieldEncryption: FieldEncryptionSe
     status: STATUS_FROM_DB[row.status],
     active: row.status === 'active',
     roles: row.userRoles.map((userRole) => userRole.role.code as RoleCode),
+    // Slice 13-UI-B (SYS-10): ACTIVE scopes only (pre-filtered, like
+    // `userRoles`). `[]` = unrestricted, mirroring PR-API-10's read side.
+    areaIds: row.userAreaScopes.map((scope) => scope.areaId),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

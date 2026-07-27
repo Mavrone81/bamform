@@ -1,0 +1,23 @@
+-- BamForm — slice 13-UI-B (SYS-10: area-scope write path).
+-- Forward-only, additive; does not edit any prior migration.
+--
+-- Reversal:
+--   ALTER TABLE "user_area_scope" DROP COLUMN "active";
+--
+-- ============================================================ Why
+--
+-- `PUT /users/{userId}/area-scopes` lets an ADMIN replace a user's area-scope
+-- set (`users.service.ts#setAreaScopes`). `bamform_app` has NO `DELETE` grant
+-- on any table (INV-16, `api/prisma/grants.sql`), so a removed
+-- `user_area_scope` row cannot be deleted — this additive `active` boolean
+-- (default `true`, matching every existing row's semantics: it was assigned
+-- and never removed) is the soft-remove flag, the same convention as
+-- `user_role.active` / `delegation.revoked_at` / `template_item.active`.
+-- A re-assignment of a previously-removed area flips this back to `true`
+-- (upsert), never inserts a second `(user_id, area_id)` row. The read side
+-- (`common/area-scope.ts#getAllowedAreaIds`, `auth/current-user.builder.ts`)
+-- filters to `active = true`, so "no ACTIVE rows" keeps meaning unrestricted
+-- (PR-API-10's "absence of rows means unrestricted").
+-- Single boolean column, no index, no `CONCURRENTLY` needed (M-06 is about
+-- indexes on large tables).
+ALTER TABLE "user_area_scope" ADD COLUMN IF NOT EXISTS "active" BOOLEAN NOT NULL DEFAULT true;

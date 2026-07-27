@@ -448,6 +448,7 @@ Full schemas in `api/openapi.yaml`. Summarised here by resource group.
 | `POST` | `/users/{id}/mfa-reset` | ADMIN only. Clears MFA enrolment and invalidates unused recovery codes; audited `mfa_reset` (§3.2) |
 | `GET` | `/roles` | |
 | `PUT` | `/users/{id}/roles` | Produces a `permission_change` audit event |
+| `PUT` | `/users/{id}/area-scopes` | ADMIN only. REPLACES the user's PR-API-10 area-scope set (`[]` = unrestricted); soft-remove (`user_area_scope.active`), `permission_change` audit event |
 | `GET` `PUT` | `/asset-types/{id}/approval-route` | Exposes PR-070 route configuration |
 
 ---

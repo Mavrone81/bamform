@@ -8,6 +8,14 @@ import { RecordReview } from './screens/RecordReview';
 import { Delegations } from './screens/Delegations';
 import { ChangePassword } from './screens/ChangePassword';
 import { AdminMfaReset } from './screens/AdminMfaReset';
+import { AdminHome } from './screens/AdminHome';
+import { AdminUsers } from './screens/AdminUsers';
+import { AdminUserCreate } from './screens/AdminUserCreate';
+import { AdminUserDetail } from './screens/AdminUserDetail';
+import { AdminMachines } from './screens/AdminMachines';
+import { AdminMachineCreate } from './screens/AdminMachineCreate';
+import { AdminMachineDetail } from './screens/AdminMachineDetail';
+import { AdminAreas } from './screens/AdminAreas';
 import { RecoveryCodes } from './screens/RecoveryCodes';
 import { Menu } from './screens/Menu';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -116,6 +124,19 @@ function Screens() {
     if (matchPath('/delegations', path)) return <Delegations />;
     if (matchPath('/change-password', path)) return <ChangePassword />;
     if (matchPath('/admin/mfa-reset', path)) return <AdminMfaReset />;
+    // Slice 13-UI-B — the admin area. Routing only; ADMIN-ness is decided by
+    // the server per request (non-negotiable #6): a non-admin reaching any
+    // of these URLs sees the API's own 403 surfaced by the screen.
+    if (matchPath('/admin', path)) return <AdminHome />;
+    if (matchPath('/admin/users/new', path)) return <AdminUserCreate />;
+    const adminUserParams = matchPath('/admin/users/:id', path);
+    if (adminUserParams) return <AdminUserDetail userId={adminUserParams.id} />;
+    if (matchPath('/admin/users', path)) return <AdminUsers />;
+    if (matchPath('/admin/machines/new', path)) return <AdminMachineCreate />;
+    const adminMachineParams = matchPath('/admin/machines/:id', path);
+    if (adminMachineParams) return <AdminMachineDetail assetId={adminMachineParams.id} />;
+    if (matchPath('/admin/machines', path)) return <AdminMachines />;
+    if (matchPath('/admin/areas', path)) return <AdminAreas />;
     if (matchPath('/menu', path)) return <Menu />;
     const jobParams = matchPath('/jobs/:id', path);
     if (jobParams) return <RecordCapture jobId={jobParams.id} />;

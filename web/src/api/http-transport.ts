@@ -25,7 +25,13 @@ import type {
   AttachmentUploadResult,
 } from './transport';
 
-async function authorizedFetch(
+/**
+ * Exported for `admin-client.ts` (slice 13-UI-B): the admin surface's calls
+ * must ride the SAME seam as every other authenticated request — bearer
+ * attachment, the one-shot silent 401-refresh, and the forced-password-change
+ * latch below — rather than growing a second, subtly different fetch wrapper.
+ */
+export async function authorizedFetch(
   path: string,
   init: RequestInit = {},
   attempt = 0,
