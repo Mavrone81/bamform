@@ -40,12 +40,28 @@
 -- no-op. It is also a no-op on a database where an administrator has
 -- already introduced their own code for this route.
 
-UPDATE "approval_route"
-SET "code" = 'TWO_STAGE_TL_THEN_ENG'
-WHERE "code" = 'SINGLE_STAGE_TL_OR_ENG';
-
 -- UR-076 / DBD §10.1 — data migrations that touch records write an
--- audit_event; guarded so re-running stays idempotent.
+-- audit_event. TWO guards, and they are guarding different things:
+--
+--   EXISTS (SELECT 1 FROM renamed)  — the audit row is written only if the
+--     UPDATE actually matched. Keying solely on the migration name (the
+--     pattern inherited from 20260725000000, which is applied and therefore
+--     immutable — the same weakness lives on there) would assert a change on
+--     a database where the code had already been altered by other means and
+--     the UPDATE matched nothing. An audit trail that records changes which
+--     did not happen is worse than one that records none.
+--
+--   NOT EXISTS (… ->> 'migration' = …) — idempotency (PR-RUN-07 / DBD §10.1):
+--     a second run must not append a second row. In practice the first guard
+--     already covers the re-run case (the code no longer matches, so nothing
+--     is updated), but the two conditions are independent and the invariant
+--     "at most one audit row per migration" should not rest on that overlap.
+WITH renamed AS (
+  UPDATE "approval_route"
+  SET "code" = 'TWO_STAGE_TL_THEN_ENG'
+  WHERE "code" = 'SINGLE_STAGE_TL_OR_ENG'
+  RETURNING 1
+)
 INSERT INTO "audit_event" ("occurred_at", "actor_id", "action", "entity_type", "entity_id", "after")
 SELECT
   now(),
@@ -59,8 +75,9 @@ SELECT
       'approval_route.code: SINGLE_STAGE_TL_OR_ENG -> TWO_STAGE_TL_THEN_ENG (the route has been two stages, TEAM_LEADER then ENGINEER, since 20260725000000; the code no longer describes it)'
     )
   )
-WHERE NOT EXISTS (
-  SELECT 1 FROM "audit_event"
-  WHERE "entity_type" = 'system'
-    AND "after"->>'migration' = '20260729000000_rename_approval_route_two_stage_tl_then_eng'
-);
+WHERE EXISTS (SELECT 1 FROM renamed)
+  AND NOT EXISTS (
+    SELECT 1 FROM "audit_event"
+    WHERE "entity_type" = 'system'
+      AND "after"->>'migration' = '20260729000000_rename_approval_route_two_stage_tl_then_eng'
+  );

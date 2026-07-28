@@ -196,7 +196,12 @@ describe('QueueService#getQueue (PR-073/076/081)', () => {
     });
   });
 
-  it('slice 26: a job whose current stage is not configured at all is dropped, never emitted with a guessed stage', async () => {
+  // Characterisation, not a fix: origin/main ALREADY dropped these rows (an
+  // unconfigured stage yields no role codes, so the eligibility filter never
+  // matched). Pinned here because slice 26 made the consequence of getting it
+  // wrong worse — an emitted entry would now have to invent a stage ordinal
+  // and label for a stage nobody configured.
+  it('slice 26: a job whose current stage is not configured at all stays dropped — never emitted with a guessed stage', async () => {
     const { service } = buildService({
       stageMap: TWO_STAGE_MAP,
       ownRoles: ['TEAM_LEADER', 'ENGINEER'],

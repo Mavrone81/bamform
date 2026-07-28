@@ -6,6 +6,21 @@ import type { components } from '../api/generated/openapi-types';
 type QueueEntry = components['schemas']['QueueEntry'];
 
 /**
+ * Both stage numbers actually present as numbers. The contract makes them
+ * required, and the server only queues records sitting at a CONFIGURED stage,
+ * so this should always hold — but see the guard's note at the call site for
+ * why the screen does not take that on trust.
+ */
+function hasStage(entry: QueueEntry): boolean {
+  return typeof entry.stageOrdinal === 'number' && typeof entry.stageCount === 'number';
+}
+
+/** Only ever asked once `hasStage` is true, so this is a real numeric compare. */
+function isFinalStage(entry: QueueEntry): boolean {
+  return hasStage(entry) && entry.stageOrdinal >= entry.stageCount;
+}
+
+/**
  * Slice 11a/11b: GET /queue — the caller's pending verifications, including
  * any active delegator's queue (each such entry carries `onBehalfOf`). A
  * non-verifier simply gets an empty page back from the server (not an
@@ -104,23 +119,35 @@ export function VerifierQueue() {
                   engineer) and only the FINAL signature archives, so a
                   verifier must be able to see, before opening the record,
                   whose signature is being asked for and whether it is the
-                  last one. A-05: icon + words, never colour alone. */}
-              <div className="card-row">
-                <span
-                  className="status-chip"
-                  data-tone={entry.stageOrdinal >= entry.stageCount ? 'attention' : 'info'}
-                >
-                  <span aria-hidden="true">◧</span>
-                  <span>
-                    Stage {entry.stageOrdinal} of {entry.stageCount}
-                  </span>
-                </span>
-                <span className="text-soft">{entry.stageLabel}</span>
-              </div>
-              {entry.stageOrdinal >= entry.stageCount && (
-                <div className="card-row">
-                  <span className="microlabel">Final sign-off — archives the record</span>
-                </div>
+                  last one. A-05: icon + words, never colour alone.
+
+                  Guarded on `typeof … === 'number'` rather than a truthiness
+                  or `>=` test (review fix m1): `null >= null` is TRUE in
+                  JavaScript — both sides coerce to 0 — so a response missing
+                  these fields would otherwise render an empty chip AND claim
+                  the signature archives the record. Saying nothing about the
+                  stage is correct when we do not know it; making a false
+                  claim about a controlled record never is. */}
+              {hasStage(entry) && (
+                <>
+                  <div className="card-row">
+                    <span
+                      className="status-chip"
+                      data-tone={isFinalStage(entry) ? 'attention' : 'info'}
+                    >
+                      <span aria-hidden="true">◧</span>
+                      <span>
+                        Stage {entry.stageOrdinal} of {entry.stageCount}
+                      </span>
+                    </span>
+                    {entry.stageLabel && <span className="text-soft">{entry.stageLabel}</span>}
+                  </div>
+                  {isFinalStage(entry) && (
+                    <div className="card-row">
+                      <span className="microlabel">Final sign-off — archives the record</span>
+                    </div>
+                  )}
+                </>
               )}
               {entry.onBehalfOf && (
                 <div className="card-row">

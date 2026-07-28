@@ -337,6 +337,12 @@ export class ApprovalTransitionsService {
           id: approvalStepId,
           jobId: params.jobId,
           stageOrdinal: params.stageOrdinal,
+          // A return/recall/void happens AT a stage but is not that stage's
+          // signature: its caption says what the action is ("Recalled By
+          // Submitter", "Voided By"), never what the stage is called.
+          // Snapshotting the stage label here would put approval wording on a
+          // rejection.
+          stageLabel: null,
           action: params.action,
           actorId: params.actor.actorId,
           onBehalfOfId: null,

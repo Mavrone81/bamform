@@ -30,6 +30,13 @@ export interface PdfSignatureInput {
   reason?: string | null;
   /** Decrypted base64 PNG (no data-URL prefix) — `null` for actions that never capture one (return/recall/void). */
   drawnSignatureBase64?: string | null;
+  /**
+   * Slice 26-TWOSTAGE M1 — `approval_step.stage_label`: the configured stage
+   * caption as it read when this signature was taken. `null`/absent for
+   * actions that are not a verification signature, and for rows written
+   * before the column existed.
+   */
+  stageLabel?: string | null;
 }
 
 export interface PdfChecklistItemInput {
@@ -210,11 +217,24 @@ function renderVoidNotice(notice: PdfVoidNoticeInput | null | undefined): string
  * rather than printing nothing — a controlled record must never lose a
  * caption because an enum grew.
  */
-export function signatureBlockLabel(stageOrdinal: number, action: string): string {
+export function signatureBlockLabel(
+  stageOrdinal: number,
+  action: string,
+  stageLabel?: string | null,
+): string {
   switch (action) {
     case 'SUBMITTED':
       return 'Maintenance Performed By';
     case 'VERIFIED':
+      // Slice 26-TWOSTAGE M1: the label snapshotted onto the step at signing
+      // time WINS. The map below had drifted from the configured route (it
+      // printed "Verified By (Engineer)" where the route, and the paper form,
+      // say "Supervisor / Engineer"), and it is kept only as the fallback for
+      // steps carrying no snapshot — a controlled record must never lose a
+      // caption. Only this branch consults the snapshot: the other actions
+      // are captioned by WHAT THEY ARE, so a stray label must not make a
+      // rejection read like an approval.
+      if (stageLabel) return stageLabel;
       return stageOrdinal === 1
         ? 'Verified By (Workshop Team Leader)'
         : stageOrdinal === 2
@@ -246,7 +266,7 @@ function renderSignatures(signatures: PdfSignatureInput[]): string {
       const reason = s.reason ? `<div class="reason">Reason: ${esc(s.reason)}</div>` : '';
       return `
         <div class="signature-block">
-          <div class="signature-stage">${esc(signatureBlockLabel(s.stageOrdinal, s.action))}</div>
+          <div class="signature-stage">${esc(signatureBlockLabel(s.stageOrdinal, s.action, s.stageLabel))}</div>
           ${drawn}
           <div class="signature-name">${esc(s.actorName)}</div>
           <div class="signature-role">${esc(s.actorRoleCode)}</div>

@@ -14,6 +14,14 @@ export interface CreateApprovalStepData {
   id: string;
   jobId: string;
   stageOrdinal: number;
+  /**
+   * Slice 26-TWOSTAGE M1 — `approval_stage.label` captured HERE, in the
+   * signing transaction, so the archived record's caption can never be
+   * rewritten by a later administrative relabel. `null` for actions whose
+   * caption is derived from the action itself (submission, return, recall,
+   * void) rather than from route configuration.
+   */
+  stageLabel: string | null;
   action: ApprovalActionT;
   actorId: string;
   onBehalfOfId: string | null;
@@ -129,6 +137,7 @@ export class ApprovalRepository {
         id: data.id,
         jobId: data.jobId,
         stageOrdinal: data.stageOrdinal,
+        stageLabel: data.stageLabel,
         action: data.action,
         actorId: data.actorId,
         onBehalfOfId: data.onBehalfOfId,

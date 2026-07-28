@@ -821,6 +821,14 @@ model ApprovalStep {
   // capture a drawn signature).
   drawnSignatureCt         Bytes? @map("drawn_signature_ct")
   drawnSignatureDekVersion Int?   @map("drawn_signature_dek_version") @db.SmallInt
+  // Slice 26-TWOSTAGE M1 (20260729010000_approval_step_stage_label_snapshot):
+  // `approval_stage.label` AS IT READ WHEN THIS STEP WAS SIGNED. Snapshotted,
+  // never joined at render time — routes are configuration (ADR-011) and an
+  // administrator relabelling a stage must not rewrite an archived record's
+  // caption. Null for non-verification actions (stage-0 submission,
+  // return/recall/void), whose caption comes from the action itself, and for
+  // rows written before the column existed.
+  stageLabel               String? @map("stage_label")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 

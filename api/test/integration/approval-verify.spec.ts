@@ -381,6 +381,96 @@ describe('Jobs — POST /jobs/{id}/verify (two-stage approval, PR-041..046/093/0
     expect(bodyText).not.toMatch(/drawnSignature/i);
   });
 
+  // Slice 26-TWOSTAGE review fix M1. Three copies of the stage caption had
+  // drifted apart — the DB's `approval_stage.label`, `RecordReview.tsx`'s
+  // STAGE_LABELS and `pdf-html-template.ts`'s signatureBlockLabel — and the
+  // archived PDF is a controlled ISO-13485 record that must not misname the
+  // stage it records. The label is SNAPSHOTTED onto the step at signing time
+  // rather than joined at render time: routes are data (ADR-011) and an
+  // administrator relabelling a stage must never retroactively rewrite the
+  // caption on a record already archived (the defect slice 23-PDFA exists to
+  // remove).
+  it('slice 26 M1: each verification step snapshots its stage label at signing time, and GET /jobs exposes it', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-snap');
+    const eng = await stepUpVerifier('ENGINEER', 'eng-snap');
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(eng.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/jobs/${jobId}`)
+      .set(...authHeader(tl.token))
+      .expect(200);
+
+    expect(res.body.approvalSteps).toHaveLength(2);
+    expect(res.body.approvalSteps[0]).toMatchObject({
+      stageOrdinal: 1,
+      action: 'VERIFIED',
+      stageLabel: 'Verified By (Workshop Team Leader)',
+    });
+    expect(res.body.approvalSteps[1]).toMatchObject({
+      stageOrdinal: 2,
+      action: 'VERIFIED',
+      stageLabel: 'Verified By (Supervisor / Engineer)',
+    });
+
+    // Stored, not derived at read time — and stored VERBATIM from the route
+    // configuration that was live when the signature was taken.
+    const stored = await adminPool.query(
+      'SELECT stage_ordinal, stage_label FROM "approval_step" WHERE job_id = $1 ORDER BY acted_at',
+      [jobId],
+    );
+    expect(stored.rows).toEqual([
+      { stage_ordinal: 1, stage_label: 'Verified By (Workshop Team Leader)' },
+      { stage_ordinal: 2, stage_label: 'Verified By (Supervisor / Engineer)' },
+    ]);
+  });
+
+  it('slice 26 M1: relabelling the stage AFTER archiving does not rewrite the archived record’s caption', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-relabel');
+    const eng = await stepUpVerifier('ENGINEER', 'eng-relabel');
+    for (const who of [tl, eng]) {
+      await request(app.getHttpServer())
+        .post(`/api/v1/jobs/${jobId}/verify`)
+        .set(...authHeader(who.token))
+        .send({ drawnSignature: realPngDataUrl() })
+        .expect(200);
+    }
+
+    // An administrator renames stage 2 (ADR-011 — routes are configuration).
+    await adminPool.query(
+      `UPDATE "approval_stage" SET label = 'Verified By (Somebody Else Entirely)'
+         WHERE stage_ordinal = 2
+           AND approval_route_id = (SELECT id FROM "approval_route" WHERE code = 'TWO_STAGE_TL_THEN_ENG')`,
+    );
+    try {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/jobs/${jobId}`)
+        .set(...authHeader(tl.token))
+        .expect(200);
+      // The already-archived record still reads as it did when it was signed.
+      expect(res.body.approvalSteps[1].stageLabel).toBe('Verified By (Supervisor / Engineer)');
+    } finally {
+      // approval_stage is seed data — resetDatabase() does not truncate it,
+      // so this edit must be undone or it leaks into every later test.
+      await adminPool.query(
+        `UPDATE "approval_stage" SET label = 'Verified By (Supervisor / Engineer)'
+           WHERE stage_ordinal = 2
+             AND approval_route_id = (SELECT id FROM "approval_route" WHERE code = 'TWO_STAGE_TL_THEN_ENG')`,
+      );
+    }
+  });
+
   it('verify is idempotent when the client replays the same Idempotency-Key', async () => {
     const { jobId } = await makeSubmittedJob();
     const tl = await stepUpVerifier('TEAM_LEADER', 'tl-idem');

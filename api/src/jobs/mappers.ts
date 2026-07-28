@@ -122,6 +122,13 @@ export function toApprovalStep(row: ApprovalStepRow): ApprovalStep {
   return {
     id: row.id,
     stageOrdinal: row.stageOrdinal,
+    // Slice 26-TWOSTAGE M1: the caption snapshotted at signing time. The
+    // contract has carried `stageLabel` since slice 1 but nothing ever
+    // populated it, which is why three hard-coded copies drifted apart.
+    // `?? undefined` keeps it OFF the JSON entirely for the rows that have
+    // no snapshot, rather than emitting a null the clients would have to
+    // distinguish from "not applicable".
+    stageLabel: row.stageLabel ?? undefined,
     action: approvalActionFromDb(row.action),
     actorId: row.actorId,
     actorRoleCode: row.actorRoleCode,

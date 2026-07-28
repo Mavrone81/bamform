@@ -221,6 +221,10 @@ describe('Queue — GET /queue (PR-073/076/081, UR-049)', () => {
     await adminPool.query('UPDATE "job" SET current_stage_ordinal = 2 WHERE id = $1', [jobId]);
     const eng = await stepUpUser('eng-stage-label', ['ENGINEER']);
     const tl = await stepUpUser('tl-not-stage-2', ['TEAM_LEADER']);
+    // Review fix m3 — a CONTROL job still at stage 1, so the "the stage-2 job
+    // is not in the team leader's queue" assertion below cannot pass merely
+    // because that queue came back empty for some unrelated reason.
+    const { jobId: stage1JobId } = await submittedJob();
 
     const engRes = await request(app.getHttpServer())
       .get('/api/v1/queue')
@@ -236,6 +240,8 @@ describe('Queue — GET /queue (PR-073/076/081, UR-049)', () => {
       .get('/api/v1/queue')
       .set(...authHeader(tl.token))
       .expect(200);
-    expect(tlRes.body.data.map((e: { id: string }) => e.id)).not.toContain(jobId);
+    const tlIds = tlRes.body.data.map((e: { id: string }) => e.id);
+    expect(tlIds).toContain(stage1JobId); // the queue is working…
+    expect(tlIds).not.toContain(jobId); // …and it still excludes the stage-2 record
   });
 });
