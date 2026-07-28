@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The whole point of this shell is that a plant admin can point it at an
+  internal server, which is very often plain http:// on a LAN IP. Cleartext
+  is therefore permitted for user-configured targets.
+
+  The trade-off is stated in the UI and README: over http the browser engine
+  treats the origin as insecure, so service workers (the PWA's offline
+  outbox) and full installability are unavailable. Use HTTPS for full
+  offline support.
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

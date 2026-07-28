@@ -20,3 +20,4 @@ docker-compose.yml
 docker-compose.ci.yml
 README.md
 .claude/
+android/
