@@ -264,6 +264,7 @@ export function renderRegister(docs: ParsedDocument[]): string {
     '- [ ] N-05 — TLP §5.1 states 21 measurements for CE 95 020 00 01; the source sheet has 20.',
     '- [ ] N-06 — CE 95 020 00 02 dual-variant USL/LSL table: confirm the two-measurements-per-row modelling and the inconsistent USL/LSL column labels.',
     '- [ ] N-08 — qualitative/single-value specifications loaded as TEXT (see X-6 list): confirm intended judgements.',
+    '- [ ] **N-11** — grouped calibration section labels are space-joined (e.g. CE 95 020 00 01 rows 58-63 → "BH Setup & Calibration Heater Block Setup"). TLP §4.1\'s "blank inherits the section above" would split a genuinely two-section group instead; TLP §5.1 lists those as separate sections. This is the label a technician sees — accept the join, or split per §4.1 (parser change + regeneration). See the per-document evidence tables for every affected group.',
     '',
     '## Per-document ambiguity register',
     '',

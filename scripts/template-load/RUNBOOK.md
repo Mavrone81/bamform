@@ -55,14 +55,25 @@ read -s BAMFORM_APPROVER_PASSWORD && export BAMFORM_APPROVER_PASSWORD
 npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-load.ts
 ```
 
-**Expected output:** per document a `created` line ending
+**Expected output:** per document a `created` line (interleaved with `POST /templates`,
+`POST /asset-types` and per-revision progress lines), ending
 `DONE: 12 created, 0 resumed, 0 updated, 0 unchanged.` The run takes a few minutes (34
 revisions are authored, submitted and approved through the normal workflow; the approver's
 step-up happens automatically when the API demands it).
 
-If the run stops midway (network, expiry): **re-run the same command.** The loader resumes —
-completed documents report `unchanged`, the interrupted one continues from where it stopped.
-It never duplicates (INV-01/02/07 enforced server-side; the loader only ever reads-then-acts).
+If the run stops midway (network, expiry, ^C): **re-run the same command.** The loader
+resumes — completed documents report `unchanged`, the interrupted one continues from where it
+stopped, and the summary line reports a non-zero `resumed` count. It never duplicates
+(INV-01/02/07 enforced server-side; the loader only ever reads-then-acts). Resume is
+regression-tested for both an ordinary mid-plan interruption and the specific
+trailing-space revision code on `CE 95 020 00 02` (I-TL-28..30).
+
+> **Historical note (fixed):** before the 13-TL review fix-pass, an interruption inside
+> `CE 95 020 00 02`'s revision plan wedged every subsequent run with
+> `existing revision at ordinal 2 has code 'B' where the plan expects 'B ' … refusing to touch
+it`, because the API stores revision codes trimmed while the loader compared them untrimmed.
+> If you ever see a message of that shape, you are running a pre-fix checkout — update before
+> continuing.
 
 ## 3. AC-01 verification (the client's, not the engineer's)
 
@@ -72,6 +83,11 @@ In the web UI, as any authenticated reviewer:
 2. Verify against the paper original using the per-document checklist V-1..V-14 in
    `scripts/template-load/evidence/<doc>.md` (each file shows source cell → loaded field for
    every item and measurement).
+
+   **Expected V-3/V-13 difference:** revision codes are stored **trimmed**, so
+   `CE 95 020 00 02`'s revision `'B '` displays as `B` in the UI while the YAML and evidence
+   show the verbatim `'B '`. That is the API contract, not a load error.
+
 3. Complete the sign-off table at the end of each evidence file; collect the §7.3 sheet.
 
 **Deviation from PR-TLP-11 (declared):** the TLP prescribes verification against a rendered

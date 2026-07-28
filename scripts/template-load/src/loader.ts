@@ -114,6 +114,35 @@ export interface LoadSummary {
   resumed: number;
 }
 
+/**
+ * Normalise a string the way the API's zod contract does before storing it.
+ *
+ * Fix-pass (review finding T-1). Several request fields are declared
+ * `z.string().trim()` in `shared/src/template.ts` / `shared/src/asset-type.ts`
+ * — `revisionCode`, `documentNumber`, `title`, `instruction`, `description`,
+ * `specDisplay`, `stableKey`, asset-type `code`/`name` — so what the server
+ * STORES can differ from what the YAML HOLDS whenever a value carries edge
+ * whitespace. Every resume/idempotency check below compares a local YAML
+ * value against a server-stored one, so all of them must compare through
+ * this function or they compare unequal forever.
+ *
+ * The bug this fixes: doc 5's revision code is `'B '` (trailing space,
+ * verbatim from the source by design — I-TL-13 asserts it). An interruption
+ * inside doc 5's revision plan left a stored `'B'` that never again matched
+ * the planned `'B '`, so every re-run refused with "this template was not
+ * produced by this loader", wedging doc 5 and every document after it and
+ * falsifying the runbook's "re-run the same command" recovery.
+ *
+ * NOTE this is a comparison-time normalisation only. The YAML and the AC-01
+ * evidence keep the verbatim `'B '` (PR-TLP-04); the trimmed form is simply
+ * what the contract stores, and V-3/V-13 reviewers should expect that.
+ */
+const contractTrim = (value: string): string => value.trim();
+
+/** Contract-trimmed string equality (see `contractTrim`). */
+const sameUnderContract = (a: string | null | undefined, b: string | null | undefined): boolean =>
+  (a == null ? a : contractTrim(a)) === (b == null ? b : contractTrim(b));
+
 const SAMPLE_MACHINE_MARKER = 'SAMPLE machine (slice 13-TL)';
 /** ASM gets two samples to demonstrate one-template-many-assets (UR-018, TLP §5.1). */
 const SAMPLE_MACHINE_COUNT: Record<string, number> = { ASM_WIRE_BOND: 2 };
@@ -166,7 +195,7 @@ async function loadDocument(
 ): Promise<DocumentLoadResult> {
   // ---- 1. Template shell -------------------------------------------------
   const templates = await listAll<FormTemplate>(author, '/api/v1/templates');
-  let template = templates.find((t) => t.documentNumber === doc.documentNumber);
+  let template = templates.find((t) => sameUnderContract(t.documentNumber, doc.documentNumber));
   let action: DocumentLoadResult['action'];
   if (!template) {
     template = await author.post<FormTemplate>('/api/v1/templates', {
@@ -191,14 +220,17 @@ async function loadDocument(
   const existingCurrent = existingAsc.find((r) => r.status === 'CURRENT');
   if (
     existingCurrent &&
-    existingCurrent.revisionCode === finalPlanned.revisionCode &&
+    sameUnderContract(existingCurrent.revisionCode, finalPlanned.revisionCode) &&
     (await contentMatches(author, existingCurrent.id, doc))
   ) {
     // Fully loaded already — clean no-op (zero writes).
     return finishDocument(doc, template, existingCurrent.id, 'unchanged', author, options, log);
   }
 
-  if (existingCurrent && existingCurrent.revisionCode === finalPlanned.revisionCode) {
+  if (
+    existingCurrent &&
+    sameUnderContract(existingCurrent.revisionCode, finalPlanned.revisionCode)
+  ) {
     // Loaded before, but the YAML changed (pre-go-live correction,
     // PR-TLP-12): ONE corrective revision through the normal flow.
     log(`  content drift vs CURRENT ${existingCurrent.revisionCode} — corrective revision`);
@@ -222,10 +254,12 @@ async function loadDocument(
   for (const [index, plan] of planned.entries()) {
     const isFinal = index === planned.length - 1;
     let revision = existingAsc[index];
-    if (revision && revision.revisionCode !== plan.revisionCode) {
+    if (revision && !sameUnderContract(revision.revisionCode, plan.revisionCode)) {
       throw new Error(
         `${doc.documentNumber}: existing revision at ordinal ${revision.sequenceOrdinal} has ` +
-          `code '${revision.revisionCode}' where the plan expects '${plan.revisionCode}' — ` +
+          `code '${revision.revisionCode}' where the plan expects '${plan.revisionCode}' ` +
+          `(compared as '${contractTrim(revision.revisionCode)}' vs ` +
+          `'${contractTrim(plan.revisionCode)}' — the API stores these trimmed) — ` +
           'this template was not produced by this loader; refusing to touch it (PR-TLP-05 spirit).',
       );
     }
@@ -394,44 +428,53 @@ async function contentMatches(
   doc: ParsedDocument,
 ): Promise<boolean> {
   const revision = await author.get<TemplateRevision>(`/api/v1/revisions/${revisionId}`);
-  const wantItems = doc.items.map((i) => ({
+  // Every contract-trimmed field (`instruction`, `stableKey`, `description`,
+  // `specDisplay`) is normalised on BOTH sides — see `contractTrim`. Without
+  // this, a YAML value with edge whitespace would report drift on every run
+  // and author an endless chain of corrective revisions (the same defect
+  // class as T-1, with a noisier failure mode). `section`/`unit` are NOT
+  // trimmed by the contract, so they compare as stored.
+  const itemShape = (i: {
+    itemNo: number;
+    frequency: string;
+    instruction: string;
+    mandatory: boolean;
+    stableKey: string;
+  }) => ({
     itemNo: i.itemNo,
     frequency: i.frequency,
-    instruction: i.instruction,
-    mandatory: true,
-    stableKey: i.stableKey,
-  }));
-  const gotItems = (revision.items ?? []).map((i) => ({
-    itemNo: i.itemNo,
-    frequency: i.frequency,
-    instruction: i.instruction,
+    instruction: contractTrim(i.instruction),
     mandatory: i.mandatory,
-    stableKey: i.stableKey,
-  }));
-  const wantMeasurements = doc.measurements.map((m) => ({
+    stableKey: contractTrim(i.stableKey),
+  });
+  const measurementShape = (m: {
+    section: string | null;
+    description: string;
+    unit: string | null;
+    specType: string;
+    lowerLimit: number | null;
+    upperLimit: number | null;
+    nominal: number | null;
+    tolerance: number | null;
+    specDisplay: string;
+    stableKey: string;
+  }) => ({
     section: m.section,
-    description: m.description,
+    description: contractTrim(m.description),
     unit: m.unit,
     specType: m.specType,
     lowerLimit: m.lowerLimit,
     upperLimit: m.upperLimit,
     nominal: m.nominal,
     tolerance: m.tolerance,
-    specDisplay: m.specDisplay,
-    stableKey: m.stableKey,
-  }));
-  const gotMeasurements = (revision.measurements ?? []).map((m) => ({
-    section: m.section,
-    description: m.description,
-    unit: m.unit,
-    specType: m.specType,
-    lowerLimit: m.lowerLimit,
-    upperLimit: m.upperLimit,
-    nominal: m.nominal,
-    tolerance: m.tolerance,
-    specDisplay: m.specDisplay,
-    stableKey: m.stableKey,
-  }));
+    specDisplay: contractTrim(m.specDisplay),
+    stableKey: contractTrim(m.stableKey),
+  });
+
+  const wantItems = doc.items.map((i) => itemShape({ ...i, mandatory: true }));
+  const gotItems = (revision.items ?? []).map(itemShape);
+  const wantMeasurements = doc.measurements.map(measurementShape);
+  const gotMeasurements = (revision.measurements ?? []).map(measurementShape);
   const sc = (revision.standingContent ?? {}) as Record<string, unknown>;
   const wantSc = standingContentPayload(doc);
   const scMatches = Object.entries(wantSc).every(
@@ -459,7 +502,8 @@ async function finishDocument(
 ): Promise<DocumentLoadResult> {
   // Asset type (1:1 with template — UR-018/DBD §6.7).
   const assetTypes = await listAll<AssetType>(author, '/api/v1/asset-types');
-  let assetType = assetTypes.find((t) => t.code === doc.assetTypeCode);
+  // `assetTypeCreateSchema.code` is contract-trimmed too (T-1's class).
+  let assetType = assetTypes.find((t) => sameUnderContract(t.code, doc.assetTypeCode));
   if (!assetType) {
     const routes = await author.get<{ id: string; code: string }[]>('/api/v1/approval-routes');
     if (routes.length === 0) throw new Error('no approval routes seeded (PR-DBD-09 violated?)');

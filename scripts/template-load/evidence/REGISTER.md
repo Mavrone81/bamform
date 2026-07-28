@@ -38,6 +38,7 @@ Total measurements across the set: 84.
 - [ ] N-05 — TLP §5.1 states 21 measurements for CE 95 020 00 01; the source sheet has 20.
 - [ ] N-06 — CE 95 020 00 02 dual-variant USL/LSL table: confirm the two-measurements-per-row modelling and the inconsistent USL/LSL column labels.
 - [ ] N-08 — qualitative/single-value specifications loaded as TEXT (see X-6 list): confirm intended judgements.
+- [ ] **N-11** — grouped calibration section labels are space-joined (e.g. CE 95 020 00 01 rows 58-63 → "BH Setup & Calibration Heater Block Setup"). TLP §4.1's "blank inherits the section above" would split a genuinely two-section group instead; TLP §5.1 lists those as separate sections. This is the label a technician sees — accept the join, or split per §4.1 (parser change + regeneration). See the per-document evidence tables for every affected group.
 
 ## Per-document ambiguity register
 
@@ -57,7 +58,10 @@ Total measurements across the set: 84.
 
 ### CE 95 020 00 01 — ASM Wire Bond
 
+- **N-11** [B58, B59]: section label "BH Setup & Calibration Heater Block Setup" was space-joined from 2 printed labels ("BH Setup & Calibration", "Heater Block Setup") in the group starting at row 58. TLP §4.1's rule is "verbatim; blank inherits the section above", which for a genuinely two-section group would instead read "BH Setup & Calibration" then "Heater Block Setup" as SEPARATE sections. Where the label merely wrapped across rows the join is correct. Client to confirm per group: accept the joined label, or split per §4.1 (a parser change + regeneration).
 - **B-04** [J66]: specification at J66 printed as "95 - 28 g" — loaded as "95 - 105 g" per B-04 (client revision D).
+- **N-11** [B68, B69, B70]: section label "Wire Clamp Calibration Wire Clamp Force Verification" was space-joined from 3 printed labels ("Wire Clamp Calibration", "Wire Clamp Force", "Verification") in the group starting at row 68. TLP §4.1's rule is "verbatim; blank inherits the section above", which for a genuinely two-section group would instead read "Wire Clamp Calibration" then "Wire Clamp Force" then "Verification" as SEPARATE sections. Where the label merely wrapped across rows the join is correct. Client to confirm per group: accept the joined label, or split per §4.1 (a parser change + regeneration).
+- **N-11** [B71, B72]: section label "Transducer Calibration (TVC)" was space-joined from 2 printed labels ("Transducer Calibration", "(TVC)") in the group starting at row 71. TLP §4.1's rule is "verbatim; blank inherits the section above", which for a genuinely two-section group would instead read "Transducer Calibration" then "(TVC)" as SEPARATE sections. Where the label merely wrapped across rows the join is correct. Client to confirm per group: accept the joined label, or split per §4.1 (a parser change + regeneration).
 - **N-01** [J61]: "Track Height Calibration, Top Plate" specification printed as "-295 - -305" — high-to-low printed range with no unit; inverted per INV-04 and NOT client-dispositioned (unlike B-04). Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client decision. PR-TLP-05.
 - **N-05**: TLP §5.1 states 21 calibration measurements; the source sheet has 20 measurement rows. The source wins; discrepancy recorded.
 

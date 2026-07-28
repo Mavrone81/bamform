@@ -667,11 +667,34 @@ function parseSectionTable(
   const corrections = new Map((config.corrections ?? []).map((c) => [c.cell, c]));
   const out: ParsedMeasurement[] = [];
   for (const group of groups) {
-    const sectionLabel =
-      group
-        .map((row) => row.sectionCell)
-        .filter((s) => s !== '')
-        .join(' ') || null;
+    const groupLabels = group.map((row) => row.sectionCell).filter((s) => s !== '');
+    const sectionLabel = groupLabels.join(' ') || null;
+    if (groupLabels.length > 1) {
+      // N-11 (review finding T-3) — TLP §4.1 says the Section column is
+      // "Verbatim; blank inherits the section above". This parser instead
+      // groups by the numbered No column and space-joins every label in the
+      // group. For a label that WRAPPED across rows (e.g. "Wire Clamp
+      // Calibration" / "Wire Clamp Force" / "Verification") the join is the
+      // correct reading; where a group genuinely contains TWO distinct
+      // sections (doc 4 rows 58-63: "BH Setup & Calibration" then "Heater
+      // Block Setup", which TLP §5.1 lists separately) the inherit rule
+      // would instead split them. The hybrid label is what a technician
+      // sees, so this is escalated rather than silently chosen.
+      note(
+        'N-11',
+        `section label "${sectionLabel}" was space-joined from ${groupLabels.length} printed ` +
+          `labels (${groupLabels.map((l) => `"${l}"`).join(', ')}) in the group starting at row ` +
+          `${group[0].r}. TLP §4.1's rule is "verbatim; blank inherits the section above", which ` +
+          `for a genuinely two-section group would instead read ${groupLabels
+            .map((l) => `"${l}"`)
+            .join(
+              ' then ',
+            )} as SEPARATE sections. Where the label merely wrapped across rows the ` +
+          'join is correct. Client to confirm per group: accept the joined label, or split per ' +
+          '§4.1 (a parser change + regeneration).',
+        group.filter((row) => row.sectionCell !== '').map((row) => `B${row.r}`),
+      );
+    }
     let lastDescription: string | null = null;
     for (const row of group) {
       const specRaw = row.spec;

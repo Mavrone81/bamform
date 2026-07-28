@@ -31,7 +31,8 @@ export type AmbiguityCode =
   | 'N-07' // stray out-of-grid cells (doc 5 Q38, doc 6 AA53) — not loaded
   | 'N-08' // qualitative / single-value specs loaded as TEXT (doc 6: 'Optimal', '35mm Plate', '75 mils')
   | 'N-09' // cosmetic worksheet-name anomalies in other documents ('CE ', 'Bachelor Bump BD01')
-  | 'N-10'; // printed item numbering skips 9 (docs 5, 6, 11) — loaded verbatim
+  | 'N-10' // printed item numbering skips 9 (docs 5, 6, 11) — loaded verbatim
+  | 'N-11'; // grouped section label space-joined from >1 printed label (TLP §4.1 "blank inherits" deviation)
 
 export interface Ambiguity {
   code: AmbiguityCode;

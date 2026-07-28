@@ -331,7 +331,8 @@ clear is audited — `AssetUpdate.areaId` is nullable in Zod and openapi alike.
 `api/test/integration/template-load/`: `xlsx-reader.spec.ts` (I-TL-01..04), `parse.spec.ts`
 (I-TL-05..16 + the §4.2 spec-parser table), `yaml-drift.spec.ts` (I-TL-17..18),
 `load-e2e.spec.ts` (I-TL-19..24 — also discharges **U-CAS-08's real-data case** end-to-end),
-`loader-endpoints.spec.ts` (I-TL-25..27). All run against the REAL workbooks in
+`loader-endpoints.spec.ts` (I-TL-25..27), `loader-resume.spec.ts` (I-TL-28..30, review
+fix-pass T-1). All run against the REAL workbooks in
 `Sample of Forms/` (PR-TST-18's real-template-content exception); the reader is additionally
 validated against a manually transcribed fixture
 (`scripts/template-load/fixtures/doc4-manual-transcription.json`).
@@ -365,6 +366,9 @@ validated against a manually transcribed fixture
 | I-TL-25 | `POST /templates` | 201 + audit event; duplicate document number 409 (INV-07), never a silent upsert |
 | I-TL-26 | `POST /templates` gating | MAINTAINER 403, anonymous 401, invalid body 422 with no row created |
 | I-TL-27 | `GET /approval-routes` | seeded route listed for any authenticated user; anonymous 401 |
+| I-TL-28 | **Review T-1**: kill the loader immediately after doc 5's `'B '` revision is created (the API stores it trimmed), then re-run | clean `resumed` — NOT the old permanent "not produced by this loader" wedge; doc 6 (which the wedge also blocked) loads; ordinals contiguous, final revision CURRENT, no duplicate revisions, content equals the YAML |
+| I-TL-29 | Third and fourth re-run after that recovery | both `unchanged: 2`, revision count stable — no corrective-revision loop (the same trim asymmetry inside `contentMatches` would author one per run) |
+| I-TL-30 | Kill at a DIFFERENT point (inside doc 6's plan, armed after doc 5 completes) | general resumability intact: doc 5 `unchanged`, doc 6 `resumed`, zero created, one CURRENT each |
 
 ---
 
