@@ -23,10 +23,18 @@ describe('explainSubmitRejection', () => {
     // exists cannot produce one. Sending the user back to a complete
     // checklist is the wrong instruction.
     expect(msg).toMatch(/out-of-date/i);
-    expect(msg).toMatch(/reopen/i);
     expect(msg).not.toMatch(/mandatory item/i);
     // Their work must not read as lost.
     expect(msg).toMatch(/safely held/i);
+    // Slice 22-SELFUPDATE. This used to require the words "reopen": the
+    // message told the technician to close the app completely and reopen it
+    // to update. Measurement on the emulator showed that is not reliable
+    // advice — tapping the launcher icon on a live task does NOT re-navigate
+    // the WebView, so a technician could follow it exactly and stay stale.
+    // The app now updates itself off this very rejection, so the message
+    // must not hand out a manual ritual that may not work.
+    expect(msg).not.toMatch(/reopen/i);
+    expect(msg).toMatch(/updating itself/i);
   });
 
   it('names the failing FIELDS for any other validation error', () => {

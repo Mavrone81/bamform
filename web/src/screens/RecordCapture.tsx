@@ -13,6 +13,7 @@ import { recoverJobConflicts, type ConflictRecoveryChoice } from '../offline/con
 import { onSynced, notifySynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { uuidv7 } from '../lib/uuidv7';
+import { useCriticalWork } from '../lib/use-critical-work';
 import { ItemStatusControl } from '../components/ItemStatusControl';
 import { SignaturePad } from '../components/SignaturePad';
 import { SyncStatusChip } from '../components/SyncStatusChip';
@@ -47,9 +48,17 @@ export function explainSubmitRejection(problem: unknown): string {
   const fields = p?.errors ?? [];
 
   if (fields.some((e) => (e.pointer ?? '').includes('drawnSignature'))) {
+    // Slice 22-SELFUPDATE. The old wording here told the technician to
+    // "close it completely and reopen to update", which measurement showed
+    // is not even reliable advice: tapping the launcher icon on a live task
+    // does not re-navigate the WebView, so a technician can follow that
+    // instruction to the letter and still be stale. It is also no longer
+    // necessary — `authorizedFetch` treats this very rejection as a hard
+    // signal and has already started the update, which lands as soon as
+    // this screen is out of the signature/submit window.
     return (
-      'This app is running an out-of-date version and submitted without a signature. ' +
-      'Close it completely and reopen to update, then submit again — your entries are ' +
+      'This app was running an out-of-date version and submitted without a signature. ' +
+      'It is updating itself now — wait a moment, then submit again. Your entries are ' +
       'safely held on this device.'
     );
   }
@@ -124,6 +133,20 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   const [recoveryBanner, setRecoveryBanner] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [photos, setPhotos] = useState<StagedPhoto[]>([]);
+
+  /**
+   * Slice 22-SELFUPDATE: hold the self-update's reload while this screen is
+   * holding something a reload would destroy. All three live in memory only:
+   * the drawn signature is deliberately never persisted (`sync-engine.
+   * submitJob`), a submit in flight has no response yet, and a reload aborts
+   * an upload XHR. Checklist entries are not listed because they do not need
+   * to be — `appendJobMutation` writes each one to the outbox as it is made.
+   */
+  useCriticalWork(
+    signing || submitting || photos.some((p) => p.state === 'uploading'),
+    'record-capture',
+  );
+
   const debounceRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** H-7: staged/uploading photos are screen-local — leaving discards

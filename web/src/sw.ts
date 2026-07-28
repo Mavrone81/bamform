@@ -32,6 +32,30 @@ self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
+/**
+ * Slice 22-SELFUPDATE: an escape hatch for a worker parked in `waiting`.
+ *
+ * `install` above already calls `skipWaiting()`, so under normal conditions
+ * nothing ever reaches this. But "it should never happen" is what left a
+ * device on stale code in the first place, and a worker whose install
+ * handler threw would sit in `waiting` indefinitely with no way out —
+ * a permanently stale client. `update.ts` sends this when it finds one.
+ *
+ * Messages on a service worker can only come from that worker's own clients
+ * (same origin, by construction), so there is no origin decision to make
+ * here — only a payload shape to validate, which this does before acting.
+ */
+self.addEventListener('message', (event) => {
+  const data: unknown = event.data;
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { type?: unknown }).type === 'SKIP_WAITING'
+  ) {
+    void self.skipWaiting();
+  }
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {

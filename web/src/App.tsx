@@ -21,6 +21,7 @@ import { RecoveryCodes } from './screens/RecoveryCodes';
 import { Menu } from './screens/Menu';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { NavShell } from './components/NavShell';
+import { UpdateBanner } from './components/UpdateBanner';
 import {
   getAccessToken,
   onTokenChange,
@@ -170,6 +171,12 @@ export function App() {
         Skip to main content
       </a>
       <div id="main-content">
+        {/* Slice 22-SELFUPDATE §4: normally invisible. It appears only when
+         * a newer build has taken control while the technician is
+         * mid-signature, mid-submit or mid-upload, and the reload is
+         * therefore being held back. Outside `ErrorBoundary` so that a
+         * screen that crashed can still say the app is updating. */}
+        <UpdateBanner />
         {/* Last resort only: a render throw would otherwise unmount the root
          * and leave a blank tab with no way back (review finding I-1). */}
         <ErrorBoundary>

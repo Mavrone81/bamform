@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getServices } from '../state/services';
 import { useRouter } from '../router';
 import { stepUp } from '../auth';
+import { useCriticalWork } from '../lib/use-critical-work';
 import { SignaturePad } from '../components/SignaturePad';
 import { StatusBadge } from '../components/StatusBadge';
 import type { components } from '../api/generated/openapi-types';
@@ -87,6 +88,18 @@ export function RecordReview({ jobId }: { jobId: string }) {
   const [awaitingStepUp, setAwaitingStepUp] = useState(false);
   const pendingSignatureRef = useRef<string | null>(null);
   const stepUpDialogRef = useRef<HTMLDialogElement | null>(null);
+
+  /**
+   * Slice 22-SELFUPDATE: the verifier's equivalent of the capture screen's
+   * gate. The signature pad, a verify/return in flight, the step-up password
+   * dialog and a typed return reason are all in-memory only — a reload
+   * during any of them makes the verifier do it again, and a reload during
+   * the step-up dialog would discard a password mid-entry.
+   */
+  useCriticalWork(
+    mode !== 'view' || submitting || awaitingStepUp || returnReason.length > 0,
+    'record-review',
+  );
 
   // The step-up panel is a NATIVE modal dialog (review D-3): `showModal()`
   // puts it in the top layer, traps focus inside and makes everything
