@@ -100,7 +100,14 @@ The admin supplies only `machineNumber`. Substitution happens at render, from th
 
 Measured against the 12 real templates: 8 carry such a run (`ED____`, `KW___`, `EW_____`, `MB_____`, `DP_____`, `AVS 35-____`, `IMOS 0__`, and CE 95 050 00 01's bare `______`); `EP01` and `PM01` are fixed strings; CE 95 020 00 01 and CE 95 043 00 01 have no blank.
 
-Consequences, stated rather than left implicit: if the title has no run, `machineNumber` must be null and supplying one is a validation error — silently ignoring it would let an admin believe they had labelled a form when they had not. If the title has a run and `machineNumber` is null, the title renders with the blank intact, exactly as the paper form does before someone writes on it.
+`machineNumber` is **optional in every case, and never a validation error** (owner, 2026-07-29: *"Is ok some forms are already pre updated just allow user to choose"*). Several documents already carry their machine number in the printed title, so there is nothing for an admin to fill in and nothing to warn them about.
+
+The API therefore reports, per template, whether the title contains a fillable run — a derived boolean, computed from the title by the same rule above, never stored:
+
+- **Run present** (8 of 12) — the admin is offered a form-number field. Left blank, the title renders with the blank intact, exactly as the paper form does before someone writes on it.
+- **No run** (`EP01`, `PM01`, CE 95 020 00 01, CE 95 043 00 01) — no field is offered, because there is nothing to fill. Tagging is a one-click choice of document.
+
+That flag is what keeps this honest without an error: an admin is never shown a box that does nothing, so they can never believe they have labelled a form when they have not. A `machineNumber` supplied anyway for a no-run title is accepted and simply has nothing to substitute into.
 
 Substituted at render, not stored, so a template revision that changes the title stays correct. Slice 23-PDFA freezes the rendered result at archive, so an archived record still keeps the title it was signed under.
 
@@ -130,7 +137,7 @@ The tests that matter are the cross-document ones. Everything else is ordinary C
 - **A void reverses only its own document's schedule.** Same shape, through archive → void.
 - **Two documents at the same frequency on one machine both generate jobs** — the case the old unique key made impossible, and the one the owner's TE7 needs.
 - **Job generation picks the template from the document, not the asset type** — assert two jobs raised for one machine carry different `templateRevisionId`s.
-- Form-number substitution: each of the three title shapes (run present, no run, run with null number), plus the validation error.
+- Form-number substitution across all three title shapes: run present with a number (`KW___` + `13` → `KW13`), run present with null (blank stays intact), and no run (title untouched). Assert the derived "has a fillable run" flag is true for exactly the 8 templates that carry one — a flag that returned true for everything would hide the `EP01`/`PM01` case rather than serve it. No case is a validation error.
 - Migration: applied to a database seeded in the *old* shape, every existing asset ends with exactly one document, every rule and job re-pointed, no orphans.
 
 ## 7. Risks
