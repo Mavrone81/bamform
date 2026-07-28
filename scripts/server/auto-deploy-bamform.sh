@@ -3,6 +3,10 @@
 # Install at /root/auto-deploy-bamform.sh, invoked by cron under flock:
 #   * * * * * flock -n /tmp/bamform-deploy.lock /root/auto-deploy-bamform.sh >> /var/log/bamform-deploy.log 2>&1
 #
+# That install is a ONE-TIME bootstrap. From then on the script keeps its own
+# installed copy in step with the repo after each green deploy — see
+# sync_installed_copy() below for why it drifted and why the sync is at the end.
+#
 # SAFETY PROPERTIES (do not weaken):
 #   - migration failure aborts WITHOUT restarting the app (PR-RUN-07)
 #   - only bamform-* services are ever named (PR-006, PR-RUN-08)
@@ -76,10 +80,40 @@ log "Restarting BamForm services only"
 docker compose -f "$COMPOSE_FILE" up -d --build $SERVICES || fail "restart failed"
 docker image prune -f >/dev/null 2>&1 || true
 
+# Keep the INSTALLED copy in step with the repo (slice 22-SELFUPDATE follow-up).
+#
+# Cron runs /root/auto-deploy-bamform.sh — a manual copy of this file, taken
+# once at install time. Nothing ever re-copied it, so the two drifted: the
+# IMAGE_TAG fix above sat in the repository for a full deploy cycle while the
+# box kept running the version without it, and `docker images` kept showing
+# `bamform-web:local`. Any edit to this script was silently inert in
+# production, which makes the repo copy documentation rather than the thing
+# that runs — the worst kind of drift, because it reads as deployed.
+#
+# Installed AFTER a green deploy, deliberately: this run keeps the logic it
+# started with (a script must never be rewritten underneath a running bash,
+# which reads it incrementally), and only a build+migrate+health-check that
+# actually passed is allowed to promote a new deploy script. A change here
+# therefore takes effect on the NEXT deploy, one cycle later.
+sync_installed_copy() {
+  local src=$REPO/scripts/server/auto-deploy-bamform.sh
+  [ -f "$src" ] || return 0
+  cmp -s "$src" "$0" && return 0
+  # Never install something that cannot parse — that would break every
+  # subsequent deploy with no way in but SSH.
+  bash -n "$src" || { log "WARN: repo deploy script has a syntax error — keeping the installed copy"; return 0; }
+  if install -m 0755 "$src" "$0"; then
+    log "Installed deploy script updated from $(git rev-parse --short HEAD) — effective next run"
+  else
+    log "WARN: could not update the installed deploy script at $0"
+  fi
+}
+
 log "Health check"
 for i in $(seq 1 30); do
   if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
     log "Healthy after ${i} attempt(s)"
+    sync_installed_copy
     log "=== Deploy OK: $(git rev-parse --short HEAD) ==="
     exit 0
   fi
