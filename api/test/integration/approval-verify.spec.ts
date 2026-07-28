@@ -235,6 +235,48 @@ describe('Jobs — POST /jobs/{id}/verify (two-stage approval, PR-041..046/093/0
     expect(res.body).toMatchObject({ type: '/errors/forbidden' });
   });
 
+  // Slice 26-TWOSTAGE — the OTHER half of the stage gate. The test above
+  // proves an ENGINEER cannot do the team leader's first check; this proves a
+  // TEAM_LEADER cannot do the engineer's final one, i.e. cannot ARCHIVE. Both
+  // directions matter: the owner's process (2026-07-29, steps 5-7) is a
+  // maintainer's submission checked by the team leader and then INDEPENDENTLY
+  // validated by an engineer, and a single signature must never archive.
+  it('slice 26: a TEAM_LEADER cannot sign STAGE 2 — 403, and the record stays SUBMITTED at stage 2 (one signature never archives)', async () => {
+    const { jobId } = await makeSubmittedJob();
+    const tl = await stepUpVerifier('TEAM_LEADER', 'tl-stage1');
+    const tl2 = await stepUpVerifier('TEAM_LEADER', 'tl-stage2-attempt');
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+
+    // A DIFFERENT team leader, so the SYS-8 distinct-verifier rule (409) is
+    // not what rejects this — the stage's role set is.
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/verify`)
+      .set(...authHeader(tl2.token))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(403);
+    expect(res.body).toMatchObject({ type: '/errors/forbidden' });
+
+    const jobRow = await adminPool.query(
+      'SELECT status, current_stage_ordinal, archived_at FROM "job" WHERE id = $1',
+      [jobId],
+    );
+    expect(jobRow.rows[0]).toMatchObject({
+      status: 'submitted',
+      current_stage_ordinal: 2,
+      archived_at: null,
+    });
+    const steps = await adminPool.query(
+      `SELECT count(*)::int AS n FROM "approval_step" WHERE job_id = $1 AND action = 'verified'`,
+      [jobId],
+    );
+    expect(steps.rows[0].n).toBe(1);
+  });
+
   it('rejects a drawnSignature that is not a genuine PNG (magic-byte check, S-30-style) — 422', async () => {
     const { jobId } = await makeSubmittedJob();
     const tl = await stepUpVerifier('TEAM_LEADER', 'tl-badpng');

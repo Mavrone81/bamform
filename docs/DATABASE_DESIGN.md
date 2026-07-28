@@ -429,7 +429,7 @@ The approval route is data, which is what makes OI-04 a configuration change (PR
 | Column | Type | Null | Class | Description |
 |---|---|---|---|---|
 | `id` | uuid | N | INT | PK |
-| `code` | text | N | INT | e.g. `SINGLE_STAGE_TL_OR_ENG` |
+| `code` | text | N | INT | e.g. `TWO_STAGE_TL_THEN_ENG` |
 | `name` | text | N | INT | |
 | `active` | boolean | N | INT | |
 
@@ -847,7 +847,7 @@ must succeed.
 | Data | Content |
 |---|---|
 | `role` | The six roles in §6.3 |
-| `approval_route` | `SINGLE_STAGE_TL_OR_ENG` with one stage satisfied by `TEAM_LEADER` or `ENGINEER` (PR-071) |
+| `approval_route` | `TWO_STAGE_TL_THEN_ENG` — stage 1 satisfied by `TEAM_LEADER`, stage 2 by `ENGINEER` (PR-071 as revised by Samuel's confirmed two-stage decision; the seed migration 20260723180100 delivers one `TEAM_LEADER`-or-`ENGINEER` stage under the old code `SINGLE_STAGE_TL_OR_ENG`, 20260725000000 splits it into the two stages, and 20260729000000 renames the code to match) |
 | Enumerations | All values in §5 |
 
 **PR-DBD-10** The twelve source templates are **not** seeded by migration. They are loaded by a

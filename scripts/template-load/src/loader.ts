@@ -507,7 +507,7 @@ async function finishDocument(
   if (!assetType) {
     const routes = await author.get<{ id: string; code: string }[]>('/api/v1/approval-routes');
     if (routes.length === 0) throw new Error('no approval routes seeded (PR-DBD-09 violated?)');
-    const route = routes.find((r) => r.code === 'SINGLE_STAGE_TL_OR_ENG') ?? routes[0];
+    const route = routes.find((r) => r.code === 'TWO_STAGE_TL_THEN_ENG') ?? routes[0];
     assetType = await author.post<AssetType>('/api/v1/asset-types', {
       code: doc.assetTypeCode,
       name: doc.assetTypeName,

@@ -23,17 +23,36 @@ function jobRow(id: string, approvalRouteId = 'route-1', currentStageOrdinal = 1
   };
 }
 
+/** The DELIVERED route since slice 26-TWOSTAGE: TEAM_LEADER then ENGINEER. */
+const TWO_STAGE_MAP = new Map([
+  [
+    'route-1:1',
+    { roleCodes: ['TEAM_LEADER'], label: 'Verified By (Workshop Team Leader)', stageCount: 2 },
+  ],
+  [
+    'route-1:2',
+    { roleCodes: ['ENGINEER'], label: 'Verified By (Supervisor / Engineer)', stageCount: 2 },
+  ],
+]);
+
 function buildService(opts: {
-  stageMap?: Map<string, string[]>;
+  stageMap?: Map<string, { roleCodes: string[]; label: string; stageCount: number }>;
   ownRoles?: string[];
   ownCandidates?: ReturnType<typeof jobRow>[];
   delegators?: { delegatorId: string }[];
   delegatorRolesById?: Record<string, string[]>;
   delegatorCandidatesById?: Record<string, ReturnType<typeof jobRow>[]>;
 }) {
-  const stageMap = opts.stageMap ?? new Map([['route-1:1', ['TEAM_LEADER']]]);
+  const stageMap =
+    opts.stageMap ??
+    new Map([
+      [
+        'route-1:1',
+        { roleCodes: ['TEAM_LEADER'], label: 'Verified By (Workshop Team Leader)', stageCount: 1 },
+      ],
+    ]);
   const repo = {
-    getStageRoleMap: jest.fn().mockResolvedValue(stageMap),
+    getStageMap: jest.fn().mockResolvedValue(stageMap),
     getUserRoleCodes: jest.fn((userId: string) =>
       Promise.resolve(
         userId === 'caller'
@@ -122,5 +141,68 @@ describe('QueueService#getQueue (PR-073/076/081)', () => {
     const page2 = await service.getQueue('caller', { limit: 2, cursor: page1.page.nextCursor! });
     expect(page2.data.map((e) => e.id)).toEqual(['c']);
     expect(page2.page.hasMore).toBe(false);
+  });
+
+  // ---- Slice 26-TWOSTAGE: which stage is this record at? -------------------
+
+  it('slice 26: a TEAM_LEADER sees stage 1 of 2 with stage 1’s label', async () => {
+    const { service } = buildService({
+      stageMap: TWO_STAGE_MAP,
+      ownRoles: ['TEAM_LEADER'],
+      ownCandidates: [jobRow('a', 'route-1', 1), jobRow('b', 'route-1', 2)],
+    });
+    const page = await service.getQueue('caller', {});
+    // The stage-2 record is not theirs at all — it is the engineer's.
+    expect(page.data.map((e) => e.id)).toEqual(['a']);
+    expect(page.data[0]).toMatchObject({
+      stageOrdinal: 1,
+      stageCount: 2,
+      stageLabel: 'Verified By (Workshop Team Leader)',
+    });
+  });
+
+  it('slice 26: an ENGINEER sees only the stage-2 record, reported as stage 2 of 2', async () => {
+    const { service } = buildService({
+      stageMap: TWO_STAGE_MAP,
+      ownRoles: ['ENGINEER'],
+      ownCandidates: [jobRow('a', 'route-1', 1), jobRow('b', 'route-1', 2)],
+    });
+    const page = await service.getQueue('caller', {});
+    expect(page.data.map((e) => e.id)).toEqual(['b']);
+    expect(page.data[0]).toMatchObject({
+      stageOrdinal: 2,
+      stageCount: 2,
+      stageLabel: 'Verified By (Supervisor / Engineer)',
+    });
+  });
+
+  it('slice 26: a delegated entry reports the DELEGATOR’s stage, not a default', async () => {
+    const { service } = buildService({
+      stageMap: TWO_STAGE_MAP,
+      ownRoles: ['MAINTAINER'],
+      ownCandidates: [],
+      delegators: [{ delegatorId: 'delegator-eng' }],
+      delegatorRolesById: { 'delegator-eng': ['ENGINEER'] },
+      delegatorCandidatesById: { 'delegator-eng': [jobRow('d2', 'route-1', 2)] },
+    });
+    const page = await service.getQueue('caller', {});
+    expect(page.data).toHaveLength(1);
+    expect(page.data[0]).toMatchObject({
+      id: 'd2',
+      onBehalfOf: 'delegator-eng',
+      stageOrdinal: 2,
+      stageCount: 2,
+      stageLabel: 'Verified By (Supervisor / Engineer)',
+    });
+  });
+
+  it('slice 26: a job whose current stage is not configured at all is dropped, never emitted with a guessed stage', async () => {
+    const { service } = buildService({
+      stageMap: TWO_STAGE_MAP,
+      ownRoles: ['TEAM_LEADER', 'ENGINEER'],
+      ownCandidates: [jobRow('ghost', 'route-1', 3)],
+    });
+    const page = await service.getQueue('caller', {});
+    expect(page.data).toEqual([]);
   });
 });

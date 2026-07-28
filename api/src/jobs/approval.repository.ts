@@ -72,7 +72,7 @@ export class ApprovalRepository {
    *
    * The DELIVERED route no longer relies on that null state: migration
    * `20260726120000_enable_verification_escalation_default` sets 72 hours on
-   * both stages of `SINGLE_STAGE_TL_OR_ENG` (UR-050 — Samuel, 2026-07-26,
+   * both stages of `TWO_STAGE_TL_THEN_ENG` (UR-050 — Samuel, 2026-07-26,
    * resolving the slice-11a finding-D contradiction between
    * `ENVIRONMENT_REQUIREMENTS.md`'s advertised 72h default and the original
    * seed's "escalation off"). Clearing a stage's value still switches

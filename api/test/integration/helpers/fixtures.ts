@@ -28,10 +28,10 @@ export async function createUser(label = 'user'): Promise<string> {
 
 export async function getSeededApprovalRouteId(): Promise<string> {
   const result = await adminPool.query(
-    `SELECT id FROM "approval_route" WHERE code = 'SINGLE_STAGE_TL_OR_ENG'`,
+    `SELECT id FROM "approval_route" WHERE code = 'TWO_STAGE_TL_THEN_ENG'`,
   );
   if (result.rowCount === 0) {
-    throw new Error('PR-DBD-09 seed missing: approval_route SINGLE_STAGE_TL_OR_ENG not found');
+    throw new Error('PR-DBD-09 seed missing: approval_route TWO_STAGE_TL_THEN_ENG not found');
   }
   return result.rows[0].id as string;
 }

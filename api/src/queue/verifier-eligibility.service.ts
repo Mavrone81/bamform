@@ -27,9 +27,9 @@ export class VerifierEligibilityService {
     if (subject.currentStageOrdinal == null) {
       return [];
     }
-    const stageMap = await this.repo.getStageRoleMap();
+    const stageMap = await this.repo.getStageMap();
     const roleCodes =
-      stageMap.get(`${subject.approvalRouteId}:${subject.currentStageOrdinal}`) ?? [];
+      stageMap.get(`${subject.approvalRouteId}:${subject.currentStageOrdinal}`)?.roleCodes ?? [];
     if (roleCodes.length === 0) {
       return [];
     }

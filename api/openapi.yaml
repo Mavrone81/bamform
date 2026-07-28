@@ -2866,7 +2866,7 @@ components:
       required: [id, code, name, active]
       properties:
         id: { type: string, format: uuid }
-        code: { type: string, examples: ['SINGLE_STAGE_TL_OR_ENG'] }
+        code: { type: string, examples: ['TWO_STAGE_TL_THEN_ENG'] }
         name: { type: string }
         active: { type: boolean }
 
@@ -3252,7 +3252,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/JobSummary'
         - type: object
-          required: [submittedAt, ageHours, escalated]
+          required: [submittedAt, ageHours, escalated, stageOrdinal, stageCount, stageLabel]
           properties:
             submittedAt: { type: string, format: date-time }
             submittedByName: { type: string }
@@ -3262,6 +3262,20 @@ components:
               type: [string, 'null']
               format: uuid
               description: The delegator's user id (PR-076) when this entry is present because of an active delegation, not the caller's own eligibility.
+            stageOrdinal:
+              type: integer
+              minimum: 1
+              description: The approval stage this record is waiting at (the delivered route is two stages — Team Leader then Engineer).
+              examples: [1]
+            stageCount:
+              type: integer
+              minimum: 1
+              description: How many stages the record's approval route has, so a client can render "stage 1 of 2" without a second lookup.
+              examples: [2]
+            stageLabel:
+              type: string
+              description: The administrator-configured `approval_stage.label` for that stage, verbatim (ADR-011 route-as-data).
+              examples: ['Verified By (Workshop Team Leader)']
 
     Delegation:
       type: object

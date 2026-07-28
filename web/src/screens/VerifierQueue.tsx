@@ -99,6 +99,29 @@ export function VerifierQueue() {
                   </span>
                 )}
               </div>
+              {/* Slice 26-TWOSTAGE — which of the route's stages this record
+                  is waiting at. The route is two stages (team leader, then
+                  engineer) and only the FINAL signature archives, so a
+                  verifier must be able to see, before opening the record,
+                  whose signature is being asked for and whether it is the
+                  last one. A-05: icon + words, never colour alone. */}
+              <div className="card-row">
+                <span
+                  className="status-chip"
+                  data-tone={entry.stageOrdinal >= entry.stageCount ? 'attention' : 'info'}
+                >
+                  <span aria-hidden="true">◧</span>
+                  <span>
+                    Stage {entry.stageOrdinal} of {entry.stageCount}
+                  </span>
+                </span>
+                <span className="text-soft">{entry.stageLabel}</span>
+              </div>
+              {entry.stageOrdinal >= entry.stageCount && (
+                <div className="card-row">
+                  <span className="microlabel">Final sign-off — archives the record</span>
+                </div>
+              )}
               {entry.onBehalfOf && (
                 <div className="card-row">
                   <span className="status-chip" data-tone="info">
