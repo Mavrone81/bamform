@@ -50,7 +50,9 @@ test('O-15: a response lost after the server commits leaves the entry retained, 
   const retryId = (retry.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id;
   expect(retryId).toBe(mutationId); // same client-generated id — this IS the point of ADR-008
 
-  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 10_000,
+  });
   expect(server.appliedCount.get(mutationId)).toBe(1); // never twice
   const allIds = new Set(server.receivedBatches.flat().map((m) => m.id));
   expect(allIds.size).toBe(1); // only the one item we touched
@@ -75,7 +77,9 @@ test('O-02: network killed mid-drain, then restored — no duplicate, no loss', 
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await retryAttempt;
 
-  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 10_000,
+  });
   const ids = new Set(server.receivedBatches.flat().map((m) => m.id));
   expect(ids.size).toBe(1);
   for (const id of ids) expect(server.appliedCount.get(id)).toBe(1);
@@ -91,7 +95,9 @@ test('O-05: replaying an entire outbox batch (simulated double-send) never doubl
   await page.getByRole('button', { name: 'Done', exact: true }).first().click();
   const request = await requestPromise;
   const mutations = (request.postDataJSON() as { mutations: unknown[] }).mutations;
-  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 10_000,
+  });
 
   // Simulate a duplicate transmission of the SAME batch — e.g. a retried
   // HTTP request whose first attempt actually arrived, replayed anyway —

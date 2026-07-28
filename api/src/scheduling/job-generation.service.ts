@@ -11,6 +11,7 @@ import { FREQUENCY_INTERVAL_MONTHS, type Frequency } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveCascadeFrequencyScope, resolveCascadeItems } from './frequency-cascade';
+import { nextJobNumber } from './job-number';
 
 export interface GenerateDueJobsResult {
   /** schedule_rule rows whose asset/lead-time made them candidates this run. */
@@ -129,7 +130,7 @@ export class JobGenerationService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        const jobNumber = await this.nextJobNumber(tx, rule.nextDueOn.getUTCFullYear());
+        const jobNumber = await nextJobNumber(tx, rule.nextDueOn.getUTCFullYear());
         const job = await tx.job.create({
           data: {
             jobNumber,
@@ -169,17 +170,5 @@ export class JobGenerationService {
       }
       throw error;
     }
-  }
-
-  /** `PM-{year}-{6-digit sequence}` (DBD §6.15), sequenced within the transaction that inserts the job. */
-  private async nextJobNumber(tx: Prisma.TransactionClient, year: number): Promise<string> {
-    const prefix = `PM-${year}-`;
-    const last = await tx.job.findFirst({
-      where: { jobNumber: { startsWith: prefix } },
-      orderBy: { jobNumber: 'desc' },
-      select: { jobNumber: true },
-    });
-    const lastSeq = last ? Number(last.jobNumber.slice(prefix.length)) : 0;
-    return `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
   }
 }

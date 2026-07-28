@@ -55,7 +55,9 @@ test('O-16: a queue of 205 mutations drains in batches capped at 200, never exce
 
   await page.context().setOffline(false);
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 30_000,
+  });
 
   expect(server.receivedBatches.length).toBeGreaterThanOrEqual(2); // 205 could not fit in one batch
   for (const batch of server.receivedBatches) {

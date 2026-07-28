@@ -570,6 +570,28 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/approval-routes': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List approval routes
+     * @description Slice 13-TL. Read-only, seeded reference data (PR-DBD-09) - resolves
+     *     the approvalRouteId that POST /asset-types requires. Routes are
+     *     never created via the API.
+     */
+    get: operations['listApprovalRoutes'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/templates': {
     parameters: {
       query?: never;
@@ -584,7 +606,15 @@ export interface paths {
      */
     get: operations['listTemplates'];
     put?: never;
-    post?: never;
+    /**
+     * Create a form template shell (BAMFORM-TLP-001 template load)
+     * @description ENGINEER or DOC_CONTROLLER. Slice 13-TL - exists solely for the
+     *     TLP-001 load tooling (PR-TLP-07: the load is an authenticated,
+     *     audited operation through the real API, never a DB migration).
+     *     Content (items, measurements, standing content) still arrives only
+     *     through the revision-authoring endpoints below.
+     */
+    post: operations['createTemplate'];
     delete?: never;
     options?: never;
     head?: never;
@@ -930,6 +960,42 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/jobs/adhoc': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Raise a job against an asset outside the maintenance plan
+     * @description UR-028/PR-058. Roles: PLANNER, TEAM_LEADER, ENGINEER, ADMIN.
+     *     Area-scoped (PR-API-10) - a caller with `user_area_scope` rows may
+     *     only raise work on assets inside them.
+     *
+     *     The asset type's CURRENT template revision is FROZEN onto the job
+     *     exactly as a scheduler-generated job's is (DP-3/PR-049), the same
+     *     `PM-{year}-{sequence}` number is drawn, and the asset type's approval
+     *     route is attached - so an ad-hoc job travels the identical
+     *     record/verify/archive path.
+     *
+     *     It does NOT touch the plan. An ad-hoc job is created with an EMPTY
+     *     `frequencyScope`, which is what makes it structurally incapable of
+     *     advancing `schedule_rule.next_due_on` on completion or of being
+     *     credited as a prior completion when a planned job is voided; and it is
+     *     excluded from the schedule-period uniqueness key, so it neither
+     *     blocks generation of the planned PM for that period nor collides with
+     *     a second call-out on the same machine the same day.
+     */
+    post: operations['createAdhocJob'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/jobs/{jobId}/attachments': {
     parameters: {
       query?: never;
@@ -1029,10 +1095,21 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Submit a completed record for verification
+     * Submit a completed record for verification, signed by the performer
      * @description Atomic. Rejected if any mandatory item has no result. Never sent as part
      *     of an outbox batch - all preceding mutations for the job must be
      *     acknowledged first.
+     *
+     *     Slice 18-WORKFLOW: carries the PERFORMER'S DRAWN SIGNATURE
+     *     (`drawnSignature`, REQUIRED). The plant's process is "completed work -
+     *     team member will sign and submit to team lead for checks"; the paper
+     *     forms carry three signatures and the system previously captured two.
+     *     Produces a stage-0 `approval_step` with `action = SUBMITTED` carrying
+     *     the encrypted drawn signature PLUS a content-bound Ed25519 signature
+     *     over the canonical record (ADR-010, the same mechanism
+     *     `POST /jobs/{jobId}/verify` uses), so the assertion "I did this work"
+     *     commits to the record that was submitted and is verified by
+     *     `GET /records/{recordId}/integrity`.
      */
     post: operations['submitJob'];
     delete?: never;
@@ -1928,10 +2005,20 @@ export interface components {
       active?: boolean;
     };
     /**
-     * @description The closed set `role.code` holds — seeded by migration, not created through the API (UR-073).
+     * @description The closed set `role.code` holds — seeded by migration, not created
+     *     through the API (UR-073). `PLANNER` is the slice-18-WORKFLOW addition
+     *     (the maintenance planner who plans the PM schedule and raises work);
+     *     it is ADDITIVE — no member was removed or renamed.
      * @enum {string}
      */
-    RoleCode: 'MAINTAINER' | 'TEAM_LEADER' | 'ENGINEER' | 'DOC_CONTROLLER' | 'ADMIN' | 'AUDITOR';
+    RoleCode:
+      | 'MAINTAINER'
+      | 'PLANNER'
+      | 'TEAM_LEADER'
+      | 'ENGINEER'
+      | 'DOC_CONTROLLER'
+      | 'ADMIN'
+      | 'AUDITOR';
     Role: {
       /** Format: uuid */
       id: string;
@@ -2084,6 +2171,19 @@ export interface components {
        * @description Resolves to null if no revision has ever been approved
        */
       currentRevisionId?: string | null;
+    };
+    CreateTemplateRequest: {
+      /** @example CE 95 020 00 01 */
+      documentNumber: string;
+      title: string;
+    };
+    ApprovalRoute: {
+      /** Format: uuid */
+      id: string;
+      /** @example SINGLE_STAGE_TL_OR_ENG */
+      code: string;
+      name: string;
+      active: boolean;
     };
     TemplateRevision: {
       /** Format: uuid */
@@ -2314,6 +2414,55 @@ export interface components {
        * @description The user this job is (re)assigned to.
        */
       assigneeId: string;
+    };
+    SubmitJobRequest: {
+      /**
+       * @description The PERFORMER's signature (slice 18-WORKFLOW). Base64 PNG
+       *     data-URL (`data:image/png;base64,...`, or bare base64) captured
+       *     by the SAME on-system signature pad the verifier stages use -
+       *     stylus, finger and mouse through one pointer-event path.
+       *     MANDATORY: 422 (`/errors/validation-failed`) if absent, 422
+       *     (`/errors/attachment-rejected`) if it is not a valid PNG
+       *     (magic-byte check, S-30-style). Stored ENCRYPTED on
+       *     `approval_step.drawn_signature_ct` (field-encryption, PR-106),
+       *     never returned by any read path and never written to a log or an
+       *     audit payload.
+       * @example data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...
+       */
+      drawnSignature: string;
+    };
+    CreateAdhocJobRequest: {
+      /**
+       * Format: uuid
+       * @description The machine the work is being raised against.
+       */
+      assetId: string;
+      /**
+       * @description Which depth of the frozen checklist is being performed. Labels
+       *     the record; it does NOT make the job count against the plan (the
+       *     job is created with an empty `frequencyScope`).
+       */
+      frequency: components['schemas']['Frequency'];
+      /**
+       * @description Why this work is being raised off-plan. MANDATORY and audited
+       *     (UR-028), and enforced by the database too
+       *     (`job_adhoc_reason_length_chk`), the same way void (INV-12) and
+       *     return (INV-13) reasons are.
+       */
+      reason: string;
+      /**
+       * Format: date
+       * @description `YYYY-MM-DD`. Defaults to today - the work is being raised now.
+       */
+      dueOn?: string;
+      /**
+       * Format: uuid
+       * @description Optional. When supplied the job is born ASSIGNED to this user,
+       *     who must satisfy the same rules `POST /jobs/{jobId}/assign`
+       *     applies (active, holds a result-recording role, can reach the
+       *     job's area) - otherwise 422.
+       */
+      assigneeId?: string | null;
     };
     VerifyJobRequest: {
       /**
@@ -3439,6 +3588,27 @@ export interface operations {
       422: components['responses']['Problem'];
     };
   };
+  listApprovalRoutes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Active approval routes */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalRoute'][];
+        };
+      };
+      401: components['responses']['Problem'];
+    };
+  };
   listTemplates: {
     parameters: {
       query?: {
@@ -3464,6 +3634,42 @@ export interface operations {
         };
       };
       401: components['responses']['Problem'];
+    };
+  };
+  createTemplate: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateTemplateRequest'];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['FormTemplate'];
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      /** @description Document number already exists (INV-07) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      422: components['responses']['Problem'];
     };
   };
   getTemplate: {
@@ -4011,6 +4217,53 @@ export interface operations {
       422: components['responses']['Problem'];
     };
   };
+  createAdhocJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateAdhocJobRequest'];
+      };
+    };
+    responses: {
+      /** @description Raised */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Job'];
+        };
+      };
+      /** @description `/errors/forbidden` - role not permitted; `/errors/out-of-scope` - the asset is outside the caller's areas */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      404: components['responses']['Problem'];
+      /**
+       * @description `/errors/validation-failed` - the asset is inactive, its form
+       *     template has no CURRENT revision, or the assignee cannot work the
+       *     job; or the mandatory `reason` is shorter than 10 characters.
+       */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+    };
+  };
   uploadAttachment: {
     parameters: {
       query?: never;
@@ -4116,7 +4369,11 @@ export interface operations {
       };
       cookie?: never;
     };
-    requestBody?: never;
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SubmitJobRequest'];
+      };
+    };
     responses: {
       /** @description Submitted and routed to the verification queue */
       200: {

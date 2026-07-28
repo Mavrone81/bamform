@@ -66,7 +66,9 @@ test('O-13: two devices editing the same job — the second device to sync gets 
   // version, so it applies and the job's real draftVersion advances.
   await deviceA.context().setOffline(false);
   await deviceA.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expect(deviceA.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  await expect(deviceA.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 10_000,
+  });
 
   // Device B reconnects second — its edit still carries the OLD version
   // (it queued its mutation before ever seeing A's change), so the server
@@ -119,6 +121,6 @@ test('O-14: a job reassigned server-side is flagged on the original device and b
   // panel here (H-3) and the disabled submit button says why — the O-14
   // guarantee itself is unchanged: submit is blocked.
   await expect(
-    page.getByRole('button', { name: /Submit|Sending|Resolve the sync problem/ }),
+    page.getByRole('button', { name: /Sign and submit|Sending|Resolve the sync problem/ }),
   ).toBeDisabled();
 });

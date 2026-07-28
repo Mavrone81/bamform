@@ -29,7 +29,7 @@ test('O-21a: capture → preview → upload → received; the outbox never carri
   await expect(staged.getByText('Not uploaded yet')).toBeVisible();
 
   // A staged photo blocks Submit — submitting would silently discard it.
-  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Sign and submit', exact: true })).toBeDisabled();
   await expect(page.getByText(/Upload or remove the photos above/)).toBeVisible();
 
   await staged.getByRole('button', { name: 'Upload photo' }).click();
@@ -40,7 +40,7 @@ test('O-21a: capture → preview → upload → received; the outbox never carri
   expect(server.receivedBatches.flat().filter((m) => m.path.includes('attachment'))).toHaveLength(
     0,
   );
-  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Sign and submit', exact: true })).toBeEnabled();
 });
 
 test('O-21b: remove-before-submit really removes — nothing reaches the server', async ({
@@ -54,7 +54,7 @@ test('O-21b: remove-before-submit really removes — nothing reaches the server'
 
   await staged.getByRole('button', { name: 'Remove' }).click();
   await expect(staged).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Sign and submit', exact: true })).toBeEnabled();
   expect(server.attachments.get(DEFAULT_JOB.id) ?? []).toHaveLength(0);
 });
 

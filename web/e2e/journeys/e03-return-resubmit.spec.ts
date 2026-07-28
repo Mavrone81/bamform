@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { FakeServer, E2E_USERS, type SeedJob } from '../support/fake-server';
-import { signInAs } from '../support/fixtures';
+import { signAndSubmit, signInAs } from '../support/fixtures';
 
 /**
  * E-03: a verifier returns a submitted record with a reason, the
@@ -39,7 +39,7 @@ test('E-03: verifier returns with a reason → technician corrects and resubmits
   // 1. Technician submits the record for the first time.
   await techPage.getByText(JOB.jobNumber).click();
   await expect(techPage.getByRole('heading', { name: JOB.jobNumber })).toBeVisible();
-  await techPage.getByRole('button', { name: 'Submit' }).click();
+  await signAndSubmit(techPage);
   await expect(techPage.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
 
   // 2. A TEAM_LEADER, in a separate context, returns it with a reason.
@@ -66,7 +66,7 @@ test('E-03: verifier returns with a reason → technician corrects and resubmits
   await expect(techPage.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
   await techPage.getByText(JOB.jobNumber).click();
   await expect(techPage.getByRole('heading', { name: JOB.jobNumber })).toBeVisible();
-  await techPage.getByRole('button', { name: 'Submit' }).click();
+  await signAndSubmit(techPage);
   await expect(techPage.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
   await techContext.close();
 

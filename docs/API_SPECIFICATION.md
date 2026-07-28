@@ -164,25 +164,40 @@ usability affordance, never a security control (UR-074).
 
 ## 4.1 Permission matrix
 
-| Capability | MAINTAINER | TEAM_LEADER | ENGINEER | DOC_CONTROLLER | ADMIN | AUDITOR |
-|---|---|---|---|---|---|---|
-| View own assigned jobs | ✓ | ✓ | ✓ | | ✓ | |
-| View all jobs in scope | | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Record results / submit | ✓ | ✓ | ✓ | | | |
-| Verify a record | | ✓ | ✓ | | | |
-| Return a record | | ✓ | ✓ | | | |
-| Recall own submission | ✓ | ✓ | ✓ | | | |
-| Void a job | | ✓ | ✓ | | ✓ | |
-| Create/edit template revision | | | ✓ | ✓ | | |
-| Approve template revision | | | | ✓ | | |
-| Create/edit assets | | | ✓ | | ✓ | |
-| Adjust schedules | | ✓ | ✓ | | ✓ | |
-| Manage users and roles | | | | | ✓ | |
-| Create delegation | | ✓ | ✓ | | ✓ | |
-| View archive | ✓ (own) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| View audit trail | | | | ✓ | ✓ | ✓ |
-| Export records | | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Modify anything** | | | | | | **✗ — read-only** |
+`PLANNER` is the slice-18-WORKFLOW addition (owner decision, 2026-07-28 — named
+`PLANNER`, deliberately not "SCHEDULER", which already names the background worker).
+The change is **ADDITIVE**: every ✓ that existed before slice 18 is still there, and no
+role lost any capability. PLANNER deliberately holds NO verification right — planning
+work and independently checking it are different jobs (separation of duties); a person
+who genuinely does both holds both roles, and the distinct-person rule still forbids one
+human signing both verification stages.
+
+| Capability | MAINTAINER | PLANNER | TEAM_LEADER | ENGINEER | DOC_CONTROLLER | ADMIN | AUDITOR |
+|---|---|---|---|---|---|---|---|
+| View own assigned jobs | ✓ | ✓ | ✓ | ✓ | | ✓ | |
+| View all jobs in scope | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Record results / submit (signed) | ✓ | | ✓ | ✓ | | | |
+| Raise an ad-hoc job | | ✓ | ✓ | ✓ | | ✓ | |
+| Assign / reassign a job | | ✓ | ✓ | ✓ | | ✓ | |
+| Verify a record | | | ✓ | ✓ | | | |
+| Return a record | | | ✓ | ✓ | | | |
+| Recall own submission | ✓ | | ✓ | ✓ | | | |
+| Void a job | | | ✓ | ✓ | | ✓ | |
+| Create/edit template revision | | | | ✓ | ✓ | | |
+| Approve template revision | | | | | ✓ | | |
+| Create/edit assets | | | | ✓ | | ✓ | |
+| Adjust schedules | | ✓ | ✓ | ✓ | | ✓ | |
+| Manage users and roles | | | | | | ✓ | |
+| Create delegation | | | ✓ | ✓ | | ✓ | |
+| View archive | ✓ (own) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| View audit trail | | | | | ✓ | ✓ | ✓ |
+| Export records | | | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Modify anything** | | | | | | | **✗ — read-only** |
+
+**Slice 18-WORKFLOW note on "Record results / submit"** — `POST /jobs/{id}/submit` now
+carries the PERFORMER'S DRAWN SIGNATURE (mandatory). The plant's process is "completed
+work — team member will sign and submit to team lead for checks"; the record now carries
+three signatures (performer + two verifiers), matching the paper forms.
 
 **PR-API-09** `AUDITOR` is enforced read-only at the database connection level, not only in
 guards: auditor-scoped queries use the `bamform_readonly` role (DBD §7.1).
@@ -394,14 +409,14 @@ Full schemas in `api/openapi.yaml`. Summarised here by resource group.
 |---|---|---|
 | `GET` | `/jobs` | Filter: `status`, `assignedTo`, `assetId`, `dueFrom`, `dueTo`, `overdue` |
 | `GET` | `/jobs/{id}` | Full job with frozen template content |
-| `POST` | `/jobs/adhoc` | UR-028. Requires reason |
+| `POST` | `/jobs/adhoc` | UR-028. Requires a reason >= 10 chars (audited, and DB-enforced by `job_adhoc_reason_length_chk`). PLANNER/TL/ENG/ADMIN. Neither satisfies nor advances `next_due_on` — created with an empty `frequency_scope` and excluded from the schedule-period key |
 | `POST` | `/jobs/{id}/assign` | UR-029 |
 | `PUT` | `/jobs/{id}/items/{templateItemId}` | Idempotency key required. `If-Match` on `draftVersion` |
 | `PUT` | `/jobs/{id}/measurements/{templateMeasurementId}` | As above |
 | `POST` `DELETE` | `/jobs/{id}/parts` `/jobs/{id}/parts/{partId}` | UR-034 |
 | `POST` | `/jobs/{id}/attachments` | `multipart/form-data`. Magic-byte validated |
 | `GET` | `/jobs/{id}/attachments/{attachmentId}` | **Streamed through the API** — authorisation on every fetch (PR-011) |
-| `POST` | `/jobs/{id}/submit` | Completeness gate (PR-045) |
+| `POST` | `/jobs/{id}/submit` | Completeness gate (PR-045) + the PERFORMER's drawn signature (mandatory, slice 18-WORKFLOW) — produces a stage-0 `approval_step` with an encrypted drawn signature and a content-bound Ed25519 signature |
 | `POST` | `/jobs/{id}/recall` | Submitter only, while `SUBMITTED` (UR-051) |
 
 ## 10.6 Approval

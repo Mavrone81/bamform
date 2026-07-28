@@ -1,0 +1,60 @@
+-- Reversal: DROP INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_scheduled_key";
+--           (only after re-creating the previous partial index — see the
+--           companion 20260728020020 migration's reversal note; the two
+--           migrations reverse as a pair, in reverse order. This is the exact
+--           same create-before-drop pairing slice 17 used in
+--           20260728000010/20260728000020.)
+--
+-- MID-FAILURE RECOVERY (same shape as 20260728000010's — read this if
+-- `migrate deploy` is failing on THIS migration with:
+--   relation "job_asset_frequency_scope_due_on_scheduled_key" already exists
+-- ): an interrupted `CREATE INDEX CONCURRENTLY` leaves an INVALID index that
+-- still holds the name. Recovery, verbatim:
+--
+--   1. psql:  DROP INDEX CONCURRENTLY IF EXISTS
+--               "job_asset_frequency_scope_due_on_scheduled_key";
+--   2. npx prisma migrate resolve --rolled-back
+--        20260728020010_job_period_key_excl_adhoc_concurrent
+--   3. npx prisma migrate deploy
+--
+-- SAFETY DURING ANY OF THIS: deploy halts before 20260728020020, so the
+-- previous "..._not_voided_key" index is still in place — enforcement is
+-- never weaker than intended while this migration is broken, only
+-- (harmlessly) stricter.
+--
+-- Slice 18-WORKFLOW — UR-028 ad-hoc jobs.
+--
+-- PR-052's generation-idempotency key (I-INV-14) exists for ONE purpose: so
+-- the scheduler cannot generate the same PLANNED job twice for a period
+-- (asset, frequency_scope, due_on). An ad-hoc job is not a planned job — it
+-- is extra work raised off-plan — so it must not occupy a schedule period at
+-- all. Two consequences, both intended:
+--
+--   * Raising an ad-hoc job never blocks the scheduler from generating the
+--     planned PM for that asset/period. The plan is untouched by extra work.
+--   * Two ad-hoc jobs may legitimately be raised against the same machine on
+--     the same day (two breakdowns, two call-outs). Under the previous index
+--     the second one raised P2002 and was silently swallowed by
+--     job-generation's idempotent-no-op path — which is correct for the
+--     scheduler and wrong for a human raising real work.
+--
+-- Ad-hoc jobs are additionally created with an EMPTY `frequency_scope` (see
+-- `adhoc-job.service.ts`), which is what stops them advancing
+-- `schedule_rule.next_due_on`; this index change is the second, independent
+-- half of the same "an ad-hoc job is not the planned service" rule, applied
+-- at the period key.
+--
+-- Existing-row safety: every current row has `is_adhoc = false` (nothing has
+-- ever written the column), so the new index covers exactly the same rows the
+-- outgoing one does and cannot fail on existing data.
+--
+-- NOT a Prisma `@@unique`: Prisma's DSL cannot express partial unique indexes
+-- (same reason as INV-01's one-current-revision index and slice 17's
+-- predecessor to this one). Prisma still maps its violation to P2002, which
+-- `job-generation.service.ts` already handles.
+--
+-- CONCURRENTLY per M-06 (job is a large table); single statement so Prisma
+-- runs it outside a transaction.
+CREATE UNIQUE INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_scheduled_key"
+  ON "job"("asset_id", "frequency_scope", "due_on")
+  WHERE "status" <> 'voided' AND "is_adhoc" = false;

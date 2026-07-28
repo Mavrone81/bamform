@@ -119,6 +119,7 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
     await request(server)
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(users.maintainerToken))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     await request(server)
       .post(`/api/v1/jobs/${jobId}/verify`)
@@ -257,6 +258,7 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
     await request(server)
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(users.maintainerToken))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     await request(server)
       .post(`/api/v1/jobs/${jobId}/verify`)

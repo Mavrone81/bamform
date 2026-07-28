@@ -18,6 +18,8 @@ import type {
   JobActionResponse,
   DelegationActionResponse,
   VerifyJobRequest,
+  SubmitJobRequest,
+  CreateAdhocJobRequest,
   CreateDelegationRequest,
   Problem,
   Attachment,
@@ -112,15 +114,33 @@ export class HttpSyncTransport implements SyncTransport {
     return (await res.json()) as DrainOutboxResponse;
   }
 
-  async submitJob(jobId: string, idempotencyKey: string): Promise<SubmitJobResponse> {
+  async submitJob(
+    jobId: string,
+    idempotencyKey: string,
+    request: SubmitJobRequest,
+  ): Promise<SubmitJobResponse> {
     const res = await authorizedFetch(`/jobs/${jobId}/submit`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': idempotencyKey },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(request),
     });
     if (res.ok) {
       return { status: res.status, ok: true, body: await res.json() };
     }
     const problem = await res.json().catch(() => undefined);
+    return { status: res.status, ok: false, problem };
+  }
+
+  async createAdhocJob(request: CreateAdhocJobRequest): Promise<JobActionResponse> {
+    const res = await authorizedFetch('/jobs/adhoc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (res.ok) {
+      return { status: res.status, ok: true, body: (await res.json()) as Job };
+    }
+    const problem: Problem | undefined = await res.json().catch(() => undefined);
     return { status: res.status, ok: false, problem };
   }
 

@@ -10,12 +10,42 @@ type Job = components['schemas']['Job'];
 type ApprovalStep = components['schemas']['ApprovalStep'];
 
 const STAGE_LABELS: Record<number, string> = {
+  // Slice 18-WORKFLOW §1 — stage 0 is the PERFORMER's own signature, not a
+  // verification stage. Without this entry the approval history rendered a
+  // bare "Stage 0", which means nothing to anyone in the plant; this is the
+  // paper form's own wording.
+  0: 'Maintenance Performed By',
   1: 'Verified By (Workshop Team Leader)',
   2: 'Verified By (Engineer)',
 };
 
 function isStepUpRequired(problem: { type?: string } | undefined): boolean {
   return Boolean(problem?.type?.includes('step-up-required'));
+}
+
+/**
+ * Which verification stage this record is awaiting.
+ *
+ * Counts VERIFIED steps only, and only those in the CURRENT submission cycle
+ * — a `RETURNED`/`RECALLED` step supersedes every earlier verification (the
+ * content they signed is about to change), exactly the cycle rule the server
+ * applies in `verification.service.ts` (SYS-8) and its
+ * `approval_step_distinct_stage_verifiers_trg` backstop.
+ *
+ * The previous derivation was `max(stageOrdinal) + 1` over ALL steps, which
+ * read a stage-1 RETURNED step as "stage 1 is complete" and announced
+ * "Stage 2 — needs Engineer" to a reworked record that still needed the team
+ * leader. Slice 18-WORKFLOW's stage-0 performer signature would have been
+ * harmless to that formula, but the formula was already wrong; it is fixed
+ * here rather than built on.
+ */
+export function currentVerificationStage(steps: ApprovalStep[] | undefined): number {
+  const list = steps ?? [];
+  let lastBreak = -1;
+  list.forEach((step, index) => {
+    if (step.action === 'RETURNED' || step.action === 'RECALLED') lastBreak = index;
+  });
+  return list.slice(lastBreak + 1).filter((s) => s.action === 'VERIFIED').length + 1;
 }
 
 const ITEM_RESULT_META: Record<string, { icon: string; tone: 'good' | 'bad' | 'neutral' }> = {
@@ -189,9 +219,16 @@ export function RecordReview({ jobId }: { jobId: string }) {
   const measurementResultsByMeasurement = new Map(
     (job.measurementResults ?? []).map((r) => [r.templateMeasurementId, r]),
   );
-  const stage = job.approvalSteps?.length
-    ? Math.max(...job.approvalSteps.map((s) => s.stageOrdinal)) + 1
-    : 1;
+  /**
+   * Which verification stage this record is awaiting. Derived from the
+   * VERIFIED steps only — a `SUBMITTED` (stage-0 performer signature, slice
+   * 18-WORKFLOW) or `RETURNED` step is not a completed verification stage
+   * and must not advance the counter. The previous `max(stageOrdinal) + 1`
+   * over ALL steps read a stage-1 RETURNED step as "stage 1 is done" and
+   * announced stage 2 to a reworked record that still needs stage 1 — a
+   * pre-existing defect this slice's stage-0 step would have compounded.
+   */
+  const stage = currentVerificationStage(job.approvalSteps);
   const canAct = job.status === 'SUBMITTED';
 
   return (

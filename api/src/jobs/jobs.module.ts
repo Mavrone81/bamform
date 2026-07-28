@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { QueueModule } from '../queue/queue.module';
 import { SchedulingModule } from '../scheduling/scheduling.module';
+import { AdhocJobService } from './adhoc-job.service';
 import { ApprovalController } from './approval.controller';
 import { ApprovalRepository } from './approval.repository';
 import { ApprovalTransitionsService } from './approval-transitions.service';
@@ -53,6 +54,7 @@ import { VerificationService } from './verification.service';
     PartsService,
     SubmissionService,
     AssignmentService,
+    AdhocJobService,
     StageEscalationService,
     AttachmentsService,
     ApprovalRepository,

@@ -1,0 +1,18 @@
+-- Reversal: CREATE UNIQUE INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_not_voided_key"
+--             ON "job"("asset_id", "frequency_scope", "due_on")
+--             WHERE "status" <> 'voided';
+--           CAUTION — the reversal FAILS if two ad-hoc jobs have since been
+--           raised against the same asset on the same day (they share
+--           (asset_id, '{}', due_on), which the wider index forbids), or if an
+--           ad-hoc job shares a period with a planned one. Those rows must be
+--           re-examined by hand first; this is inherent to reversing a
+--           deliberate uniqueness weakening, not an accident. See
+--           20260728020010's header for the pairing.
+--
+-- Slice 18-WORKFLOW, step 2 of 2: the replacement
+-- ("..._scheduled_key", created by 20260728020010 earlier in this same
+-- `migrate deploy` run) is in place, so the previous index — which made an
+-- ad-hoc job occupy, and therefore block, a schedule period it never
+-- satisfied — is retired. Single CONCURRENTLY statement, own migration, per
+-- M-06 and the one-statement-outside-a-transaction convention.
+DROP INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_not_voided_key";

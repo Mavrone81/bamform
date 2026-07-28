@@ -107,7 +107,13 @@ describe('recoverJobConflicts — SYS-5: the wedge is recoverable through code, 
     const cached = await getCachedJob(db, 'user-1', 'job-1');
     expect(cached?.hasPendingOutbox).toBe(false);
 
-    const submit = await submitJob(db, transport, 'user-1', 'job-1');
+    const submit = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(submit.ok).toBe(true);
   });
 

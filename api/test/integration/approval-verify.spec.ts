@@ -192,6 +192,7 @@ describe('Jobs — POST /jobs/{id}/verify (two-stage approval, PR-041..046/093/0
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(maintainerToken))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     // A fresh submission restarts BOTH stages; the distinct-person rule

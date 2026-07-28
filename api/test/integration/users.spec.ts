@@ -584,7 +584,18 @@ describe('Users/roles administration — /users, /roles', () => {
 
     const codes = res.body.data.map((role: { code: string }) => role.code).sort();
     expect(codes).toEqual(
-      ['ADMIN', 'AUDITOR', 'DOC_CONTROLLER', 'ENGINEER', 'MAINTAINER', 'TEAM_LEADER'].sort(),
+      // 'PLANNER' is slice 18-WORKFLOW's additive seed — the admin role
+      // picker is server-driven off exactly this list, so it appears there
+      // with no client change.
+      [
+        'ADMIN',
+        'AUDITOR',
+        'DOC_CONTROLLER',
+        'ENGINEER',
+        'MAINTAINER',
+        'PLANNER',
+        'TEAM_LEADER',
+      ].sort(),
     );
   });
 });
