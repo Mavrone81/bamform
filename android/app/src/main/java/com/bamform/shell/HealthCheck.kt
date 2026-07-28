@@ -24,6 +24,11 @@ object HealthCheck {
             conn.connectTimeout = 7000
             conn.readTimeout = 7000
             conn.requestMethod = "GET"
+            // Review A-6: HttpURLConnection follows redirects by default, so
+            // one probe of a host the caller chose could be bounced onto a
+            // second internal host the caller never named. A BamForm health
+            // endpoint never redirects; anything that does is not one.
+            conn.instanceFollowRedirects = false
             try {
                 val code = conn.responseCode
                 val body =

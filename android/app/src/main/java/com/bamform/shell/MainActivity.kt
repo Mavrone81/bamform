@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.text.Editable
 import android.text.TextWatcher
@@ -21,6 +22,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -33,9 +35,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.webkit.WebViewCompat
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * The whole app: a WebView that boots straight into BamForm at the
@@ -59,8 +63,40 @@ class MainActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var configuredOrigin: String = ServerConfig.DEFAULT_URL
-    private var mainFrameFailed = false
     private var switching = false
+
+    /**
+     * Set when the main frame failed (transport error, or an HTTP 5xx —
+     * review A-4) and CONSUMED by the next `onPageFinished`, which is what
+     * decides whether the card stays up.
+     *
+     * It is not a plain "did it fail" boolean cleared in `onPageStarted`,
+     * because measurement (emulator, API 34, WebView 113) shows the callback
+     * order for an HTTP error is:
+     *   onReceivedHttpError → onPageStarted → onPageFinished
+     * i.e. the START arrives AFTER the error. Clearing on start therefore
+     * wiped the failure and `onPageFinished` hid the card again — exactly
+     * the bug that let the reviewer's 502 through with no card at all.
+     */
+    private var pendingErrorDetail: String? = null
+
+    private val shellBridge = ShellBridge(this)
+    private var bridgeInstalled = false
+
+    /** A-3: Back must not walk back onto the server we just left. */
+    private var clearHistoryOnNextLoad = false
+
+    /** A-7: set when the renderer crashed past its budget and the WebView is
+     * gone; Retry then rebuilds the activity instead of touching it. */
+    private var webViewDead = false
+
+    /** A-6: the probe is a native, CORS-free request generator. Even with the
+     * origin allow-list closing the hostile-caller case, it must not be
+     * usable as a port scanner — one probe per [MIN_PROBE_INTERVAL_MS] is
+     * far above any human's tapping speed and far below a scanner's. */
+    private var lastProbeStartedAt = 0L
+
+    enum class SwitchSource { BRIDGE, CARD }
 
     // ---- file chooser / camera state ----
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -123,9 +159,10 @@ class MainActivity : AppCompatActivity() {
 
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 
-        // The sign-in page's Server disclosure talks to this. See ShellBridge
-        // for the origin-confinement reasoning.
-        webView.addJavascriptInterface(ShellBridge(this), "BamFormShell")
+        // The sign-in page's Server disclosure talks to this, and ONLY from
+        // the configured origin. See ShellBridge for why this is not
+        // addJavascriptInterface.
+        installBridge()
 
         webView.webViewClient =
             object : WebViewClient() {
@@ -154,7 +191,24 @@ class MainActivity : AppCompatActivity() {
                     url: String?,
                     favicon: android.graphics.Bitmap?,
                 ) {
-                    mainFrameFailed = false
+                    // Deliberately does NOT clear pendingErrorDetail — see
+                    // the field's comment: for HTTP errors this callback
+                    // arrives after the error, not before it. The flag is
+                    // consumed in onPageFinished instead.
+                    //
+                    // A-2 / A-3, second layer. shouldOverrideUrlLoading is
+                    // documented as NOT called for POST navigations, and is
+                    // not called for history navigations either — the
+                    // reviewer took the main frame off-origin both ways. By
+                    // the time a main frame STARTS loading we can still stop
+                    // it. The bridge is already origin-scoped, so this is not
+                    // load-bearing for the JS trust boundary; it is here so
+                    // an attacker page cannot render full-screen inside the
+                    // shell's chrome and impersonate BamForm.
+                    if (url != null && isOffOriginDocument(url)) {
+                        view.stopLoading()
+                        mainHandler.post { returnToConfiguredOrigin() }
+                    }
                 }
 
                 override fun onReceivedError(
@@ -163,13 +217,55 @@ class MainActivity : AppCompatActivity() {
                     error: WebResourceError,
                 ) {
                     if (request.isForMainFrame) {
-                        mainFrameFailed = true
-                        showOfflineCard()
+                        failMainFrame(getString(R.string.offline_detail, configuredOrigin))
                     }
                 }
 
+                override fun onReceivedHttpError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    errorResponse: WebResourceResponse,
+                ) {
+                    // A-4. An HTTP 5xx is not a "load failure" to
+                    // WebViewClient, so onReceivedError never fires and the
+                    // user used to land on a raw nginx error page with no
+                    // Retry and no server field — precisely the state of
+                    // form.bevorasg.com during every `docker compose up
+                    // --build` deploy window.
+                    //
+                    // Only 5xx and only the main frame. 401/403/404 are the
+                    // SPA's own business (auth flows, deep links) and must
+                    // not be hijacked by the native card; subresource errors
+                    // are the page's problem, not the shell's.
+                    if (!request.isForMainFrame) return
+                    val status = errorResponse.statusCode
+                    if (status < 500 || status > 599) return
+                    // Stop before the error body paints: the technician must
+                    // never see nginx's page, even for a frame.
+                    view.stopLoading()
+                    failMainFrame(
+                        getString(R.string.offline_detail_http, configuredOrigin, status),
+                    )
+                }
+
                 override fun onPageFinished(view: WebView, url: String?) {
-                    if (!mainFrameFailed) hideOfflineCard()
+                    // Consume-once: a failure recorded for THIS navigation
+                    // keeps the card up; anything else means the load
+                    // succeeded and the card must go.
+                    val failure = pendingErrorDetail
+                    pendingErrorDetail = null
+                    if (failure != null) showOfflineCard(failure) else hideOfflineCard()
+                    if (clearHistoryOnNextLoad) {
+                        // A-3: after a server switch, one Back press used to
+                        // walk straight onto the PREVIOUS server's cached
+                        // sign-in page, rendered inside the shell. An admin
+                        // re-points a tablet away from a decommissioned or
+                        // compromised server precisely so that cannot happen.
+                        // Must run after the new page commits, or WebView
+                        // keeps the entry.
+                        clearHistoryOnNextLoad = false
+                        view.clearHistory()
+                    }
                 }
 
                 override fun onRenderProcessGone(
@@ -180,7 +276,25 @@ class MainActivity : AppCompatActivity() {
                     // rebuild the activity instead of dying with it.
                     (view.parent as? ViewGroup)?.removeView(view)
                     view.destroy()
-                    recreate()
+                    // A-7: recreate() reloads the same URL, so a page that
+                    // reliably OOMs a low-memory tablet used to produce an
+                    // unbounded crash/recreate loop. Budget the retries
+                    // (statically — recreate() makes a NEW activity instance,
+                    // so an instance field would reset every lap) and fall
+                    // back to the card, which offers Retry and a different
+                    // server.
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - firstRendererCrashAt > CRASH_WINDOW_MS) {
+                        firstRendererCrashAt = now
+                        rendererCrashes = 0
+                    }
+                    rendererCrashes += 1
+                    if (rendererCrashes <= MAX_RENDERER_CRASHES) {
+                        recreate()
+                    } else {
+                        webViewDead = true
+                        showOfflineCard(getString(R.string.offline_detail_crash))
+                    }
                     return true
                 }
             }
@@ -210,67 +324,162 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+    // ---- the JS channel (origin-scoped) ----
+
+    /** The origin the shell is currently pointed at. Read by [ShellBridge]. */
+    fun currentOrigin(): String = configuredOrigin
+
+    /**
+     * (Re)register the message listener so its allow-list contains exactly
+     * the configured origin — which is why this must run again on every
+     * switch, not once at startup.
+     *
+     * If the device's WebView is too old for origin-scoped listeners the
+     * shell installs nothing. It does NOT fall back to
+     * `addJavascriptInterface`: that is the hijackable design the review
+     * rejected, and a missing in-page field (the native card still re-points
+     * the device) is strictly better than a bridge any frame can reach.
+     */
+    private fun installBridge() {
+        if (!ShellBridge.isSupported()) return
+        if (bridgeInstalled) {
+            WebViewCompat.removeWebMessageListener(webView, ShellBridge.CHANNEL)
+            bridgeInstalled = false
+        }
+        try {
+            WebViewCompat.addWebMessageListener(
+                webView,
+                ShellBridge.CHANNEL,
+                setOf(configuredOrigin),
+                shellBridge,
+            )
+            bridgeInstalled = true
+        } catch (_: IllegalArgumentException) {
+            // The allow-list rule was rejected (a normalised origin should
+            // never be, but fail CLOSED if it ever is): no channel at all.
+            bridgeInstalled = false
+        }
+    }
+
     // ---- server switching (bridge + offline card share this path) ----
 
     /**
-     * Validate + health-check [raw]; only then persist and reload. Called
-     * from the ShellBridge binder thread or the UI thread — both safe.
-     * Failures surface as a toast ([fromBridge]) or in the card's status
-     * line, and the WebView stays on the current origin.
+     * Validate + rate-limit + health-check [raw]; only then persist and
+     * reload. Called on the UI thread from either the message listener or
+     * the card. [onResult] (bridge only) receives null on success or a
+     * user-facing message on failure, so the web control can show the
+     * failure INLINE rather than guessing with a timer (review W-2).
+     * The WebView stays on the current origin unless the probe passes.
      */
-    fun requestServerSwitch(raw: String, fromBridge: Boolean) {
+    fun requestServerSwitch(
+        raw: String,
+        source: SwitchSource,
+        onResult: ((String?) -> Unit)? = null,
+    ) {
+        val fromBridge = source == SwitchSource.BRIDGE
         val origin = ServerConfig.normalize(raw)
         if (origin == null) {
-            reportSwitchResult(getString(R.string.err_invalid_url), fromBridge)
+            reportSwitchResult(getString(R.string.err_invalid_url), fromBridge, onResult)
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastProbeStartedAt < MIN_PROBE_INTERVAL_MS) {
+            // A-6: refuse to be a scanner. A human retyping an address never
+            // hits this; a loop polling for open ports always does.
+            reportSwitchResult(getString(R.string.err_too_fast), fromBridge, onResult)
             return
         }
         synchronized(this) {
             if (switching) return
             switching = true
         }
+        lastProbeStartedAt = now
         if (!fromBridge) {
-            mainHandler.post {
-                connectButton.isEnabled = false
-                showStatus(getString(R.string.server_checking), ok = null)
-            }
+            connectButton.isEnabled = false
+            showStatus(getString(R.string.server_checking), ok = null)
         }
-        executor.execute {
-            val error = HealthCheck.probe(this, origin)
-            mainHandler.post {
-                switching = false
-                if (isFinishing || isDestroyed) return@post
-                connectButton.isEnabled = true
-                if (error == null) {
-                    ServerConfig.set(this, origin)
-                    configuredOrigin = origin
-                    if (fromBridge) {
-                        Toast.makeText(this, R.string.server_switched, Toast.LENGTH_SHORT)
-                            .show()
+        try {
+            executor.execute {
+                val error = HealthCheck.probe(this, origin)
+                mainHandler.post {
+                    switching = false
+                    if (isFinishing || isDestroyed) return@post
+                    connectButton.isEnabled = true
+                    if (error == null) {
+                        ServerConfig.set(this, origin)
+                        configuredOrigin = origin
+                        // The allow-list must follow the origin, or the new
+                        // server gets no channel (and the OLD one would keep
+                        // it).
+                        installBridge()
+                        if (fromBridge) {
+                            Toast.makeText(this, R.string.server_switched, Toast.LENGTH_SHORT)
+                                .show()
+                        }
+                        hideOfflineCard()
+                        clearHistoryOnNextLoad = true
+                        webView.loadUrl(configuredOrigin)
+                        onResult?.invoke(null)
+                    } else {
+                        reportSwitchResult(error, fromBridge, onResult)
                     }
-                    hideOfflineCard()
-                    webView.loadUrl(configuredOrigin)
-                } else {
-                    reportSwitchResult(error, fromBridge)
                 }
+            }
+        } catch (_: RejectedExecutionException) {
+            // A-8: onDestroy() has already shut the executor down. Releasing
+            // the latch matters — it used to stay true forever.
+            switching = false
+            reportSwitchResult(getString(R.string.err_generic, "shutting down"), fromBridge, onResult)
+        }
+    }
+
+    private fun reportSwitchResult(
+        message: String,
+        fromBridge: Boolean,
+        onResult: ((String?) -> Unit)? = null,
+    ) {
+        mainHandler.post {
+            if (isFinishing || isDestroyed) return@post
+            onResult?.invoke(message)
+            if (fromBridge) {
+                // The web control shows this inline via onResult; a toast as
+                // well would double-report. Toast only when there is no page
+                // able to render it.
+                if (offlineCard.visibility == View.VISIBLE) showStatus(message, ok = false)
+            } else if (offlineCard.visibility == View.VISIBLE) {
+                showStatus(message, ok = false)
+            } else {
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    private fun reportSwitchResult(message: String, fromBridge: Boolean) {
-        mainHandler.post {
-            if (isFinishing || isDestroyed) return@post
-            if (fromBridge || offlineCard.visibility != View.VISIBLE) {
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-            } else {
-                showStatus(message, ok = false)
-            }
-        }
+    // ---- off-origin main-frame guard (POST / history navigations) ----
+
+    private fun isOffOriginDocument(url: String): Boolean {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return false
+        return !ServerConfig.sameOrigin(configuredOrigin, url)
+    }
+
+    private fun returnToConfiguredOrigin() {
+        if (isFinishing || isDestroyed || webViewDead) return
+        Toast.makeText(this, R.string.err_offorigin_blocked, Toast.LENGTH_LONG).show()
+        clearHistoryOnNextLoad = true
+        webView.loadUrl(configuredOrigin)
     }
 
     // ---- native offline card (error path only) ----
 
     private fun wireOfflineCard() {
         findViewById<Button>(R.id.retryButton).setOnClickListener {
+            if (webViewDead) {
+                // A-7: the WebView was destroyed after repeated renderer
+                // crashes. Rebuild the activity; the budget re-arms because
+                // the crash window will have elapsed (or the user will see
+                // this card again immediately, which is the honest answer).
+                recreate()
+                return@setOnClickListener
+            }
             hideOfflineCard()
             val current = webView.url
             if (current != null) webView.reload() else webView.loadUrl(configuredOrigin)
@@ -286,14 +495,14 @@ class MainActivity : AppCompatActivity() {
         )
         serverField.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO) {
-                requestServerSwitch(serverField.text.toString(), fromBridge = false)
+                requestServerSwitch(serverField.text.toString(), SwitchSource.CARD)
                 true
             } else {
                 false
             }
         }
         connectButton.setOnClickListener {
-            requestServerSwitch(serverField.text.toString(), fromBridge = false)
+            requestServerSwitch(serverField.text.toString(), SwitchSource.CARD)
         }
     }
 
@@ -303,8 +512,16 @@ class MainActivity : AppCompatActivity() {
             if (ServerConfig.isHttp(normalized)) View.VISIBLE else View.GONE
     }
 
-    private fun showOfflineCard() {
-        offlineDetail.text = getString(R.string.offline_detail, configuredOrigin)
+    /** Record the failure for onPageFinished to consume, and show the card
+     * now so the user is never looking at a blank or foreign page while the
+     * navigation winds down. */
+    private fun failMainFrame(detail: String) {
+        pendingErrorDetail = detail
+        showOfflineCard(detail)
+    }
+
+    private fun showOfflineCard(detail: String) {
+        offlineDetail.text = detail
         serverField.setText(configuredOrigin)
         refreshHttpWarning()
         statusText.visibility = View.GONE
@@ -357,7 +574,31 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (::executor.isInitialized) executor.shutdownNow()
-        if (::webView.isInitialized) webView.destroy()
+        if (::webView.isInitialized && !webViewDead) {
+            if (bridgeInstalled && ShellBridge.isSupported()) {
+                try {
+                    WebViewCompat.removeWebMessageListener(webView, ShellBridge.CHANNEL)
+                } catch (_: Exception) {
+                    // Already gone with the WebView; nothing to unwind.
+                }
+                bridgeInstalled = false
+            }
+            webView.destroy()
+        }
+    }
+
+    companion object {
+        /** A-6: one health probe per this many ms, whatever asks for it. */
+        private const val MIN_PROBE_INTERVAL_MS = 3_000L
+
+        /** A-7: renderer-crash budget, static because recreate() replaces
+         * the activity instance. */
+        private const val MAX_RENDERER_CRASHES = 3
+        private const val CRASH_WINDOW_MS = 60_000L
+
+        @Volatile private var rendererCrashes = 0
+
+        @Volatile private var firstRendererCrashAt = 0L
     }
 
     // ---- file chooser / camera ----

@@ -34,6 +34,16 @@ android {
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")
             }
+            // minSdk 26 only needs v2, but v3 is what makes signing-key
+            // ROTATION possible later (review A-9 — the first report claimed
+            // v3 and AGP had in fact left it off). Given how loudly the
+            // README warns that losing this key strands every installed
+            // device, having no rotation path at all is not a default worth
+            // inheriting. v1 stays off: it is the vulnerable JAR scheme and
+            // is not needed above API 24.
+            enableV1Signing = false
+            enableV2Signing = true
+            enableV3Signing = true
         }
     }
 
@@ -74,4 +84,9 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    // Origin-scoped JS channel (WebViewCompat.addWebMessageListener). This is
+    // the whole fix for review A-1/A-2 — addJavascriptInterface cannot
+    // express an origin rule. 1.11.0 is the last line that targets
+    // compileSdk 34.
+    implementation("androidx.webkit:webkit:1.11.0")
 }

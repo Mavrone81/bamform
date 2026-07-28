@@ -1,15 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The whole point of this shell is that a plant admin can point it at an
-  internal server, which is very often plain http:// on a LAN IP. Cleartext
-  is therefore permitted for user-configured targets.
+  READ THE SCOPE HONESTLY (review A-5).
+
+  `base-config` is GLOBAL: the cleartext permission below applies to EVERY
+  destination, not merely to the address an admin typed. The earlier version
+  of this file claimed it was "permitted for user-configured targets"; that
+  was wrong, and no mechanism could make it true — the target set is supplied
+  by a human at runtime, while Android resolves this config at build time. A
+  shell whose whole purpose is "point me at any plant-internal IP" cannot
+  enumerate its cleartext hosts in advance.
+
+  What IS genuinely scoped: the default production origin is pinned to
+  HTTPS-only in the domain-config below, so a stale or hostile preference of
+  the form http://form.bevorasg.com can never downgrade the real deployment
+  — that one host is unreachable over cleartext whatever the pref says.
+  Everything else is cleartext-capable and the threat model must assume it.
 
   The trade-off is stated in the UI and README: over http the browser engine
   treats the origin as insecure, so service workers (the PWA's offline
   outbox) and full installability are unavailable. Use HTTPS for full
-  offline support.
+  offline support. On a cleartext LAN an on-path attacker sees — and can
+  rewrite — every byte, including the sign-in page.
 -->
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- The production deployment can never be downgraded to cleartext. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">form.bevorasg.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
     <base-config
         cleartextTrafficPermitted="true"
         tools:ignore="InsecureBaseConfiguration">

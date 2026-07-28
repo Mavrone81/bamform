@@ -6,19 +6,23 @@ product; this APK adds exactly two things:
 1. **An admin-configurable server address.** The shell boots straight into
    the WebView at the configured origin (default `https://form.bevorasg.com`,
    last-used origin persisted). The server is re-pointed from **inside the
-   web app's sign-in screen**: the shell injects `window.BamFormShell`
-   (`getServerUrl()` / `setServerUrl(url)`), and the sign-in card shows a
-   collapsed "Server" disclosure **only when that bridge exists** — in a
+   web app's sign-in screen**: the shell registers an **origin-scoped message
+   channel** named `BamFormShell` (`WebViewCompat.addWebMessageListener`,
+   allow-list = the configured origin only), and the sign-in card shows a
+   collapsed "Server" disclosure **only when that channel exists** — in a
    normal browser the control is absent from the DOM entirely. Every switch
    is health-checked natively against `<url>/api/v1/healthz` before anything
-   is persisted or loaded, so the app is never stranded on a dead origin.
+   is persisted or loaded, so the app is never stranded on a dead origin, and
+   switching away from a server whose offline outbox still holds unsent
+   records requires an explicit confirmation that names the count.
 2. **A WebView that runs the PWA faithfully** — service workers, IndexedDB
    (the offline outbox), persistent cookies (the HttpOnly refresh cookie is
    flushed to disk on stop, so restarts keep the session exactly like
    Chrome would), photo capture via the file chooser (camera intent wired,
    CAMERA runtime permission), back button walks WebView history, external
    links open in the system browser, renderer crashes recreate the activity,
-   and an unreachable server shows a native card (Retry + server field —
+   and an unreachable server — or one answering the main frame with an HTTP
+   5xx, e.g. a proxy mid-deploy — shows a native card (Retry + server field;
    the error path needs a native field because the sign-in page that hosts
    the normal control is served by the very server that is unreachable).
 
@@ -30,6 +34,69 @@ product; this APK adds exactly two things:
 - **No offline logic of its own.** Offline behaviour is the PWA's service
   worker + outbox.
 - **iOS is not covered.**
+
+## Security notes — read before provisioning devices
+
+### The JS channel is origin-scoped, and that is load-bearing
+
+The first build of this shell used `addJavascriptInterface`. An adversarial
+review demonstrated on an emulator that such an interface is injected into
+**every frame** of the WebView and cannot express an origin rule: a
+cross-origin `<iframe>` reached it with zero user interaction and
+permanently re-pointed the app at an attacker's server, and a cross-origin
+form **POST** did the same to the main frame (`shouldOverrideUrlLoading` is
+not called for POST navigations, so navigation interception could never have
+confined it).
+
+The channel is now `WebViewCompat.addWebMessageListener` with an allow-list
+of exactly one origin — the configured one, re-registered on every switch —
+so the `window.BamFormShell` object is **created only in documents from that
+origin**. The listener additionally refuses subframes and re-checks the
+calling frame's origin. Off-origin main-frame documents (POST or history
+navigations) are also stopped and bounced back to the configured origin, so
+a foreign page cannot render full-screen inside the shell's chrome.
+
+**If the device's WebView is older than v88** the feature is unavailable and
+the shell installs **no channel at all** — it does not fall back to
+`addJavascriptInterface`. The in-page Server field simply will not appear;
+re-point such a device from the native card (which shows whenever the server
+is unreachable). This is deliberate: no field is better than a hijackable one.
+
+### The health probe is rate-limited
+
+`setServerUrl` makes the *app* issue `GET <host>/api/v1/healthz` from the
+device's network position, which page `fetch()` cannot do (CORS and Private
+Network Access do not apply to `HttpURLConnection`). Response bodies are
+never returned to JS, but reachability and timing are observable, which is a
+port scanner. The probe is therefore capped at **one every 3 seconds**
+whatever asks for it, and it does **not follow redirects**, so a probe
+cannot be bounced onto a second internal host.
+
+### Cleartext scope — the honest version
+
+`network_security_config.xml` uses `<base-config
+cleartextTrafficPermitted="true">`, which is **global**: cleartext is
+permitted to *every* destination, not only to the address an admin typed.
+There is no way to scope it, because the target set is supplied by a human
+at runtime while Android resolves the config at build time. Do not read the
+shell's ability to reach a LAN IP as a narrow exception — it is a blanket
+one.
+
+The one thing that *is* scoped: `form.bevorasg.com` is pinned to
+**HTTPS-only** in a `domain-config`, so the production deployment can never
+be downgraded to cleartext even if a stale preference says `http://`.
+
+On a cleartext LAN, assume an on-path attacker can read and rewrite every
+byte the shell loads, including the sign-in page.
+
+### Unsent work does not follow a server switch
+
+The offline outbox lives in IndexedDB, which is per-origin. Re-pointing the
+shell does not migrate queued records — they stay in the old origin's
+database, undrainable until the app is pointed back. The sign-in control
+counts them and refuses to switch without an explicit confirmation naming
+the number. **Before decommissioning a server, point each tablet at it once
+and let it sync.**
 
 ## http:// targets (plant-internal IPs)
 

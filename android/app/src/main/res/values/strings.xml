@@ -16,10 +16,14 @@
     <string name="err_timeout">The server did not answer in time. Check the address, network or VPN.</string>
     <string name="err_ssl">Secure connection failed (%1$s). The server’s HTTPS certificate is not trusted by this device.</string>
     <string name="err_generic">Could not reach the server: %1$s</string>
+    <string name="err_too_fast">Too many server checks in a row. Wait a moment, then try again.</string>
+    <string name="err_offorigin_blocked">A page from another server tried to open inside BamForm. It was blocked and BamForm reloaded.</string>
 
     <!-- Offline card -->
     <string name="offline_title">Server unreachable</string>
     <string name="offline_detail">BamForm at %1$s did not respond. Check that you are on the plant network, then retry — or point the app at a different server below.</string>
+    <string name="offline_detail_http" tools:ignore="PluralsCandidate">BamForm at %1$s answered with HTTP %2$d instead of the app. The server is probably restarting or its reverse proxy is misconfigured. Retry in a moment — or point the app at a different server below.</string>
+    <string name="offline_detail_crash">BamForm’s display stopped responding repeatedly on this device (usually low memory). Close other apps and retry — or point the app at a different server below.</string>
     <string name="offline_retry">Retry</string>
     <string name="chooser_title">Attach a file</string>
 </resources>

@@ -10,7 +10,9 @@ import {
   isQuotaExceeded,
   jobOutboxCounts,
   listDrainable,
+  pendingCountAll,
   pendingCountForJob,
+  pendingCountForUser,
   retryConflictWithNewId,
   MAX_BATCH_SIZE,
 } from './outbox';
@@ -532,5 +534,30 @@ describe('retryConflictWithNewId / discardConflict — no-op on rows that no lon
 
   it('discardConflict is a no-op for an id that does not exist', async () => {
     await expect(discardConflict(db, 'does-not-exist')).resolves.toBeUndefined();
+  });
+});
+
+describe('pendingCountAll — every unsent row on this device, whoever owns it (review W-1)', () => {
+  it('is 0 on an empty outbox', async () => {
+    await expect(pendingCountAll(db)).resolves.toBe(0);
+  });
+
+  it('counts rows across ALL users, not just the signed-in one', async () => {
+    await append(db, input({ userId: 'user-1' }));
+    await append(db, input({ userId: 'user-2' }));
+    await append(db, input({ userId: 'user-2' }));
+    // Nobody is signed in when the shell's server field is used, so the
+    // per-user count is the wrong question: the origin switch strands the
+    // WHOLE origin's IndexedDB, every user's rows included.
+    await expect(pendingCountForUser(db, 'user-1')).resolves.toBe(1);
+    await expect(pendingCountAll(db)).resolves.toBe(3);
+  });
+
+  it('counts conflict and failed rows too — they are just as stranded', async () => {
+    const a = (await append(db, input())) as { ok: true; entry: { id: string } };
+    const b = (await append(db, input())) as { ok: true; entry: { id: string } };
+    await db.outbox.update(a.entry.id, { status: 'conflict' });
+    await db.outbox.update(b.entry.id, { status: 'failed' });
+    await expect(pendingCountAll(db)).resolves.toBe(2);
   });
 });
