@@ -196,6 +196,10 @@ export class PdfRecordAssemblyService {
       return {
         approvalStepId: step.id,
         stageOrdinal: step.stageOrdinal,
+        // Slice 26-TWOSTAGE M1 — read from the STEP, never joined from
+        // `approval_stage`: the caption an auditor reads must be the one that
+        // was true when the signature was taken.
+        stageLabel: step.stageLabel,
         action: approvalActionFromDb(step.action),
         actorName: nameById.get(step.actorId) ?? step.actorId,
         actorRoleCode: step.actorRoleCode,

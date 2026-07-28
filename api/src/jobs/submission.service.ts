@@ -275,6 +275,11 @@ export class SubmissionService {
           id: approvalStepId,
           jobId,
           stageOrdinal: PERFORMER_STAGE,
+          // No configured `approval_stage` exists for the performer's own
+          // signature (slice 18-WORKFLOW §1 — stage 0 is not a verification
+          // stage), and its caption, "Maintenance Performed By", comes from
+          // the ACTION, not from route configuration. Nothing to snapshot.
+          stageLabel: null,
           action: ApprovalActionT.submitted,
           actorId: actor.actorId,
           onBehalfOfId: null,

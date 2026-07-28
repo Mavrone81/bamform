@@ -13,11 +13,25 @@ const MS_PER_HOUR = 3_600_000;
  * Wiring per-row name decryption into a collection endpoint is the
  * verifier-queue UI's concern (slice 11b), not this backend slice.
  */
+/**
+ * Slice 26-TWOSTAGE — the stage this entry is waiting at, resolved by the
+ * caller (`QueueService`) from the same stage map it uses to decide
+ * eligibility. Passed in rather than looked up here so the mapper stays a
+ * pure function of its inputs, like every other field it maps.
+ */
+export interface QueueEntryStage {
+  ordinal: number;
+  label: string;
+  /** Total stages on the record's route — lets a client say "1 of 2". */
+  count: number;
+}
+
 export function toQueueEntry(
   row: JobSummaryRow & { submittedAt: Date | null },
   onBehalfOf: string | null,
   now: Date,
   escalatedDisplayThresholdHours: number,
+  stage: QueueEntryStage,
 ): QueueEntry {
   if (!row.submittedAt) {
     throw new Error(
@@ -32,5 +46,8 @@ export function toQueueEntry(
     ageHours: Math.round(ageHours * 10) / 10,
     escalated: ageHours >= escalatedDisplayThresholdHours,
     onBehalfOf,
+    stageOrdinal: stage.ordinal,
+    stageCount: stage.count,
+    stageLabel: stage.label,
   };
 }

@@ -121,9 +121,45 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
       expect(signatureBlockLabel(0, 'SUBMITTED')).not.toMatch(/Stage 0/);
     });
 
-    it('the two verification stages carry their paper-form captions', () => {
+    it('the two verification stages fall back to their paper-form captions when no label was snapshotted', () => {
       expect(signatureBlockLabel(1, 'VERIFIED')).toBe('Verified By (Workshop Team Leader)');
       expect(signatureBlockLabel(2, 'VERIFIED')).toBe('Verified By (Engineer)');
+    });
+
+    /**
+     * Slice 26-TWOSTAGE review fix M1. This hard-coded map had DRIFTED from
+     * the configured route: the live stage-2 label is
+     * "Verified By (Supervisor / Engineer)" (and the paper form reads
+     * "Verified By: (Workshop Supervisor/Engr)"), while this file printed
+     * "Verified By (Engineer)" on the controlled record. The step now carries
+     * the label snapshotted at signing time, and that snapshot wins.
+     */
+    it('M1: a snapshotted stage label WINS over the hard-coded map for a verification block', () => {
+      expect(signatureBlockLabel(2, 'VERIFIED', 'Verified By (Supervisor / Engineer)')).toBe(
+        'Verified By (Supervisor / Engineer)',
+      );
+      expect(signatureBlockLabel(1, 'VERIFIED', 'Verified By (Workshop Team Leader)')).toBe(
+        'Verified By (Workshop Team Leader)',
+      );
+    });
+
+    it('M1: a null/absent snapshot falls back to the map — historical rows still render', () => {
+      expect(signatureBlockLabel(2, 'VERIFIED', null)).toBe('Verified By (Engineer)');
+      expect(signatureBlockLabel(2, 'VERIFIED', undefined)).toBe('Verified By (Engineer)');
+      expect(signatureBlockLabel(2, 'VERIFIED', '')).toBe('Verified By (Engineer)');
+    });
+
+    it('M1: the snapshot never overrides a non-verification caption — a return is still a return', () => {
+      // Only the VERIFIED branch consults the snapshot: a returned/recalled/
+      // voided block is captioned by WHAT IT IS, not by the stage it happened
+      // at (this file's own doc comment), so a stray label must not turn a
+      // rejection into something that reads like an approval.
+      expect(signatureBlockLabel(1, 'RETURNED', 'Verified By (Workshop Team Leader)')).toBe(
+        'Returned By (Stage 1)',
+      );
+      expect(signatureBlockLabel(0, 'SUBMITTED', 'Verified By (Workshop Team Leader)')).toBe(
+        'Maintenance Performed By',
+      );
     });
 
     it('return, recall and void are captioned by what they are', () => {

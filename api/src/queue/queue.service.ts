@@ -5,8 +5,8 @@ import { AreaScopeService } from '../common/area-scope';
 import { decodeCursor, encodeCursor, normaliseLimit, type Page } from '../common/pagination';
 import { DelegationsRepository } from '../delegations/delegations.repository';
 import type { JobSummaryRow } from '../jobs/job-include';
-import { toQueueEntry } from './queue.mapper';
-import { QueueRepository } from './queue.repository';
+import { toQueueEntry, type QueueEntryStage } from './queue.mapper';
+import { QueueRepository, type StageInfo } from './queue.repository';
 
 export interface GetQueueParams {
   limit?: unknown;
@@ -16,6 +16,12 @@ export interface GetQueueParams {
 interface TaggedEntry {
   row: JobSummaryRow;
   onBehalfOf: string | null;
+  /**
+   * Slice 26-TWOSTAGE — the stage that made this row eligible, carried
+   * forward from the eligibility filter so the response can say which of the
+   * route's stages the record awaits without a second lookup.
+   */
+  stage: QueueEntryStage;
 }
 
 const DEFAULT_ESCALATION_DISPLAY_HOURS = 72;
@@ -51,7 +57,7 @@ export class QueueService {
       this.config.get('VERIFICATION_ESCALATION_HOURS') ?? DEFAULT_ESCALATION_DISPLAY_HOURS,
     );
 
-    const stageMap = await this.repo.getStageRoleMap();
+    const stageMap = await this.repo.getStageMap();
 
     const ownRoles = await this.repo.getUserRoleCodes(userId);
     const ownEntries = await this.eligibleEntriesFor(userId, ownRoles, stageMap, null);
@@ -76,7 +82,7 @@ export class QueueService {
 
     return {
       data: page.map((entry) =>
-        toQueueEntry(entry.row, entry.onBehalfOf, now, escalationDisplayHours),
+        toQueueEntry(entry.row, entry.onBehalfOf, now, escalationDisplayHours, entry.stage),
       ),
       page: { nextCursor, hasMore, limit },
     };
@@ -86,7 +92,7 @@ export class QueueService {
   private async eligibleEntriesFor(
     identityUserId: string,
     identityRoles: string[],
-    stageMap: Map<string, string[]>,
+    stageMap: Map<string, StageInfo>,
     onBehalfOf: string | null,
   ): Promise<TaggedEntry[]> {
     if (identityRoles.length === 0) {
@@ -94,13 +100,23 @@ export class QueueService {
     }
     const allowedAreaIds = await this.areaScope.getAllowedAreaIds(identityUserId);
     const candidates = await this.repo.findCandidateSubmittedJobs(identityUserId, allowedAreaIds);
-    return candidates
-      .filter((row) => {
-        if (row.currentStageOrdinal == null) return false;
-        const roleCodes = stageMap.get(`${row.approvalRouteId}:${row.currentStageOrdinal}`) ?? [];
-        return roleCodes.some((code) => identityRoles.includes(code));
-      })
-      .map((row) => ({ row, onBehalfOf }));
+    const entries: TaggedEntry[] = [];
+    for (const row of candidates) {
+      if (row.currentStageOrdinal == null) continue;
+      const stage = stageMap.get(`${row.approvalRouteId}:${row.currentStageOrdinal}`);
+      if (!stage) continue;
+      if (!stage.roleCodes.some((code) => identityRoles.includes(code))) continue;
+      entries.push({
+        row,
+        onBehalfOf,
+        stage: {
+          ordinal: row.currentStageOrdinal,
+          label: stage.label,
+          count: stage.stageCount,
+        },
+      });
+    }
+    return entries;
   }
 }
 

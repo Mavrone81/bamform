@@ -47,9 +47,26 @@ async function verifyWithStepUp(
   await page.getByRole('button', { name: 'Confirm' }).click();
 }
 
-async function openFromQueue(page: Page, jobNumber: string): Promise<void> {
+async function openFromQueue(
+  page: Page,
+  jobNumber: string,
+  expectedStage: { ordinal: number; label: string; final: boolean },
+): Promise<void> {
   await page.getByRole('button', { name: 'Verifier queue' }).click();
   await expect(page.getByRole('heading', { name: 'Verifier queue' })).toBeVisible();
+
+  // Slice 26-TWOSTAGE — the QUEUE ITSELF, before the record is opened, says
+  // which stage the record awaits and whether this signature archives it.
+  const card = page.locator('.data-list li', { hasText: jobNumber });
+  await expect(card.getByText(`Stage ${expectedStage.ordinal} of 2`)).toBeVisible();
+  await expect(card.getByText(expectedStage.label)).toBeVisible();
+  const finalNote = card.getByText('Final sign-off — archives the record');
+  if (expectedStage.final) {
+    await expect(finalNote).toBeVisible();
+  } else {
+    await expect(finalNote).toHaveCount(0);
+  }
+
   await page.getByText(jobNumber).click();
   await expect(page.getByRole('heading', { name: jobNumber })).toBeVisible();
 }
@@ -80,7 +97,11 @@ test('E-02: two-stage verify — TEAM_LEADER then ENGINEER sign, record VERIFIED
   // is rejected for step-up; a wrong password is rejected too before the
   // correct one succeeds.
   await withActor(browser, server, viewport, E2E_USERS.teamLeader.email, async (page) => {
-    await openFromQueue(page, JOB.jobNumber);
+    await openFromQueue(page, JOB.jobNumber, {
+      ordinal: 1,
+      label: 'Verified By (Workshop Team Leader)',
+      final: false,
+    });
     await expect(page.getByText(/stage 1 of 2/i)).toBeVisible();
     await verifyWithStepUp(page, { wrongPasswordFirst: true });
     await expect(page.getByText('Verified. Awaiting the next approval stage.')).toBeVisible();
@@ -91,7 +112,11 @@ test('E-02: two-stage verify — TEAM_LEADER then ENGINEER sign, record VERIFIED
   // the SAME job in their own queue (stage advanced, role requirement
   // changed) and completes the second signature.
   await withActor(browser, server, viewport, E2E_USERS.engineer.email, async (page) => {
-    await openFromQueue(page, JOB.jobNumber);
+    await openFromQueue(page, JOB.jobNumber, {
+      ordinal: 2,
+      label: 'Verified By (Supervisor / Engineer)',
+      final: true,
+    });
     await expect(page.getByText(/stage 2 of 2/i)).toBeVisible();
     await verifyWithStepUp(page);
     await expect(page.getByText('Verified and archived — approval complete.')).toBeVisible();

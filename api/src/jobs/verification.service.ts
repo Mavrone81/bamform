@@ -259,6 +259,11 @@ export class VerificationService {
           id: approvalStepId,
           jobId,
           stageOrdinal,
+          // Slice 26-TWOSTAGE M1 — snapshot the stage's configured caption
+          // into the same transaction that writes the signature, so a later
+          // administrative relabel (routes are data, ADR-011) can never
+          // rewrite what this archived record says was attested.
+          stageLabel: stage.label,
           action: ApprovalActionT.verified,
           actorId: actor.actorId,
           onBehalfOfId,

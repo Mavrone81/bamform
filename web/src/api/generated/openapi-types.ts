@@ -2180,7 +2180,7 @@ export interface components {
     ApprovalRoute: {
       /** Format: uuid */
       id: string;
-      /** @example SINGLE_STAGE_TL_OR_ENG */
+      /** @example TWO_STAGE_TL_THEN_ENG */
       code: string;
       name: string;
       active: boolean;
@@ -2504,6 +2504,21 @@ export interface components {
        * @description The delegator's user id (PR-076) when this entry is present because of an active delegation, not the caller's own eligibility.
        */
       onBehalfOf?: string | null;
+      /**
+       * @description The approval stage this record is waiting at (the delivered route is two stages — Team Leader then Engineer).
+       * @example 1
+       */
+      stageOrdinal: number;
+      /**
+       * @description How many stages the record's approval route has, so a client can render "stage 1 of 2" without a second lookup.
+       * @example 2
+       */
+      stageCount: number;
+      /**
+       * @description The administrator-configured `approval_stage.label` for that stage, verbatim (ADR-011 route-as-data).
+       * @example Verified By (Workshop Team Leader)
+       */
+      stageLabel: string;
     };
     Delegation: {
       /** Format: uuid */

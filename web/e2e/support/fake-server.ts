@@ -589,6 +589,19 @@ export class FakeServer {
   }
 
   /**
+   * The DELIVERED route's stage labels, verbatim from the seed/migration
+   * chain (`approval_stage.label` on `TWO_STAGE_TL_THEN_ENG`). Hard-coded
+   * here on purpose: if production's labels change, this fake stops matching
+   * and the mismatch surfaces rather than the fake quietly inventing text
+   * the real API never sends.
+   */
+  private currentStageLabel(ordinal: number): string {
+    return ordinal >= 2
+      ? 'Verified By (Supervisor / Engineer)'
+      : 'Verified By (Workshop Team Leader)';
+  }
+
+  /**
    * `POST /auth/logout`. Two things the real endpoint does that this fake must
    * also do, each because omitting it let a real defect through:
    *
@@ -1368,6 +1381,11 @@ export class FakeServer {
         ageHours: (now - Date.parse(submittedAt)) / 3_600_000,
         escalated: false,
         onBehalfOf,
+        // Slice 26-TWOSTAGE — the queue tells a verifier which of the
+        // route's stages the record awaits.
+        stageOrdinal: stage,
+        stageCount: 2,
+        stageLabel: this.currentStageLabel(stage),
       });
     }
 

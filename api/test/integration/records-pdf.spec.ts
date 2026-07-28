@@ -188,8 +188,17 @@ describe('GET /records/{recordId}/pdf (E-11, PR-116/117/118)', () => {
     // The defect this test exists for.
     expect(text).not.toContain('Stage 0');
     // The verifier blocks read as the paper form does too.
+    //
+    // Slice 26-TWOSTAGE M1: these are now the labels SNAPSHOTTED from the
+    // configured route at signing time, not a hard-coded map in the template.
+    // This expectation previously read 'Verified By (Engineer)', which is the
+    // drift the fix corrects: the route (and the paper form, "Verified By:
+    // (Workshop Supervisor/Engr)") say Supervisor / Engineer. The assertion is
+    // strengthened, not relaxed — the stale wording must be ABSENT from the
+    // controlled record.
     expect(text).toContain('Verified By (Workshop Team Leader)');
-    expect(text).toContain('Verified By (Engineer)');
+    expect(text).toContain('Verified By (Supervisor / Engineer)');
+    expect(text).not.toContain('Verified By (Engineer)');
     expect(text).not.toContain('Stage 1 — VERIFIED');
   }, 60_000);
 

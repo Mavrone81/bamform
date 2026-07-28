@@ -20,6 +20,28 @@ const STAGE_LABELS: Record<number, string> = {
   2: 'Verified By (Engineer)',
 };
 
+/**
+ * Slice 26-TWOSTAGE review fix M1. This map had DRIFTED from the configured
+ * route: `approval_stage.label` for stage 2 reads "Verified By (Supervisor /
+ * Engineer)" — faithful to the paper form's "Verified By: (Workshop
+ * Supervisor/Engr)" — while this file, and the PDF template, said "Verified
+ * By (Engineer)". Slice 26 made that visible by rendering the configured
+ * label on the verifier queue, so a verifier would read one caption on the
+ * queue card and a different one here, one tap later.
+ *
+ * The step now carries the label SNAPSHOTTED when it was signed, and that
+ * wins. The map stays as the fallback for steps with no snapshot (the
+ * performer's stage-0 signature, return/recall/void, and any row written
+ * before the column existed) — a record must never lose its caption.
+ *
+ * Deliberately NOT a live lookup of the current route configuration: an
+ * administrator relabelling a stage must not rewrite what an archived record
+ * says was attested.
+ */
+export function approvalStepCaption(step: ApprovalStep): string {
+  return step.stageLabel ?? STAGE_LABELS[step.stageOrdinal] ?? `Stage ${step.stageOrdinal}`;
+}
+
 function isStepUpRequired(problem: { type?: string } | undefined): boolean {
   return Boolean(problem?.type?.includes('step-up-required'));
 }
@@ -348,8 +370,7 @@ export function RecordReview({ jobId }: { jobId: string }) {
           {job.approvalSteps?.map((step: ApprovalStep) => (
             <div className="approval-step" key={step.id}>
               <p>
-                <strong>{step.action}</strong> —{' '}
-                {STAGE_LABELS[step.stageOrdinal] ?? `Stage ${step.stageOrdinal}`}
+                <strong>{step.action}</strong> — {approvalStepCaption(step)}
               </p>
               <p className="approval-step-when">{new Date(step.actedAt).toLocaleString()}</p>
               {step.onBehalfOfName && (
