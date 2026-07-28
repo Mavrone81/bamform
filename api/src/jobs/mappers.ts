@@ -49,6 +49,10 @@ export function toJobSummary(row: JobSummaryRow, today: Date = new Date()): JobS
     overdue: isOverdue(row.dueOn, row.status, today),
     status: JOB_STATUS_FROM_DB[row.status],
     assignedTo: row.assignedTo,
+    // UR-028 (slice 18-WORKFLOW, review X-4) — off-plan work is visibly
+    // different from planned work in every list that shows jobs, including
+    // the `/reports/overdue` and `/reports/pending` worklists.
+    isAdhoc: row.isAdhoc,
   };
 }
 

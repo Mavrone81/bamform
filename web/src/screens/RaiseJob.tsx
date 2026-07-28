@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from '../router';
 import { listAssets, listAssetTypes, type Asset, type AssetType } from '../api/admin-client';
 import { getServices } from '../state/services';
+import { todayLocalIsoDate } from '../lib/local-date';
 import { bootstrap } from '../offline/sync-engine';
 import { notifySynced } from '../offline/sync-events';
 import type { components } from '../api/generated/openapi-types';
@@ -42,7 +43,10 @@ export function RaiseJob() {
   const [assetId, setAssetId] = useState('');
   const [frequency, setFrequency] = useState<Frequency>('M1');
   const [reason, setReason] = useState('');
-  const [dueOn, setDueOn] = useState(() => new Date().toISOString().slice(0, 10));
+  // X-7: the DEVICE's local date, not UTC — see `local-date.ts`. In SGT a
+  // planner raising work before 08:00 was otherwise given yesterday, and the
+  // job was born overdue.
+  const [dueOn, setDueOn] = useState(() => todayLocalIsoDate());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);

@@ -241,6 +241,18 @@ export interface JobOpts {
    * ARCHIVED job.
    */
   dueOn?: string | null;
+  /**
+   * UR-028 (slice 18-WORKFLOW). Set AT INSERT because INV-09 forbids any
+   * UPDATE to an already-archived row, and the reports tests need archived
+   * ad-hoc jobs. Supplying `isAdhoc` without a reason would violate
+   * `job_adhoc_reason_length_chk`, so a valid default is filled in.
+   *
+   * An ad-hoc job also carries an EMPTY `frequency_scope` in production —
+   * that is what makes it satisfy no schedule period — so the fixture
+   * mirrors it rather than leaving a misleading `['M1']`.
+   */
+  isAdhoc?: boolean;
+  adhocReason?: string | null;
 }
 
 export async function createJob(opts: JobOpts): Promise<string> {
@@ -249,9 +261,13 @@ export async function createJob(opts: JobOpts): Promise<string> {
        ("job_number", "asset_id", "template_revision_id", "approval_route_id",
         "frequency", "frequency_scope", "due_on", "generated_at", "status", "assigned_to",
         "submitted_by", "submitted_at", "current_stage_ordinal", "archived_at", "void_reason",
-        "draft_version")
-     VALUES ($1, $2, $3, $4, 'M1', ARRAY['M1']::"frequency_t"[], COALESCE($13::date, CURRENT_DATE), now(), $5, $6,
-             $7, $8, $9, $10, $11, COALESCE($12, 0))
+        "draft_version", "is_adhoc", "adhoc_reason")
+     VALUES ($1, $2, $3, $4, 'M1',
+             CASE WHEN COALESCE($14, false) THEN ARRAY[]::"frequency_t"[] ELSE ARRAY['M1']::"frequency_t"[] END,
+             COALESCE($13::date, CURRENT_DATE), now(), $5, $6,
+             $7, $8, $9, $10, $11, COALESCE($12, 0),
+             COALESCE($14, false),
+             CASE WHEN COALESCE($14, false) THEN COALESCE($15, 'raised off-plan by an integration fixture') ELSE $15 END)
      RETURNING id`,
     [
       opts.jobNumber,
@@ -267,6 +283,8 @@ export async function createJob(opts: JobOpts): Promise<string> {
       opts.voidReason ?? null,
       opts.draftVersion ?? null,
       opts.dueOn ?? null,
+      opts.isAdhoc ?? null,
+      opts.adhocReason ?? null,
     ],
   );
   return result.rows[0].id as string;

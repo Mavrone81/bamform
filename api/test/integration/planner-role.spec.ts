@@ -261,6 +261,103 @@ describe('PLANNER role (slice 18-WORKFLOW §3)', () => {
       .expect(403);
   });
 
+  /**
+   * Review finding X-1 (Critical). Adding PLANNER to `JOB_VIEW_ALL_ROLES`
+   * silently granted it `POST /records/export` (a ZIP of PDFs that
+   * `pdf-record-assembly.service.ts` renders with DECRYPTED signatory names
+   * and drawn-signature IMAGES) and the whole `/reports/*` surface, because
+   * those controllers annotated themselves with that constant. Measured
+   * before the fix: `GET /reports/compliance` 200 for PLANNER, 403 for
+   * MAINTAINER.
+   *
+   * The route annotations now use `ORG_REPORTING_ROLES`. This asserts the
+   * behaviour at the HTTP layer, in both directions — PLANNER refused, every
+   * incumbent still admitted — so the split cannot be undone silently even if
+   * someone edits the contract inventory.
+   */
+  describe('X-1 — PLANNER holds NO bulk export or reporting right', () => {
+    const BULK_GETS = [
+      '/api/v1/reports/compliance',
+      '/api/v1/reports/overdue',
+      '/api/v1/reports/pending',
+    ];
+
+    it('every /reports/* endpoint refuses PLANNER 403', async () => {
+      const plannerUser = await userWithRole('PLANNER');
+      for (const path of BULK_GETS) {
+        const res = await request(app.getHttpServer())
+          .get(path)
+          .set(...authHeader(plannerUser.token));
+        expect({ path, status: res.status }).toEqual({ path, status: 403 });
+      }
+      // measurements needs query params; the ROLE gate fires first, so a
+      // 403 here proves the gate rather than the validation.
+      await request(app.getHttpServer())
+        .get('/api/v1/reports/measurements')
+        .set(...authHeader(plannerUser.token))
+        .expect(403);
+    });
+
+    it('POST /records/export refuses PLANNER 403 — no ZIP of decrypted signatures', async () => {
+      const plannerUser = await userWithRole('PLANNER');
+      await request(app.getHttpServer())
+        .post('/api/v1/records/export')
+        .set(...authHeader(plannerUser.token))
+        .send({ filters: {} })
+        .expect(403);
+    });
+
+    it('the export status and download endpoints refuse PLANNER 403', async () => {
+      const plannerUser = await userWithRole('PLANNER');
+      const id = randomUUID();
+      await request(app.getHttpServer())
+        .get(`/api/v1/exports/${id}`)
+        .set(...authHeader(plannerUser.token))
+        .expect(403);
+      await request(app.getHttpServer())
+        .get(`/api/v1/exports/${id}/download`)
+        .set(...authHeader(plannerUser.token))
+        .expect(403);
+    });
+
+    it('ADDITIVE in the other direction — every role that could report/export before still can', async () => {
+      for (const role of ['TEAM_LEADER', 'ENGINEER', 'DOC_CONTROLLER', 'ADMIN', 'AUDITOR']) {
+        const actor = await userWithRole(role);
+        for (const path of BULK_GETS) {
+          const res = await request(app.getHttpServer())
+            .get(path)
+            .set(...authHeader(actor.token));
+          expect({ role, path, status: res.status }).toEqual({ role, path, status: 200 });
+        }
+        // 422 = past the role gate, refused on the empty filter body.
+        const exportRes = await request(app.getHttpServer())
+          .post('/api/v1/records/export')
+          .set(...authHeader(actor.token))
+          .send({});
+        expect({ role, status: exportRes.status }).toEqual({ role, status: 422 });
+      }
+    });
+
+    it('PLANNER keeps the per-row archive READ it legitimately needs (the split cost it nothing it should have)', async () => {
+      const maintainer = await userWithRole('MAINTAINER');
+      const { jobId } = await createJobFixture(`PM-PLANREAD-${randomUUID()}`, 'submitted', {
+        assignedTo: maintainer.id,
+        submittedBy: maintainer.id,
+        submittedAt: new Date(),
+        currentStageOrdinal: 1,
+      });
+      const plannerUser = await userWithRole('PLANNER');
+      await request(app.getHttpServer())
+        .get(`/api/v1/jobs/${jobId}`)
+        .set(...authHeader(plannerUser.token))
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/api/v1/jobs')
+        .set(...authHeader(plannerUser.token))
+        .expect(200);
+    });
+  });
+
   it('PLANNER is not an administrator — user administration stays ADMIN-only', async () => {
     const plannerUser = await userWithRole('PLANNER');
     await request(app.getHttpServer())

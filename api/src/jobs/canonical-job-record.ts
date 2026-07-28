@@ -95,6 +95,36 @@ export interface CanonicalJobRecordInput {
    * the one currently being created — binding the signature to itself (its
    * own actor/stage/timestamp), so a signature can never be replayed under a
    * different approval_step identity.
+   *
+   * ##### STANDING INTEGRITY GAP — READ BEFORE RELYING ON "TAMPER-EVIDENT" #####
+   * What is committed here is exactly `{id, stageOrdinal, action, actorId,
+   * onBehalfOfId, reason, actedAt}`. So the signed content binds an approval
+   * step's IDENTITY, TIME and EXISTENCE — and nothing else. Measured by the
+   * slice-18-WORKFLOW review (finding X-5), mutating a step directly in the
+   * database and re-running `GET /records/{id}/integrity`:
+   *
+   *   actor_id changed ............... DETECTED
+   *   acted_at changed ............... DETECTED
+   *   row deleted .................... DETECTED
+   *   actor_role_code changed ........ NOT DETECTED
+   *   drawn_signature_ct := NULL ..... NOT DETECTED
+   *   drawn_signature_ct := garbage .. NOT DETECTED
+   *   source_ip changed .............. NOT DETECTED
+   *
+   * Consequence to state plainly: an archived record can be made to print
+   * WITHOUT a signatory's drawn signature (or under a rewritten role) while
+   * `/integrity` still certifies it `intact: true`. Field encryption does not
+   * close this — its AAD row-binding (`field-encryption.ts`) makes a
+   * ciphertext moved between rows undecryptable, which prevents a SWAP but
+   * does not make an ERASURE detectable.
+   *
+   * This is pre-existing and system-wide (slice 7 built verifier signatures
+   * the same way); slice 18-WORKFLOW extended it to the performer signature
+   * without widening it. Closing it means adding `drawnSignatureSha256` and
+   * `actorRoleCode` to `CanonicalApprovalStepInput` — which CHANGES THE SIGNED
+   * CONTENT'S KEY SET, invalidating every stored signature on every existing
+   * record. That is an owner-visible migration of its own, not a tidy-up: do
+   * not do it as a side effect of another slice.
    */
   approvalSteps: CanonicalApprovalStepInput[];
 }

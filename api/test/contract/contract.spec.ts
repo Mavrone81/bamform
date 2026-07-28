@@ -2,7 +2,9 @@ import { z } from 'zod';
 import {
   assetUpdateSchema,
   assignJobRequestSchema,
+  complianceReportRowSchema,
   createAdhocJobRequestSchema,
+  jobSummarySchema,
   listRecordsQuerySchema,
   mfaChallengeResponseSchema,
   mfaEnrolConfirmRequestSchema,
@@ -561,6 +563,37 @@ describe('test:contract — slice 18-WORKFLOW schemas match their Zod DTOs exact
     expect(allowlisted).not.toContain('POST /jobs/adhoc');
     const implemented = enumerateRoutes().map((r) => `${r.method} ${r.openapiPath}`);
     expect(implemented).toContain('POST /api/v1/jobs/adhoc');
+  });
+
+  /**
+   * Review finding X-4 — the two additive response fields the fix pass adds,
+   * pinned the same mechanical way as the request DTOs.
+   */
+  it('openapi ComplianceReportRow documents adhocExcludedCount, and marks it required exactly as the Zod DTO does', () => {
+    const schema = getSchema('ComplianceReportRow') as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+    const shape = complianceReportRowSchema.shape as Record<string, z.ZodTypeAny>;
+    const keys = Object.keys(shape);
+    expect(Object.keys(schema.properties).sort()).toEqual([...keys].sort());
+    const required = keys.filter((key) => !shape[key].safeParse(undefined).success).sort();
+    expect([...(schema.required ?? [])].sort()).toEqual(required);
+    expect(schema.properties).toHaveProperty('adhocExcludedCount');
+  });
+
+  it('openapi JobSummary documents isAdhoc as an optional field, matching jobSummarySchema', () => {
+    const schema = getSchema('JobSummary') as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+    const shape = jobSummarySchema.shape as Record<string, z.ZodTypeAny>;
+    expect(Object.keys(schema.properties).sort()).toEqual(Object.keys(shape).sort());
+    expect(schema.properties).toHaveProperty('isAdhoc');
+    // Optional in Zod (older clients never sent or expected it) => absent
+    // from openapi `required`.
+    expect(shape.isAdhoc.safeParse(undefined).success).toBe(true);
+    expect(schema.required ?? []).not.toContain('isAdhoc');
   });
 
   it('openapi RoleCode enumerates exactly the Zod roleCodeSchema values — PLANNER added, nothing removed', () => {

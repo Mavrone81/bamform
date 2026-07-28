@@ -163,6 +163,7 @@ export class ReportsService {
         onTime: number;
         late: number;
         notCompleted: number;
+        adhocExcluded: number;
       }
     >();
     for (const row of rows) {
@@ -188,7 +189,26 @@ export class ReportsService {
         onTime: 0,
         late: 0,
         notCompleted: 0,
+        adhocExcluded: 0,
       };
+      // Slice 18-WORKFLOW review, finding X-4: UR-067 measures the
+      // MAINTENANCE PLAN — "jobs due against jobs completed on time". An
+      // ad-hoc job (UR-028) is extra work raised off-plan; it was never due
+      // under the plan, so counting it in ANY bucket makes the headline
+      // figure a statement about something other than the plan. A month with
+      // twelve promptly-closed breakdown call-outs would have reported
+      // BETTER plan compliance than the plant actually achieved; one ad-hoc
+      // job left open would have dragged it down. Excluded — and COUNTED, so
+      // the exclusion is visible in the response rather than silent.
+      //
+      // This is the same shape as the voided-row exclusion above, and it
+      // rests on the same property the whole slice turns on: an ad-hoc job's
+      // `frequency_scope` is empty because it satisfies no schedule period.
+      if (row.isAdhoc) {
+        bucket.adhocExcluded += 1;
+        byArea.set(key, bucket);
+        continue;
+      }
       bucket.due += 1;
       if (row.archivedAt) {
         if (row.archivedAt.getTime() <= row.dueOn.getTime()) bucket.onTime += 1;
@@ -210,6 +230,7 @@ export class ReportsService {
         completedOnTimeCount: b.onTime,
         completedLateCount: b.late,
         notCompletedCount: b.notCompleted,
+        adhocExcludedCount: b.adhocExcluded,
         compliancePercent: b.due > 0 ? Math.round((b.onTime / b.due) * 1000) / 10 : 0,
       })),
     };

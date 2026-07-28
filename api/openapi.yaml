@@ -2989,6 +2989,15 @@ components:
         status: { $ref: '#/components/schemas/JobStatus' }
         assignedTo: { type: [string, 'null'], format: uuid }
         assignedToName: { type: [string, 'null'] }
+        isAdhoc:
+          type: boolean
+          description: |
+            UR-028 - raised OFF-PLAN rather than generated from the
+            maintenance schedule (slice 18-WORKFLOW). An ad-hoc job satisfies
+            no schedule period and is EXCLUDED from UR-067 plan compliance;
+            `/reports/overdue` and `/reports/pending` deliberately keep ad-hoc
+            rows (an overdue breakdown is real outstanding work), so this flag
+            is what stops those figures being ambiguous.
 
     Job:
       allOf:
@@ -3447,7 +3456,7 @@ components:
     ComplianceReportRow:
       type: object
       required:
-        [areaId, areaCode, dueCount, completedOnTimeCount, completedLateCount, notCompletedCount, compliancePercent]
+        [areaId, areaCode, dueCount, completedOnTimeCount, completedLateCount, notCompletedCount, adhocExcludedCount, compliancePercent]
       properties:
         areaId: { type: [string, 'null'], format: uuid }
         areaCode: { type: [string, 'null'] }
@@ -3455,6 +3464,14 @@ components:
         completedOnTimeCount: { type: integer }
         completedLateCount: { type: integer }
         notCompletedCount: { type: integer }
+        adhocExcludedCount:
+          type: integer
+          description: |
+            Slice 18-WORKFLOW. Ad-hoc jobs (UR-028) due in the window that were
+            EXCLUDED from every bucket above - UR-067 measures the maintenance
+            PLAN, and off-plan work was never due under it. Reported so the
+            exclusion is visible and the figure reconciles against a raw job
+            count (AC-18).
         compliancePercent: { type: number }
 
     ComplianceReport:

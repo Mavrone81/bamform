@@ -191,8 +191,24 @@ human signing both verification stages.
 | Create delegation | | | ✓ | ✓ | | ✓ | |
 | View archive | ✓ (own) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | View audit trail | | | | | ✓ | ✓ | ✓ |
-| Export records | | | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Export records (bulk ZIP)** | | | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **View organisation reports** | | | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Modify anything** | | | | | | | **✗ — read-only** |
+
+**PR-API-09b — "view archive" and "export records" are two different rights, enforced by two
+different mechanisms, and must not share a role list.** "View archive" is a PER-ROW visibility
+predicate (`JOB_VIEW_ALL_ROLES`, evaluated after area scoping by
+`JobAccessService#assertAccessible` / `RecordsService#assertAccessible`). "Export records" and the
+`/reports/*` family are ROUTE-LEVEL grants over organisation-wide bulk output
+(`ORG_REPORTING_ROLES`, `@Roles()`), and the export produces a ZIP of rendered PDFs carrying
+DECRYPTED signatory full names and drawn-signature images.
+
+PLANNER is the worked example: it holds broad archive/job visibility (without it the role is inert
+— every job mutation runs through `assertAccessible`), and it deliberately holds **no** bulk export
+or reporting right. Slice 18-WORKFLOW originally spread one constant across both and silently
+granted the second; the review caught it (finding X-1). The two constants are now separate, and
+`api/test/contract/route-roles.spec.ts` pins the exact `@Roles()` set of **every** route in the
+system so the next accidental widening fails CI rather than review.
 
 **Slice 18-WORKFLOW note on "Record results / submit"** — `POST /jobs/{id}/submit` now
 carries the PERFORMER'S DRAWN SIGNATURE (mandatory). The plant's process is "completed

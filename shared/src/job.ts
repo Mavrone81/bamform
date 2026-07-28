@@ -47,6 +47,18 @@ export const jobSummarySchema = z.object({
   status: jobStatusSchema,
   assignedTo: z.string().uuid().nullable().optional(),
   assignedToName: z.string().nullable().optional(),
+  /**
+   * UR-028 — raised OFF-PLAN rather than generated from the maintenance
+   * schedule (slice 18-WORKFLOW; added on review finding X-4).
+   *
+   * Every list that shows jobs shows both kinds, and the two mean different
+   * things: an ad-hoc job satisfies no schedule period and is excluded from
+   * UR-067 plan compliance. The `/reports/overdue` and `/reports/pending`
+   * worklists deliberately KEEP ad-hoc rows — an overdue breakdown is real
+   * outstanding work and hiding it would be a worse defect than counting it —
+   * so this flag is what stops those numbers being ambiguous.
+   */
+  isAdhoc: z.boolean().optional(),
 });
 export type JobSummary = z.infer<typeof jobSummarySchema>;
 

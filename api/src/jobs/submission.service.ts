@@ -103,11 +103,35 @@ export class SubmissionService {
   ): Promise<Job> {
     let fingerprint: Buffer | undefined;
     if (idempotencyKey) {
-      // The signature is PART of the request's identity — a replay of the
-      // same key with a DIFFERENT signature is a different request and must
-      // not silently return the first one's result (same rule
-      // `VerificationService` applies to `drawnSignature`).
-      fingerprint = this.idempotency.fingerprint({ jobId, drawnSignature: dto.drawnSignature });
+      // THE SIGNATURE IS DELIBERATELY *NOT* IN THE FINGERPRINT — unlike
+      // `VerificationService`, which does include it. Slice 18-WORKFLOW's
+      // review, finding X-2.
+      //
+      // Submit is the one endpoint whose idempotency key is PERSISTED across
+      // attempts: `web/src/offline/sync-engine.ts` stores
+      // `job.submitIdempotencyKey` BEFORE the request and deliberately KEEPS
+      // it when the transport throws, so a retry after a LOST RESPONSE
+      // replays the committed submission instead of colliding with it
+      // (PR-062/SYS-14 — the mechanism the project built for exactly this).
+      // And by design the drawn signature is never persisted on the device
+      // (it is personal data, and a shared plant tablet is the wrong place
+      // for it), so the retry necessarily carries FRESHLY DRAWN — therefore
+      // different — PNG bytes.
+      //
+      // With the signature in the fingerprint, that retry 422'd
+      // `/errors/idempotency-mismatch`: a record that had COMMITTED
+      // server-side told the technician "the server rejected this
+      // submission" and reset to unsent locally, so they redid work that
+      // already existed. A different signature on a retry is the EXPECTED
+      // case here, not a client defect.
+      //
+      // Safety of leaving it out: the replay returns the CACHED response and
+      // writes nothing — no approval step, no encryption, no audit event. The
+      // second signature is discarded, never stored, so it cannot substitute
+      // for the one that was content-bound and signed. `jobId` + the actor
+      // (`checkReplay` scopes by `actor.actorId`) + a key the client minted
+      // for this one submission already identify the request completely.
+      fingerprint = this.idempotency.fingerprint({ jobId });
       const replay = await this.idempotency.checkReplay(idempotencyKey, fingerprint, actor.actorId);
       if (replay) {
         return replay.body as Job;

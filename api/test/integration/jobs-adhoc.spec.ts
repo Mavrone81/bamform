@@ -8,6 +8,7 @@ import {
   createAsset,
   createAssetType,
   createFormTemplate,
+  createJob,
   createScheduleRule,
   createTemplateItem,
   createTemplateRevision,
@@ -130,17 +131,88 @@ describe('Jobs — POST /jobs/adhoc (UR-028/PR-058, slice 18-WORKFLOW §2)', () 
     expect(Number(rows.rows[0].count)).toBe(0);
   });
 
-  it('the reason requirement is enforced by the DATABASE too (job_adhoc_reason_length_chk), not the service alone', async () => {
-    const { assetId, revisionId, approvalRouteId } = await makeAsset();
-    await expect(
-      adminPool.query(
+  describe('the DATABASE enforces the ad-hoc invariants, not the service alone', () => {
+    async function directInsert(
+      ctx: { assetId: string; revisionId: string; approvalRouteId: string },
+      reason: string | null,
+      scope = 'ARRAY[]::"frequency_t"[]',
+    ) {
+      return adminPool.query(
         `INSERT INTO "job" ("job_number","asset_id","template_revision_id","approval_route_id",
                             "frequency","frequency_scope","due_on","generated_at","status",
                             "is_adhoc","adhoc_reason")
-         VALUES ($1,$2,$3,$4,'M1',ARRAY[]::"frequency_t"[],CURRENT_DATE,now(),'scheduled',true,'short')`,
-        [`PM-DIRECT-${randomUUID()}`, assetId, revisionId, approvalRouteId],
-      ),
-    ).rejects.toThrow(/job_adhoc_reason_length_chk/);
+         VALUES ($1,$2,$3,$4,'M1',${scope},CURRENT_DATE,now(),'scheduled',true,$5)`,
+        [`PM-DIRECT-${randomUUID()}`, ctx.assetId, ctx.revisionId, ctx.approvalRouteId, reason],
+      );
+    }
+
+    it('rejects a reason shorter than 10 characters (job_adhoc_reason_length_chk)', async () => {
+      const ctx = await makeAsset();
+      await expect(directInsert(ctx, 'short')).rejects.toThrow(/job_adhoc_reason_length_chk/);
+    });
+
+    /**
+     * Review finding X-6. The original constraint was
+     * `is_adhoc = false OR length(adhoc_reason) >= 10`, which ACCEPTS a NULL
+     * reason: `length(NULL) >= 10` is NULL, `false OR NULL` is NULL, and
+     * Postgres only rejects a CHECK that evaluates to FALSE. So the
+     * "mandatory reason" was not actually mandatory in the database — and
+     * NULL is exactly the shape a code path that forgets to set it produces.
+     */
+    it('X-6: rejects a NULL reason — the three-valued-logic hole is closed', async () => {
+      const ctx = await makeAsset();
+      await expect(directInsert(ctx, null)).rejects.toThrow(/job_adhoc_reason_length_chk/);
+    });
+
+    it('X-6: the same hole is closed on INV-12 (void) and INV-13 (return), which had it too', async () => {
+      const ctx = await makeAsset();
+      await expect(
+        adminPool.query(
+          `INSERT INTO "job" ("job_number","asset_id","template_revision_id","approval_route_id",
+                              "frequency","frequency_scope","due_on","generated_at","status","void_reason")
+           VALUES ($1,$2,$3,$4,'M1',ARRAY['M1']::"frequency_t"[],CURRENT_DATE,now(),'voided',NULL)`,
+          [`PM-VOIDNULL-${randomUUID()}`, ctx.assetId, ctx.revisionId, ctx.approvalRouteId],
+        ),
+      ).rejects.toThrow(/job_void_reason_length_chk/);
+
+      const jobId = await createJob({
+        assetId: ctx.assetId,
+        templateRevisionId: ctx.revisionId,
+        approvalRouteId: ctx.approvalRouteId,
+        jobNumber: `PM-RETNULL-${randomUUID()}`,
+        status: 'submitted',
+      });
+      const actorId = await createUser('returner-null');
+      await expect(
+        adminPool.query(
+          `INSERT INTO "approval_step"
+             ("job_id","stage_ordinal","action","actor_id","actor_role_code","reason","acted_at",
+              "content_hash","signature","signing_key_id")
+           VALUES ($1,1,'returned',$2,'TEAM_LEADER',NULL,now(),'\\x00','\\x00','k')`,
+          [jobId, actorId],
+        ),
+      ).rejects.toThrow(/approval_step_return_reason_length_chk/);
+    });
+
+    /**
+     * The slice's own recommended follow-up, and the review agreed:
+     * `frequency_scope = '{}'` is what makes an ad-hoc job structurally
+     * incapable of advancing the schedule (both cascade services are DRIVEN
+     * BY that array). Nothing enforced it until now, so a future insert
+     * giving an ad-hoc job a real scope would silently make it credit the
+     * maintenance plan.
+     */
+    it('rejects an ad-hoc job with a NON-EMPTY frequency_scope (job_adhoc_frequency_scope_chk)', async () => {
+      const ctx = await makeAsset();
+      await expect(directInsert(ctx, REASON, 'ARRAY[\'M1\']::"frequency_t"[]')).rejects.toThrow(
+        /job_adhoc_frequency_scope_chk/,
+      );
+    });
+
+    it('accepts a well-formed ad-hoc row — the constraints are not blanket refusals', async () => {
+      const ctx = await makeAsset();
+      await expect(directInsert(ctx, REASON)).resolves.toBeDefined();
+    });
   });
 
   it('404s for an unknown asset; 422 when the asset type has no CURRENT template revision', async () => {

@@ -244,7 +244,18 @@ export class AdhocJobService {
   }
 }
 
-/** `due_on` is a DATE column — midnight UTC, no time-of-day, same as the scheduler's. */
+/**
+ * `due_on` is a DATE column — midnight UTC, no time-of-day, same as the
+ * scheduler's (`job-generation.service.ts#dateOnly`).
+ *
+ * This is only the FALLBACK for a caller that omits `dueOn`. The web form
+ * always sends one, and sends the DEVICE'S LOCAL date
+ * (`web/src/lib/local-date.ts`, review finding X-7) — the tablet is in the
+ * plant, so its local date is the plant's. The server keeps UTC because it
+ * has no timezone configuration and every other date in the system is
+ * UTC-derived; inventing a server-side plant timezone here would put a second,
+ * unconfigured notion of "today" next to the scheduler's.
+ */
 function todayUtc(): Date {
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));

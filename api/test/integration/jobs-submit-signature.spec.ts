@@ -317,28 +317,120 @@ describe('Jobs — POST /jobs/{id}/submit performer signature (slice 18-WORKFLOW
     expect(Number(auditAfter.rows[0].count)).toBe(Number(auditBefore.rows[0].count));
   });
 
-  it('idempotent replay: the SAME key + SAME signature replays; the stage-0 step is written once', async () => {
+  /**
+   * SYS-14 / PR-062 — the LOST-RESPONSE RETRY, which is the only replay a
+   * real client can produce for this endpoint.
+   *
+   * Review finding X-2: the original test here resent the SAME
+   * `realPngDataUrl()` bytes, which no real client can do. `submitJob`
+   * persists the idempotency key BEFORE the request and KEEPS it when the
+   * transport throws (`sync-engine.ts`), while the signature is deliberately
+   * never persisted — so a retry after a dropped response ALWAYS carries
+   * freshly drawn, different PNG bytes. This test now exercises that case.
+   */
+  it('SYS-14: the same key with a DIFFERENT signature replays the committed submission — it does not 422', async () => {
     const { jobId, token } = await makeReadyToSubmitJob();
     const key = randomUUID();
-    const signature = realPngDataUrl();
+    // Two genuinely different PNGs — a person cannot redraw the same bytes.
+    const firstSignature = realPngDataUrl(100);
+    const secondSignature = realPngDataUrl(180);
+    expect(secondSignature).not.toBe(firstSignature);
 
     const first = await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
       .set('Idempotency-Key', key)
-      .send({ drawnSignature: signature })
+      .send({ drawnSignature: firstSignature })
       .expect(200);
+
+    // The response to the first attempt was "lost"; the technician re-signs
+    // and retries under the SAME persisted key.
     const second = await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
       .set('Idempotency-Key', key)
-      .send({ drawnSignature: signature })
+      .send({ drawnSignature: secondSignature })
       .expect(200);
     expect(second.body.id).toBe(first.body.id);
+    expect(second.body.status).toBe('SUBMITTED');
 
-    const steps = await adminPool.query('SELECT count(*) FROM "approval_step" WHERE job_id = $1', [
-      jobId,
-    ]);
-    expect(Number(steps.rows[0].count)).toBe(1);
+    // Applied exactly once: one stage-0 step, one state-change audit event.
+    const steps = await adminPool.query(
+      'SELECT id FROM "approval_step" WHERE job_id = $1 AND action = $2',
+      [jobId, 'submitted'],
+    );
+    expect(steps.rowCount).toBe(1);
+    const events = await adminPool.query(
+      `SELECT count(*) FROM "audit_event" WHERE "entity_id" = $1 AND "action" = 'state_change'`,
+      [jobId],
+    );
+    expect(Number(events.rows[0].count)).toBe(1);
+  });
+
+  it('the replayed signature is DISCARDED — the stored signature is the one that was content-bound', async () => {
+    const { jobId, token } = await makeReadyToSubmitJob();
+    const key = randomUUID();
+    const firstPng = realPngBytes(100);
+    const secondPng = realPngBytes(180);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/submit`)
+      .set(...authHeader(token))
+      .set('Idempotency-Key', key)
+      .send({ drawnSignature: `data:image/png;base64,${firstPng.toString('base64')}` })
+      .expect(200);
+    const before = await adminPool.query(
+      `SELECT "id", "drawn_signature_ct", "content_hash" FROM "approval_step"
+        WHERE job_id = $1 AND action = 'submitted'`,
+      [jobId],
+    );
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/submit`)
+      .set(...authHeader(token))
+      .set('Idempotency-Key', key)
+      .send({ drawnSignature: `data:image/png;base64,${secondPng.toString('base64')}` })
+      .expect(200);
+    const after = await adminPool.query(
+      `SELECT "id", "drawn_signature_ct", "content_hash" FROM "approval_step"
+        WHERE job_id = $1 AND action = 'submitted'`,
+      [jobId],
+    );
+
+    // Byte-identical: a replay writes nothing, so the second signature can
+    // never substitute for the one the Ed25519 signature commits to.
+    expect(after.rowCount).toBe(1);
+    expect(after.rows[0].id).toBe(before.rows[0].id);
+    expect(
+      Buffer.from(after.rows[0].drawn_signature_ct).equals(
+        Buffer.from(before.rows[0].drawn_signature_ct),
+      ),
+    ).toBe(true);
+    expect(
+      Buffer.from(after.rows[0].content_hash).equals(Buffer.from(before.rows[0].content_hash)),
+    ).toBe(true);
+  });
+
+  it('a DIFFERENT job under the same key is still a genuine mismatch — 422', async () => {
+    const a = await makeReadyToSubmitJob();
+    const b = await makeReadyToSubmitJob();
+    const key = randomUUID();
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${a.jobId}/submit`)
+      .set(...authHeader(a.token))
+      .set('Idempotency-Key', key)
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+
+    // The jobId is still part of the fingerprint — dropping the signature
+    // from it did not make the key a wildcard.
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${b.jobId}/submit`)
+      .set(...authHeader(b.token))
+      .set('Idempotency-Key', key)
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(422);
+    expect(res.body.type).toBe('/errors/idempotency-mismatch');
   });
 });

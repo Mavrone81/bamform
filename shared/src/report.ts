@@ -102,7 +102,16 @@ export type MeasurementTrendQuery = z.infer<typeof measurementTrendQuerySchema>;
 
 // ------------------------------------------------------------- GET /reports/compliance
 
-/** UR-067 — due vs. completed on time, grouped by area. */
+/**
+ * UR-067 — due vs. completed on time, grouped by area.
+ *
+ * `adhocExcludedCount` (slice 18-WORKFLOW review, X-4): ad-hoc jobs (UR-028)
+ * are EXCLUDED from `dueCount` and every completion bucket, because UR-067
+ * measures the maintenance PLAN and off-plan work was never due under it.
+ * The count is reported so the exclusion is visible: a reader can always see
+ * how much extra work sat behind a compliance figure instead of wondering
+ * why the numbers do not reconcile against a raw job count (AC-18).
+ */
 export const complianceReportRowSchema = z.object({
   areaId: z.string().uuid().nullable(),
   areaCode: z.string().nullable(),
@@ -110,6 +119,7 @@ export const complianceReportRowSchema = z.object({
   completedOnTimeCount: z.number().int(),
   completedLateCount: z.number().int(),
   notCompletedCount: z.number().int(),
+  adhocExcludedCount: z.number().int(),
   compliancePercent: z.number(),
 });
 export type ComplianceReportRow = z.infer<typeof complianceReportRowSchema>;

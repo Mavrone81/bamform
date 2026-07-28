@@ -2297,6 +2297,15 @@ export interface components {
       /** Format: uuid */
       assignedTo?: string | null;
       assignedToName?: string | null;
+      /**
+       * @description UR-028 - raised OFF-PLAN rather than generated from the
+       *     maintenance schedule (slice 18-WORKFLOW). An ad-hoc job satisfies
+       *     no schedule period and is EXCLUDED from UR-067 plan compliance;
+       *     `/reports/overdue` and `/reports/pending` deliberately keep ad-hoc
+       *     rows (an overdue breakdown is real outstanding work), so this flag
+       *     is what stops those figures being ambiguous.
+       */
+      isAdhoc?: boolean;
     };
     Job: components['schemas']['JobSummary'] & {
       draftVersion?: number;
@@ -2677,6 +2686,14 @@ export interface components {
       completedOnTimeCount: number;
       completedLateCount: number;
       notCompletedCount: number;
+      /**
+       * @description Slice 18-WORKFLOW. Ad-hoc jobs (UR-028) due in the window that were
+       *     EXCLUDED from every bucket above - UR-067 measures the maintenance
+       *     PLAN, and off-plan work was never due under it. Reported so the
+       *     exclusion is visible and the figure reconciles against a raw job
+       *     count (AC-18).
+       */
+      adhocExcludedCount: number;
       compliancePercent: number;
     };
     ComplianceReport: {

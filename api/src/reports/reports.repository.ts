@@ -88,7 +88,19 @@ export class ReportsRepository {
     });
   }
 
-  /** UR-067 — every job due in [from, to], scoped, WITH its area code and verification timing, for in-process aggregation (`reports.service.ts#compliance`). Report-scale data (PRD: ~1,500 records/year) — no need for DB-side GROUP BY. */
+  /**
+   * UR-067 — every job due in [from, to], scoped, WITH its area code and
+   * verification timing, for in-process aggregation
+   * (`reports.service.ts#compliance`). Report-scale data (PRD: ~1,500
+   * records/year) — no need for DB-side GROUP BY.
+   *
+   * Deliberately returns AD-HOC rows too, with `isAdhoc` selected, rather
+   * than filtering them in SQL: the service excludes them from every
+   * compliance bucket AND reports how many it excluded, so the number is
+   * visibly "compliance against the plan", not silently a different
+   * population than the caller asked for (slice 18-WORKFLOW review, X-4 —
+   * same shape as slice 17's voided-row exclusion).
+   */
   findDueInRangeForCompliance(
     from: Date,
     to: Date,
@@ -111,6 +123,9 @@ export class ReportsRepository {
         submittedAt: true,
         archivedAt: true,
         voidReason: true,
+        // Slice 18-WORKFLOW review, finding X-4 — the aggregation must be
+        // able to tell PLANNED work from off-plan work (`reports.service.ts`).
+        isAdhoc: true,
         asset: { select: { areaId: true, area: { select: { code: true } } } },
       },
     });
