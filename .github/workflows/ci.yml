@@ -73,6 +73,15 @@ jobs:
       # (no Gradle, no SDK), so it belongs in the fast job.
       - name: Android shell — Kotlin/TS protocol agreement + bridge security invariants
         run: node scripts/ci/assert-shell-protocol-contract.mjs
+      # Slice 22-SELFUPDATE / review S-1. The whole self-update mechanism rests
+      # on `sw.js` differing between deploys, and for the whole of that slice
+      # it silently did NOT on the production deployment — VITE_APP_VERSION is
+      # pinned to `local` there, so two builds from different source produced a
+      # byte-identical worker and no deployed client could ever update. Every
+      # other gate in this file passed throughout. This one builds twice, the
+      # way the droplet builds, and fails if the worker does not change.
+      - name: Service worker changes between builds (self-update cannot go inert)
+        run: bash scripts/ci/assert-sw-changes-per-build.sh
 
   # ---------------------------------------------------------------- 2
   secret-scan:

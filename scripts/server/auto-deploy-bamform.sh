@@ -43,7 +43,23 @@ find "$BACKUP_DIR" -name 'predeploy-*.dump' -mtime +7 -delete
 git reset --hard origin/main --quiet
 log "Working tree at $(git rev-parse --short HEAD)"
 
-log "Building"
+# The deployed build MUST be identifiable (slice 22-SELFUPDATE, review S-1).
+#
+# `.env` is sourced above with `set -a`, and it ships `IMAGE_TAG=local`. That
+# exported constant reached `docker-compose.yml`'s
+# `VITE_APP_VERSION: ${IMAGE_TAG:-local}` on every deploy, so every image was
+# built and tagged identically no matter what was in it. The web client's
+# self-update mechanism was the visible casualty — it compares `/sw.js` bytes
+# and they never changed — but tagging every image `bamform-web:local` also
+# means `docker images` cannot tell you what is running, and a rollback has
+# nothing to roll back to.
+#
+# The script is standing in the checked-out commit; it knows the answer.
+IMAGE_TAG=$(git rev-parse --short HEAD) || fail "cannot resolve deployed commit for IMAGE_TAG"
+[ -n "$IMAGE_TAG" ] && [ "$IMAGE_TAG" != "local" ] \
+  || fail "refusing to deploy with the placeholder IMAGE_TAG — images would be indistinguishable"
+export IMAGE_TAG
+log "Building as IMAGE_TAG=$IMAGE_TAG"
 docker compose -f "$COMPOSE_FILE" build $SERVICES \
   || fail "build failed — nothing restarted"
 
