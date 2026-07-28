@@ -327,9 +327,24 @@ button:disabled {
   align-items: center;
 }
 
+.update-banner-action,
+.update-banner-dismiss {
+  flex: none;
+}
+
+/* The action sits at the far end, the dismissal after it — the affirmative
+ * choice is the one the thumb reaches first on a phone. */
+.update-banner-action {
+  margin-left: auto;
+  font-weight: 700;
+}
+
+.update-banner-action + .update-banner-dismiss {
+  margin-left: 0;
+}
+
 .update-banner-dismiss {
   margin-left: auto;
-  flex: none;
 }
 
 /* ---- Cards / panels ------------------------------------------------------ */

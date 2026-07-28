@@ -203,4 +203,62 @@ test.describe('O-12: a client never stays on a build older than the server', () 
       void server;
     }
   });
+
+  /**
+   * PRODUCTION AS IT ACTUALLY WAS (review finding S-1) — the case that made
+   * the first version of this slice a no-op on the live server.
+   *
+   * `docker-compose.yml` maps `VITE_APP_VERSION: ${IMAGE_TAG:-local}`,
+   * `.env.example` pins `IMAGE_TAG=local`, and the droplet's deploy script
+   * sourced that and built. So a genuine deploy — new `index.html`, new
+   * content-hashed bundle — shipped a BYTE-IDENTICAL `/sw.js`. Measured:
+   * `fe6d1732…` for two builds from different source.
+   * `registration.update()` byte-compares, correctly finds no change, and the
+   * client can never leave its build. Every test still passed.
+   *
+   * The root cause is fixed (the worker is versioned by build output now,
+   * enforced by scripts/ci/assert-sw-changes-per-build.sh). This test asserts
+   * the BEHAVIOUR is robust even if that ever regresses: a deploy the
+   * service-worker comparison is blind to must still reach the client.
+   */
+  test('updates even when the deploy ships a byte-identical service worker', async ({
+    page,
+    server,
+    baseURL,
+  }) => {
+    const deployed = await DeployServer.mirror(page.request, baseURL!);
+    try {
+      deployed.deploy('A');
+      await signIn(page, deployed.url);
+      await waitForServiceWorkerControl(page);
+      expect(await runningBuild(page)).toBe('A');
+
+      const swBefore = await page.evaluate(async () =>
+        (await fetch('/sw.js', { cache: 'no-store' })).text(),
+      );
+
+      deployed.deploy('B-stale-worker');
+
+      // Same worker bytes as before the deploy — the primary detector is
+      // blind here, exactly as it was on form.bevorasg.com.
+      const swAfter = await page.evaluate(async () =>
+        (await fetch('/sw.js', { cache: 'no-store' })).text(),
+      );
+      expect(swAfter).toBe(swBefore);
+
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+
+      await expect
+        .poll(() => runningBuild(page), {
+          timeout: 30_000,
+          message:
+            'a deploy with an unchanged sw.js never reached the client — this is exactly the ' +
+            'production failure of review S-1',
+        })
+        .toBe('B');
+    } finally {
+      await deployed.close();
+      void server;
+    }
+  });
 });

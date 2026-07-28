@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  RELOAD_STORM_WINDOW_MS,
   UPDATE_POLL_INTERVAL_MS,
   __resetUpdateStateForTests,
   applyUpdate,
+  applyUpdateNow,
   beginCriticalWork,
   checkForUpdate,
   criticalWorkCount,
   isUpdatePending,
+  isUpdateSafeToApplyNow,
   onUpdatePendingChange,
   reportPossiblyOutdatedClient,
+  retryDeferredUpdate,
   startUpdateWatch,
 } from './update';
 
@@ -97,6 +101,20 @@ describe('applying an update', () => {
     applyUpdate();
     applyUpdate();
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Review adjudication: the banner needs a Reload action available exactly
+   * when `criticalWorkCount() === 0` — the storm branch is defined by that
+   * condition, and the original "the banner only ever appears when reloading
+   * would destroy a signature" argument was therefore false.
+   */
+  it('reports whether reloading right now is safe', () => {
+    expect(isUpdateSafeToApplyNow()).toBe(true);
+    const end = beginCriticalWork('signature-pad');
+    expect(isUpdateSafeToApplyNow()).toBe(false);
+    end();
+    expect(isUpdateSafeToApplyNow()).toBe(true);
   });
 
   it('tells subscribers an update is waiting on them', () => {
@@ -218,6 +236,70 @@ describe('startUpdateWatch — the triggers a WebView actually delivers', () => 
   });
 });
 
+describe('the asset comparison runs ALONGSIDE the service worker, not only without one', () => {
+  /**
+   * Review S-1. The service-worker comparison was the only detector on the
+   * real HTTPS origin, and it was measurably inert there: production pins
+   * `VITE_APP_VERSION`, so `sw.js` was byte-identical across deploys and
+   * `registration.update()` correctly answered "no change" forever. The asset
+   * comparison caught that same deploy in ~1 s but sat behind `if
+   * (!registration)`, so it never ran where it was needed. Two independent
+   * detectors is the right shape for a mechanism that has already failed
+   * silently once.
+   */
+  it('detects a deploy the service-worker comparison misses', async () => {
+    document.head.innerHTML = '<script src="/assets/index-OLD.js"></script>';
+    const reg = {
+      installing: null,
+      waiting: null,
+      update: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistration: vi.fn().mockResolvedValue(reg) },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => '<script src="/assets/index-NEW.js"></script>',
+      }),
+    );
+
+    expect(await checkForUpdate('test')).toBe(true);
+    // The worker said nothing — exactly production's behaviour — and the
+    // client updated anyway.
+    expect(reg.update).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    document.head.innerHTML = '';
+  });
+
+  it('does not double-fire when BOTH detectors see the same deploy', async () => {
+    document.head.innerHTML = '<script src="/assets/index-OLD.js"></script>';
+    const reg = {
+      installing: {},
+      waiting: null,
+      update: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistration: vi.fn().mockResolvedValue(reg) },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => '<script src="/assets/index-NEW.js"></script>',
+      }),
+    );
+
+    expect(await checkForUpdate('test')).toBe(true);
+    // The worker path is authoritative when it fires: it will reload via
+    // `controllerchange`, so the asset path must not race it into a second
+    // reload. `applyUpdate` is idempotent, but not asking is cheaper.
+    expect(reload).not.toHaveBeenCalled();
+    document.head.innerHTML = '';
+  });
+});
+
 describe('no service worker at all (insecure http:// plant LAN)', () => {
   function pageLoadedWith(assetPath: string) {
     document.head.innerHTML = `<script src="${assetPath}"></script>`;
@@ -225,6 +307,53 @@ describe('no service worker at all (insecure http:// plant LAN)', () => {
 
   afterEach(() => {
     document.head.innerHTML = '';
+  });
+
+  /**
+   * Review S-4. `loaded` was built from `script[src]` + stylesheets only,
+   * while `deployed` scraped EVERY `/assets/…` string out of the HTML. Vite
+   * emits `<link rel="modulepreload">` the moment the app gains one dynamic
+   * `import()`, and such a path can never be in `loaded` — a permanent false
+   * positive that measured 3 self-inflicted reloads in 54 ms on an UNCHANGED
+   * build, burning the storm budget and parking the client in the banner
+   * dead end. The comparison is now entry-point to entry-point, parsed
+   * rather than regexed.
+   */
+  it('is not fooled by a modulepreload for a code-split chunk (S-4)', async () => {
+    document.head.innerHTML =
+      '<script type="module" src="/assets/index-SAME.js"></script>' +
+      '<link rel="stylesheet" href="/assets/index-SAME.css" />';
+    vi.stubGlobal('navigator', {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () =>
+          '<link rel="modulepreload" href="/assets/chunk-LAZY.js" />' +
+          '<script type="module" src="/assets/index-SAME.js"></script>' +
+          '<link rel="stylesheet" href="/assets/index-SAME.css" />',
+      }),
+    );
+
+    expect(await checkForUpdate('test')).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('still spots a real deploy when a modulepreload is present', async () => {
+    document.head.innerHTML = '<script type="module" src="/assets/index-OLD.js"></script>';
+    vi.stubGlobal('navigator', {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () =>
+          '<link rel="modulepreload" href="/assets/chunk-LAZY.js" />' +
+          '<script type="module" src="/assets/index-NEW.js"></script>',
+      }),
+    );
+
+    expect(await checkForUpdate('test')).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it('spots a deploy by comparing the served index.html against the loaded assets', async () => {
@@ -275,19 +404,75 @@ describe('no service worker at all (insecure http:// plant LAN)', () => {
 });
 
 describe('a reload storm can never happen', () => {
-  it('stops auto-reloading and falls back to the banner after repeated update-reloads', () => {
-    // Three update-reloads inside the window have already happened — e.g. a
-    // deploy that is serving two different builds. A device that reload-loops
-    // is worse than a device that is one version behind.
+  function armStorm() {
     __resetUpdateStateForTests();
     sessionStorage.setItem(
       'bamform.update.reloads',
       JSON.stringify([Date.now(), Date.now(), Date.now()]),
     );
+  }
+
+  it('stops auto-reloading and falls back to the banner after repeated update-reloads', () => {
+    // Three update-reloads inside the window have already happened — e.g. a
+    // deploy that is serving two different builds. A device that reload-loops
+    // is worse than a device that is one version behind.
+    armStorm();
 
     applyUpdate();
     expect(reload).not.toHaveBeenCalled();
     expect(isUpdatePending()).toBe(true);
+    sessionStorage.clear();
+  });
+
+  /**
+   * Review S-3. The breaker used to be a DEAD END: it showed the banner with
+   * `criticalSections === 0` — nothing in flight, reloading perfectly safe —
+   * and nothing ever re-entered `applyUpdate()`, so the client stayed on the
+   * old build permanently, through the window expiring and through further
+   * real triggers, with only a Dismiss button. Measured by the reviewer over
+   * 125 s. The deferral must be re-attempted, not merely recorded.
+   */
+  it('recovers by itself once the storm window has passed', async () => {
+    armStorm();
+    applyUpdate();
+    expect(reload).not.toHaveBeenCalled();
+
+    // The window ages out and an ordinary trigger comes round again.
+    await vi.advanceTimersByTimeAsync(RELOAD_STORM_WINDOW_MS + 1_000);
+    retryDeferredUpdate();
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    sessionStorage.clear();
+  });
+
+  it('a routine update check re-attempts a deferred update', async () => {
+    armStorm();
+    applyUpdate();
+    expect(reload).not.toHaveBeenCalled();
+
+    const reg = fakeRegistration();
+    vi.stubGlobal('navigator', {
+      serviceWorker: { getRegistration: vi.fn().mockResolvedValue(reg) },
+    });
+    const stop = startUpdateWatch();
+    await vi.advanceTimersByTimeAsync(RELOAD_STORM_WINDOW_MS + UPDATE_POLL_INTERVAL_MS);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    stop();
+    sessionStorage.clear();
+  });
+
+  it('does NOT re-attempt while the technician is still mid-signature', async () => {
+    armStorm();
+    const end = beginCriticalWork('signature-pad');
+    applyUpdate();
+
+    await vi.advanceTimersByTimeAsync(RELOAD_STORM_WINDOW_MS + 1_000);
+    retryDeferredUpdate();
+    expect(reload).not.toHaveBeenCalled();
+
+    end();
+    expect(reload).toHaveBeenCalledTimes(1);
     sessionStorage.clear();
   });
 
@@ -331,5 +516,29 @@ describe('an outdated-client API rejection is a hard signal', () => {
     reportPossiblyOutdatedClient(422);
     await vi.advanceTimersByTimeAsync(0);
     expect(reg.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the banner action is a human decision, not an automatic one', () => {
+  it('reloads even when the storm breaker has stopped automatic reloads', () => {
+    __resetUpdateStateForTests();
+    sessionStorage.setItem(
+      'bamform.update.reloads',
+      JSON.stringify([Date.now(), Date.now(), Date.now()]),
+    );
+    applyUpdate();
+    expect(reload).not.toHaveBeenCalled(); // automatic: correctly refused
+
+    applyUpdateNow(); // the technician tapped Reload
+    expect(reload).toHaveBeenCalledTimes(1);
+    sessionStorage.clear();
+  });
+
+  it('STILL refuses to reload on top of a drawn signature', () => {
+    __resetUpdateStateForTests();
+    const end = beginCriticalWork('signature-pad');
+    applyUpdateNow();
+    expect(reload).not.toHaveBeenCalled();
+    end();
   });
 });

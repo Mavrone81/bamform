@@ -77,6 +77,7 @@ let updateDeferred = false;
 let reloadIssued = false;
 let lastOutdatedSignalAt = 0;
 const pendingListeners = new Set<PendingListener>();
+const safetyListeners = new Set<PendingListener>();
 
 /** Test seam only — module state is a singleton by design (there is one
  * document and one registration), so the suite needs a way to rewind it. */
@@ -86,6 +87,7 @@ export function __resetUpdateStateForTests(): void {
   reloadIssued = false;
   lastOutdatedSignalAt = 0;
   pendingListeners.clear();
+  safetyListeners.clear();
   try {
     sessionStorage.removeItem(RELOAD_LOG_KEY);
   } catch {
@@ -115,6 +117,7 @@ export function __resetUpdateStateForTests(): void {
  */
 export function beginCriticalWork(_label: string): () => void {
   criticalSections += 1;
+  for (const l of safetyListeners) l(isUpdateSafeToApplyNow());
   let released = false;
   return () => {
     if (released) return;
@@ -123,6 +126,7 @@ export function beginCriticalWork(_label: string): () => void {
     // The moment the technician's work is finished — and not before — a
     // deferred update takes effect. Nothing happens if none was waiting.
     if (criticalSections === 0 && updateDeferred) applyUpdate();
+    for (const l of safetyListeners) l(isUpdateSafeToApplyNow());
   };
 }
 
@@ -130,10 +134,48 @@ export function criticalWorkCount(): number {
   return criticalSections;
 }
 
+/** Notifies when reloading becomes safe or unsafe, so the banner can offer
+ * or withdraw its Reload button as work starts and finishes. */
+export function onUpdateSafetyChange(listener: PendingListener): () => void {
+  safetyListeners.add(listener);
+  return () => safetyListeners.delete(listener);
+}
+
 /** True when a newer build has taken control but the reload is being held
  * back for the technician. Drives the "reload to finish updating" banner. */
 export function isUpdatePending(): boolean {
   return updateDeferred;
+}
+
+/**
+ * Whether reloading RIGHT NOW would destroy work in progress.
+ *
+ * Drives whether the banner offers a Reload button. The original design had
+ * no button at all, on the argument that the banner only ever appears when
+ * reloading would destroy a drawn signature — which the review correctly
+ * showed to be false: the reload-storm branch shows the same banner with
+ * `criticalSections === 0`, i.e. in the one state where reloading is
+ * unambiguously safe and is also the only thing that would help. The button
+ * is offered exactly when this returns true.
+ */
+export function isUpdateSafeToApplyNow(): boolean {
+  return criticalSections === 0;
+}
+
+/**
+ * Re-attempt an update that was deferred earlier (review S-3).
+ *
+ * Without this the reload-storm branch was a DEAD END. `applyUpdate()` was
+ * only ever re-entered by a critical section closing, and on a screen with no
+ * critical sections there are none to close: `controllerchange` had already
+ * fired and would not fire again, `checkForUpdate` returned false because the
+ * new worker was already active, and the storm budget aged out with nothing
+ * reading it. Measured by the reviewer: banner up, nothing in flight,
+ * permanently stale, no way out. Every routine trigger now re-attempts, so
+ * the deferral is bounded by the storm window rather than by nothing at all.
+ */
+export function retryDeferredUpdate(): void {
+  if (updateDeferred) applyUpdate();
 }
 
 export function onUpdatePendingChange(listener: PendingListener): () => void {
@@ -164,6 +206,36 @@ export function applyUpdate(): void {
 }
 
 /**
+ * The banner's "Reload now" — a deliberate human action, not an automatic
+ * one, and therefore NOT subject to the reload-storm breaker.
+ *
+ * The breaker exists to stop the app reloading itself in a loop. Letting it
+ * veto a tap would recreate exactly the dead end it is supposed to be
+ * mitigating: the reviewer measured a user stuck in front of this banner for
+ * 125 s, and a button that silently did nothing would have been worse than
+ * no button at all.
+ *
+ * The critical-work gate is NOT bypassed. The button is only rendered when
+ * `isUpdateSafeToApplyNow()`, so this branch should be unreachable — but the
+ * hard constraint is that a reload never destroys a drawn signature, and a
+ * constraint that depends on a component rendering correctly is not a
+ * constraint.
+ */
+export function applyUpdateNow(): void {
+  if (reloadIssued) return;
+  if (criticalSections > 0) {
+    if (!updateDeferred) {
+      updateDeferred = true;
+      for (const l of pendingListeners) l(true);
+    }
+    return;
+  }
+  reloadIssued = true;
+  noteUpdateReload();
+  window.location.reload();
+}
+
+/**
  * The circuit breaker. `reloadIssued` only bounds reloads within ONE page
  * load, and an update reload starts a new one — so if the origin were ever
  * serving two different builds at once (a half-finished deploy, two
@@ -179,7 +251,7 @@ export function applyUpdate(): void {
  * session starts with a clean budget.
  */
 const RELOAD_LOG_KEY = 'bamform.update.reloads';
-const RELOAD_STORM_WINDOW_MS = 120_000;
+export const RELOAD_STORM_WINDOW_MS = 120_000;
 const MAX_RELOADS_PER_WINDOW = 3;
 
 function recentUpdateReloads(): number[] {
@@ -222,12 +294,37 @@ function noteUpdateReload(): void {
  * rejection here turn into anything at all.
  */
 export async function checkForUpdate(_reason: string): Promise<boolean> {
-  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
-    return deployedAssetsDiffer();
-  }
+  // A deferral that is now safe to apply is re-attempted on every trigger,
+  // whatever the detectors go on to say (review S-3).
+  retryDeferredUpdate();
+
+  if (await serviceWorkerReportsUpdate()) return true;
+
+  // SECOND, INDEPENDENT DETECTOR — and on the production deployment as it
+  // stands, the only one that works (review S-1).
+  //
+  // This used to run only when there was NO registration, which meant it
+  // never ran on the real HTTPS origin. Meanwhile the worker comparison it
+  // was standing in for was measurably inert there: production pins
+  // `VITE_APP_VERSION`, so every deploy's `sw.js` was byte-identical and
+  // `registration.update()` answered "no change" forever. The reviewer
+  // measured this detector catching that exact deploy in 1012 ms while the
+  // primary one sat silent for 60 s.
+  //
+  // The root cause is fixed (the worker is now versioned by build output —
+  // see sw.ts and scripts/ci/assert-sw-changes-per-build.sh), so the primary
+  // detector works again. This runs alongside it anyway, permanently: a
+  // mechanism that has already failed silently once, on the one deployment
+  // that matters, has earned a second pair of eyes that fails for entirely
+  // different reasons.
+  return deployedAssetsDiffer();
+}
+
+async function serviceWorkerReportsUpdate(): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return false;
   try {
     const registration = await navigator.serviceWorker.getRegistration();
-    if (!registration) return deployedAssetsDiffer();
+    if (!registration) return false;
     await registration.update();
     if (registration.waiting) {
       // A worker parked in `waiting` is a client that will stay stale
@@ -238,6 +335,9 @@ export async function checkForUpdate(_reason: string): Promise<boolean> {
       registration.waiting.postMessage({ type: 'SKIP_WAITING' });
       return true;
     }
+    // An installing worker WILL take control and fire `controllerchange`,
+    // which reloads. Returning true here stops the asset comparison from
+    // racing it into a second, redundant reload.
     return Boolean(registration.installing);
   } catch {
     // Offline, blocked by policy, or the registration was torn down.
@@ -246,30 +346,43 @@ export async function checkForUpdate(_reason: string): Promise<boolean> {
 }
 
 /**
- * The no-service-worker path, and the one place this slice is NOT relying on
- * the service worker at all.
+ * The build-output detector: compare the app's ENTRY POINTS against the ones
+ * the server is currently advertising.
  *
- * `android/.../network_security_config.xml` documents, correctly, that a
- * plant-internal `http://` deployment gets no service worker: an insecure
- * origin is not a secure context, so `register()` fails and every mechanism
- * above it — `registration.update()`, `controllerchange`, the whole
- * lifecycle — is simply absent. Such a client has no Cache Storage either,
- * so it is not stale in the usual sense; but the SPA still never performs a
- * document navigation, so the JavaScript loaded at sign-in keeps running
- * against a server that may have moved on. Same stranding, different
- * plumbing, and it deserved better than being left out.
+ * Vite names every entry by a hash of its content, and `index.html` — served
+ * `no-cache` — always names the current build's. So if the served document
+ * names an entry this document did not load, this document is old. That is
+ * true whatever `VITE_APP_VERSION` says, which is precisely why this detector
+ * caught the deploy the service-worker comparison missed in production
+ * (review S-1).
  *
- * The comparison is exact and needs nothing new deployed: `index.html` is
- * served `no-cache` and names the hashed asset files of the CURRENT build,
- * so if it names a file this document did not load, this document is old.
- * Bails out silently on anything unexpected — an offline device must not be
- * told it is out of date, and a page with no hashed assets (the dev server,
+ * It also covers the case that has no service worker at all: an insecure
+ * `http://` plant-LAN origin is not a secure context, so `register()` fails
+ * and the entire worker lifecycle is absent — while the SPA still never
+ * navigates and can still run all shift on replaced JavaScript.
+ *
+ * ## Entry points only, and parsed rather than regexed (review S-4)
+ *
+ * This used to build `loaded` from the live DOM's scripts and stylesheets but
+ * scrape EVERY `/assets/…` string out of the served HTML, then require every
+ * scraped path to be loaded. Vite emits `<link rel="modulepreload">` for
+ * lazily-imported chunks the moment the app gains a single dynamic
+ * `import()`; such a chunk is in the HTML and legitimately not yet loaded, so
+ * the comparison would report a deploy that had not happened — measured at 3
+ * self-inflicted reloads in 54 ms on an unchanged build, which also burned
+ * the storm budget. Comparing like with like — the served document's own
+ * `<script src>`/`<link rel=stylesheet>` against the live document's —
+ * removes the whole class: preloads and lazy chunks appear in neither side.
+ *
+ * Bails out silently on anything unexpected. An offline device must never be
+ * told it is out of date, and a page with no hashed entries (the dev server,
  * the unit-test DOM) has nothing to say.
  */
-async function deployedAssetsDiffer(): Promise<boolean> {
-  if (typeof document === 'undefined') return false;
-  const loaded = new Set(
-    [...document.querySelectorAll('script[src], link[rel="stylesheet"]')]
+const ENTRY_SELECTOR = 'script[src], link[rel="stylesheet"]';
+
+function hashedEntriesOf(root: ParentNode): Set<string> {
+  return new Set(
+    [...root.querySelectorAll(ENTRY_SELECTOR)]
       .map((el) => el.getAttribute('src') ?? el.getAttribute('href') ?? '')
       .map((href) => {
         try {
@@ -280,21 +393,34 @@ async function deployedAssetsDiffer(): Promise<boolean> {
       })
       .filter((path) => path.startsWith('/assets/')),
   );
+}
+
+async function deployedAssetsDiffer(): Promise<boolean> {
+  if (typeof document === 'undefined') return false;
+  const loaded = hashedEntriesOf(document);
   if (loaded.size === 0) return false;
 
   try {
+    // `no-store` also tells our own service worker to stay out of the way
+    // (sw.ts honours it): answering this from the shell cache would compare
+    // the app against itself and never report anything.
     const res = await fetch('/', { cache: 'no-store' });
     if (!res.ok) return false;
     const html = await res.text();
-    const deployed = [...html.matchAll(/["'](\/assets\/[^"']+)["']/g)].map((m) => m[1]);
-    if (deployed.length === 0) return false;
-    if (deployed.every((path) => loaded.has(path))) return false;
+    const served = hashedEntriesOf(new DOMParser().parseFromString(html, 'text/html'));
+    if (served.size === 0) return false;
+    // Different iff the server advertises an entry this document never
+    // loaded. Set-difference in that direction only: an entry we loaded but
+    // the server no longer lists is the same signal, and is caught by the
+    // same test, because the sets are the same size in practice.
+    if ([...served].every((path) => loaded.has(path))) return false;
   } catch {
     return false; // offline, or the origin is unreachable
   }
 
-  // There is no worker to take control and no `controllerchange` coming —
-  // this IS the whole detection, so it applies the update itself.
+  // Nothing else is coming: there may be no worker at all, and where there is
+  // one it has just told us it sees no change. This IS the detection, so it
+  // applies the update itself.
   applyUpdate();
   return true;
 }

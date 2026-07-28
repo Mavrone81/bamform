@@ -1,32 +1,45 @@
 /// <reference lib="webworker" />
 export {};
 declare const self: ServiceWorkerGlobalScope;
+declare const __BAMFORM_BUILD_ID__: string;
 
 /**
- * BamForm service worker (PR-068 / O-12).
+ * BamForm service worker (PR-068 / O-12 / slice 22-SELFUPDATE).
  *
- * `APP_VERSION` is a build-time literal (Vite replaces `import.meta.env.*`
- * at bundle time — see vite.sw.config.ts) sourced from `VITE_APP_VERSION`,
- * which web/Dockerfile sets to the image's build SHA. Every deploy therefore
- * produces a byte-different `dist/sw.js`, and web/nginx.conf serves `/sw.js`
- * with `Cache-Control: no-cache` — the browser always re-fetches and
- * byte-compares it, so a new deploy is detected promptly rather than a
- * stale worker being served indefinitely from HTTP cache.
+ * ## The version, and why it is not `VITE_APP_VERSION` (review S-1)
  *
- * Strategy: app-shell (same-origin GET, non-API) cached
- * stale-while-revalidate under a version-named cache; every other cache
- * from a previous version is deleted on activate, and this worker claims
- * clients immediately so a technician who reconnects mid-session is not
- * left running JS built against an API shape a newer deploy has already
- * changed (this is the specific failure PR-068 exists to prevent).
+ * This file's cache name used to be `bamform-shell-${VITE_APP_VERSION}`, and
+ * the doc here claimed "every deploy therefore produces a byte-different
+ * `dist/sw.js`". That was false on the deployment it mattered on.
+ * `docker-compose.yml` maps `VITE_APP_VERSION: ${IMAGE_TAG:-local}`,
+ * `.env.example` sets `IMAGE_TAG=local`, and the droplet's deploy script
+ * sources that `.env` and builds — so every deploy stamped the same constant.
+ * Measured: two builds from genuinely different source produced a
+ * byte-identical `sw.js` (`fe6d1732…` both times), which meant
+ * `registration.update()` correctly reported "no change" on every trigger
+ * forever, and a device could never leave an old build.
  *
- * `/api/**` requests are never intercepted — those go straight to the
- * network so the outbox/sync machinery's own online/offline handling
- * (offline/sync-engine.ts) is the single source of truth for connectivity,
- * not a second, competing cache layer.
+ * `__BAMFORM_BUILD_ID__` is injected by vite.sw.config.ts from the content
+ * hashes of the assets the app build just emitted. It changes if and only if
+ * the app changed — no environment variable, no deploy script and no CI
+ * setting can pin it by accident. `scripts/ci/assert-sw-changes-per-build.sh`
+ * fails the build if that ever stops being true.
+ *
+ * ## Strategy
+ *
+ * - Navigations (the app shell document): **network-first**, cache as
+ *   fallback. See the fetch handler for why this is not stale-while-
+ *   revalidate any more.
+ * - Hashed assets and everything else same-origin: stale-while-revalidate
+ *   under a version-named cache, which is correct because those filenames are
+ *   content-addressed — a given URL's bytes never change.
+ * - Every cache from a previous version is deleted on activate, and this
+ *   worker claims clients immediately.
+ * - `/api/**` is never intercepted: the outbox/sync machinery's own
+ *   online/offline handling (offline/sync-engine.ts) is the single source of
+ *   truth for connectivity, not a second, competing cache layer.
  */
-const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? 'dev';
-const CACHE_NAME = `bamform-shell-${APP_VERSION}`;
+const CACHE_NAME = `bamform-shell-${__BAMFORM_BUILD_ID__}`;
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -71,25 +84,65 @@ function isApiRequest(url: URL): boolean {
 }
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin || isApiRequest(url)) {
+  const request = event.request;
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin || isApiRequest(url)) {
     return; // network as normal — including all offline-outbox traffic
   }
+
+  // A caller that explicitly asked to bypass HTTP caches means it, and this
+  // cache is no exception. `update.ts`'s worker-free detector fetches
+  // `index.html` with `cache: 'no-store'` precisely to learn what the SERVER
+  // is serving; answering it from this cache would make it compare the app
+  // against itself and never report a deploy.
+  if (request.cache === 'no-store' || request.cache === 'reload') {
+    return;
+  }
+
+  const isNavigation = request.mode === 'navigate';
 
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
-      const cached = await cache.match(event.request);
-      const networkFetch = fetch(event.request)
+
+      if (isNavigation) {
+        // NETWORK-FIRST for the document (review S-2).
+        //
+        // This used to be stale-while-revalidate like everything else, and
+        // that was a measured cause of the owner's stranding, not a
+        // theoretical one. `index.html` is the ONE served file whose bytes
+        // change without its URL changing, and returning the cached copy
+        // first meant a relaunch rendered the PREVIOUS deploy's document —
+        // which names the previous deploy's hashed bundles — and only
+        // refreshed the cache for next time. The technician who was told to
+        // "close it completely and reopen" therefore got the old build back
+        // on the first try, and the new one only on the second: exactly
+        // "submitted, refused, redid the checklist, refused again".
+        //
+        // nginx serves it `no-cache` (so this costs a revalidation, not a
+        // download) and the cached copy is still returned whenever the
+        // network cannot answer — which is what keeps the app usable
+        // offline.
+        try {
+          const fresh = await fetch(request);
+          if (fresh.ok) void cache.put(request, fresh.clone());
+          return fresh;
+        } catch {
+          return (await cache.match(request)) ?? Response.error();
+        }
+      }
+
+      // Content-addressed assets: a given URL's bytes never change, so
+      // serving the cached copy instantly is both safe and what makes the
+      // app usable offline after one prior online visit.
+      const cached = await cache.match(request);
+      const networkFetch = fetch(request)
         .then((response) => {
-          if (response.ok) void cache.put(event.request, response.clone());
+          if (response.ok) void cache.put(request, response.clone());
           return response;
         })
         .catch(() => undefined);
 
-      // Stale-while-revalidate: serve the cached shell instantly if we have
-      // one (this is what makes the app usable offline after at least one
-      // prior online visit), refresh it in the background either way.
       return cached ?? (await networkFetch) ?? Response.error();
     })(),
   );

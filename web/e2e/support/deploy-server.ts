@@ -1,6 +1,9 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { APIRequestContext } from '@playwright/test';
+// @ts-expect-error -- plain .mjs build helper, shared with vite.sw.config.ts so
+// the harness versions its second generation the way the real build does.
+import { fingerprintAssets } from '../../build/asset-fingerprint.mjs';
 
 /**
  * A real HTTP origin whose contents can be swapped mid-test — i.e. a deploy.
@@ -22,22 +25,48 @@ import type { APIRequestContext } from '@playwright/test';
  * ## What makes generation B a genuine deploy
  *
  * A real deploy changes three things at once, and this changes all three:
- *  - `sw.js` differs BYTE-WISE (its versioned cache name changes), which is
- *    the only thing that makes the browser treat it as a new worker at all;
  *  - `index.html` points at differently-named asset files;
  *  - the JavaScript itself is different, which is asserted directly rather
  *    than inferred — build B's bundle sets `window.__E2E_BUILD_JS = 'B'`, so
  *    a test that says "the client is running build B" is reporting that new
- *    code executed, not merely that a new file was requested.
+ *    code executed, not merely that a new file was requested;
+ *  - `sw.js` differs byte-wise, **because its version is recomputed from
+ *    generation B's asset filenames using the same function the real build
+ *    uses** (`web/build/asset-fingerprint.mjs`).
+ *
+ * ## Why that last point is written this way (review finding S-5)
+ *
+ * This harness used to manufacture the worker difference by string
+ * substitution — `swJs.split('bamform-shell-').join('bamform-shell-gen-b-')`
+ * — under a comment asserting that a new `VITE_APP_VERSION` is "what
+ * web/Dockerfile produces on every deploy". That premise was false in
+ * production (`VITE_APP_VERSION` is pinned to `local` there), and because the
+ * harness supplied the premise itself, this test **could not fail for the
+ * reason production was broken**. A genuinely discriminating, 20/20-stable
+ * E2E therefore sat green over a fix that did nothing on the live server.
+ *
+ * Deriving the worker's version the way the build derives it means the test
+ * now breaks if that derivation stops depending on the build output.
+ * `scripts/ci/assert-sw-changes-per-build.sh` covers the same property
+ * against two real `vite build` runs, which is the check that would have
+ * caught S-1 outright.
  *
  * Build A's asset paths keep resolving after the swap. That is the harsher
  * choice on purpose: if the client wrongly stayed on the old `index.html` it
  * would still render happily, and the test would have to catch it by
  * observing the version rather than by noticing a crash.
  */
+/**
+ * 'B-stale-worker' is generation B served with generation A's `sw.js` — the
+ * production shape from review S-1, where `VITE_APP_VERSION` was pinned so
+ * every deploy's worker was byte-identical and `registration.update()`
+ * correctly reported "no change" forever.
+ */
+export type Generation = 'A' | 'B' | 'B-stale-worker';
+
 export class DeployServer {
   private files = new Map<string, { body: Buffer; type: string }>();
-  private current: 'A' | 'B' = 'A';
+  private current: Generation = 'A';
   private server: http.Server;
   private origin = '';
 
@@ -87,11 +116,29 @@ export class DeployServer {
       `${deploy.read(jsPath)}\n;window.__E2E_BUILD_JS='B';`,
       'application/javascript; charset=utf-8',
     );
-    // A byte-different worker with a different versioned cache name — what
-    // `web/Dockerfile` produces from a new `VITE_APP_VERSION` on every deploy.
+    // Generation B's worker, versioned the way the REAL BUILD versions it:
+    // by fingerprinting the emitted asset filenames. See the class doc (S-5)
+    // for why this must not be a hand-made string substitution. If `sw.ts`
+    // ever stops deriving its cache name from the build output, the token
+    // below stops appearing and this throws rather than silently fabricating
+    // a difference production would not have.
+    const assetsA = assetPaths.map(basename);
+    const assetsB = assetPaths.map((p) => basename(p === jsPath ? bJsPath : p));
+    const fingerprintA = fingerprintAssets(assetsA) as string;
+    const fingerprintB = fingerprintAssets(assetsB) as string;
+    if (fingerprintA === fingerprintB) {
+      throw new Error('deploy harness: generations A and B fingerprinted identically');
+    }
+    if (!swJs.includes(fingerprintA)) {
+      throw new Error(
+        'deploy harness: the built sw.js does not carry the asset fingerprint ' +
+          `${fingerprintA}. The service worker is no longer versioned by build output, which ` +
+          'is exactly the production failure (review S-1) this harness must be able to expose.',
+      );
+    }
     deploy.put(
       '/b/sw.js',
-      swJs.split('bamform-shell-').join('bamform-shell-gen-b-'),
+      swJs.split(fingerprintA).join(fingerprintB),
       'application/javascript; charset=utf-8',
     );
 
@@ -106,7 +153,7 @@ export class DeployServer {
   }
 
   /** The deploy. Every subsequent request is answered from this generation. */
-  deploy(generation: 'A' | 'B'): void {
+  deploy(generation: Generation): void {
     this.current = generation;
   }
 
@@ -126,7 +173,13 @@ export class DeployServer {
 
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {
     const path = new URL(req.url ?? '/', 'http://x').pathname;
-    const prefix = this.current === 'B' ? '/b' : '';
+    // 'B-stale-worker' reproduces PRODUCTION as it actually behaved (review
+    // S-1): a real deploy — new index.html, new hashed bundle — shipped with
+    // a BYTE-IDENTICAL /sw.js, because VITE_APP_VERSION was pinned to a
+    // constant. The service-worker comparison is blind to that deploy by
+    // construction, so a client can only escape it via the asset detector.
+    const prefix = this.current === 'A' ? '' : '/b';
+    const workerPrefix = this.current === 'B' ? '/b' : '';
 
     // The two files a deploy replaces are looked up under the generation
     // prefix; hashed assets are content-addressed and live at one path each.
@@ -136,7 +189,7 @@ export class DeployServer {
       // SPA fallback, exactly as `try_files $uri $uri/ /index.html` does.
       (path.startsWith('/assets/') ? undefined : this.files.get(`${prefix}/index.html`));
 
-    if (path === '/sw.js') file = this.files.get(`${prefix}/sw.js`);
+    if (path === '/sw.js') file = this.files.get(`${workerPrefix}/sw.js`);
 
     if (!file) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -166,6 +219,10 @@ export class DeployServer {
 /** Marks which generation an `index.html` belongs to, readable from the DOM. */
 function stamp(html: string, generation: 'A' | 'B'): string {
   return html.replace('<title>', `<meta name="e2e-build" content="${generation}" /><title>`);
+}
+
+function basename(path: string): string {
+  return path.split('/').pop() ?? path;
 }
 
 function mime(path: string): string {
