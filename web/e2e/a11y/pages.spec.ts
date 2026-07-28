@@ -33,6 +33,28 @@ test('A-01: RecordCapture has zero axe violations', async ({ signedInPage: page 
   await expectNoViolations(page);
 });
 
+/**
+ * Slice 18-WORKFLOW §1 — the performer's signature pad is a NEW interactive
+ * surface on the capture screen, and it is the one every technician now has
+ * to use on every submission. Swept open, at all three widths.
+ */
+test('A-01: RecordCapture with the performer signature pad open has zero axe violations', async ({
+  signedInPage: page,
+}) => {
+  await page.getByText('PM-2026-000431').click();
+  await expect(page.getByRole('heading', { name: 'PM-2026-000431' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign and submit' }).click();
+  await expect(page.getByTestId('performer-signature')).toBeVisible();
+  await expectNoViolations(page);
+});
+
+/** Slice 18-WORKFLOW §2 — the "Raise a job" screen (UR-028). */
+test('A-01: Raise a job has zero axe violations', async ({ signedInPage: page }) => {
+  await page.goto('/jobs/raise');
+  await expect(page.getByRole('heading', { name: 'Raise a job' })).toBeVisible();
+  await expectNoViolations(page);
+});
+
 /** A-02: keyboard-only completion of a full record. */
 test('A-02: a full item can be recorded using only the keyboard', async ({
   signedInPage: page,

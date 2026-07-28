@@ -2,6 +2,9 @@ import { z } from 'zod';
 import {
   assetUpdateSchema,
   assignJobRequestSchema,
+  complianceReportRowSchema,
+  createAdhocJobRequestSchema,
+  jobSummarySchema,
   listRecordsQuerySchema,
   mfaChallengeResponseSchema,
   mfaEnrolConfirmRequestSchema,
@@ -11,6 +14,8 @@ import {
   mfaRecoveryRequestSchema,
   mfaVerifyRequestSchema,
   passwordChangeRequestSchema,
+  roleCodeSchema,
+  submitJobRequestSchema,
   userAreaScopeSetSchema,
 } from '@bamform/shared';
 import { enumerateRoutes } from './route-inventory';
@@ -503,5 +508,150 @@ describe('test:contract — slice 17 archive filters match their Zod DTO exactly
       return (p.$ref ?? '').split('/').pop()!.toLowerCase();
     });
     expect([...params].sort()).toEqual([...expectedFilterKeys, 'cursor', 'limit'].sort());
+  });
+});
+
+/**
+ * Slice 18-WORKFLOW — the two NEW request DTOs get the same mechanical
+ * openapi-vs-Zod check the 13-MFA and 15-SYSWIRE schemas get: keys AND
+ * required-ness, both directions, derived from the schema the server
+ * actually validates against. This project has shipped contract lies that
+ * a structural-only check could not catch (slice 7, two of them); this is
+ * how the new fields avoid being the third.
+ */
+describe('test:contract — slice 18-WORKFLOW schemas match their Zod DTOs exactly', () => {
+  function zodShape(schema: z.ZodObject<z.ZodRawShape>): { keys: string[]; required: string[] } {
+    const shape = schema.shape as Record<string, z.ZodTypeAny>;
+    const keys = Object.keys(shape);
+    const required = keys.filter((key) => !shape[key].safeParse(undefined).success);
+    return { keys: keys.sort(), required: required.sort() };
+  }
+
+  const CASES: Array<{ schemaName: string; dto: z.ZodObject<z.ZodRawShape> }> = [
+    { schemaName: 'SubmitJobRequest', dto: submitJobRequestSchema },
+    { schemaName: 'CreateAdhocJobRequest', dto: createAdhocJobRequestSchema },
+  ];
+
+  it.each(CASES)(
+    'openapi $schemaName documents the same keys as its Zod DTO',
+    ({ schemaName, dto }) => {
+      const schema = getSchema(schemaName);
+      expect(Object.keys(schema.properties as object).sort()).toEqual(zodShape(dto).keys);
+    },
+  );
+
+  it.each(CASES)(
+    'openapi $schemaName marks the same fields required as its Zod DTO',
+    ({ schemaName, dto }) => {
+      const schema = getSchema(schemaName) as { required?: string[] };
+      expect([...(schema.required ?? [])].sort()).toEqual(zodShape(dto).required);
+    },
+  );
+
+  it('POST /jobs/{jobId}/submit documents its request body as REQUIRED — the signature is mandatory', () => {
+    const submit = loadOpenapiDocument().paths['/jobs/{jobId}/submit'].post;
+    expect(submit.requestBody.required).toBe(true);
+    expect(submit.requestBody.content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/SubmitJobRequest',
+    );
+  });
+
+  it('POST /jobs/adhoc is documented, implemented, and NOT parked in the future-work allowlist', () => {
+    const documented = listOpenapiOperations().map((op) => `${op.method} ${op.path}`);
+    expect(documented).toContain('POST /jobs/adhoc');
+    const allowlisted = FUTURE_SLICE_OPENAPI_PATHS.map((gap) => `${gap.method} ${gap.path}`);
+    expect(allowlisted).not.toContain('POST /jobs/adhoc');
+    const implemented = enumerateRoutes().map((r) => `${r.method} ${r.openapiPath}`);
+    expect(implemented).toContain('POST /api/v1/jobs/adhoc');
+  });
+
+  /**
+   * Review finding X-4 — the two additive response fields the fix pass adds,
+   * pinned the same mechanical way as the request DTOs.
+   */
+  it('openapi ComplianceReportRow documents adhocExcludedCount, and marks it required exactly as the Zod DTO does', () => {
+    const schema = getSchema('ComplianceReportRow') as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+    const shape = complianceReportRowSchema.shape as Record<string, z.ZodTypeAny>;
+    const keys = Object.keys(shape);
+    expect(Object.keys(schema.properties).sort()).toEqual([...keys].sort());
+    const required = keys.filter((key) => !shape[key].safeParse(undefined).success).sort();
+    expect([...(schema.required ?? [])].sort()).toEqual(required);
+    expect(schema.properties).toHaveProperty('adhocExcludedCount');
+  });
+
+  it('openapi JobSummary documents isAdhoc as an optional field, matching jobSummarySchema', () => {
+    const schema = getSchema('JobSummary') as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+    const shape = jobSummarySchema.shape as Record<string, z.ZodTypeAny>;
+    expect(Object.keys(schema.properties).sort()).toEqual(Object.keys(shape).sort());
+    expect(schema.properties).toHaveProperty('isAdhoc');
+    // Optional in Zod (older clients never sent or expected it) => absent
+    // from openapi `required`.
+    expect(shape.isAdhoc.safeParse(undefined).success).toBe(true);
+    expect(schema.required ?? []).not.toContain('isAdhoc');
+  });
+
+  it('openapi RoleCode enumerates exactly the Zod roleCodeSchema values — PLANNER added, nothing removed', () => {
+    const schema = getSchema('RoleCode') as { enum: string[] };
+    expect([...schema.enum].sort()).toEqual([...roleCodeSchema.options].sort());
+    // Additive, explicitly: every pre-slice-18 role is still there.
+    for (const code of [
+      'MAINTAINER',
+      'TEAM_LEADER',
+      'ENGINEER',
+      'DOC_CONTROLLER',
+      'ADMIN',
+      'AUDITOR',
+    ]) {
+      expect(schema.enum).toContain(code);
+    }
+    expect(schema.enum).toContain('PLANNER');
+  });
+
+  /**
+   * The `@Roles()` metadata is the deny-by-default gate itself, so "ADDITIVE"
+   * is asserted against the router rather than against a comment: every role
+   * that could reach these endpoints before slice 18 must still be able to.
+   */
+  it('slice 18 role changes are ADDITIVE on every route it touched', () => {
+    const byKey = new Map(
+      enumerateRoutes().map((r) => [`${r.method} ${r.openapiPath}`, r.roles ?? []]),
+    );
+    const EXPECTED: Array<{ key: string; before: string[]; added: string[] }> = [
+      {
+        key: 'PUT /api/v1/assets/{assetId}/schedule',
+        before: ['TEAM_LEADER', 'ENGINEER', 'ADMIN'],
+        added: ['PLANNER'],
+      },
+      {
+        key: 'POST /api/v1/jobs/{jobId}/assign',
+        before: ['TEAM_LEADER', 'ENGINEER', 'ADMIN'],
+        added: ['PLANNER'],
+      },
+    ];
+    for (const { key, before, added } of EXPECTED) {
+      const now = byKey.get(key);
+      expect(now).toBeDefined();
+      for (const role of before) expect(now).toContain(role);
+      for (const role of added) expect(now).toContain(role);
+    }
+    // Submit's role gate is deliberately UNCHANGED by this slice.
+    expect([...(byKey.get('POST /api/v1/jobs/{jobId}/submit') ?? [])].sort()).toEqual(
+      ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'].sort(),
+    );
+    // GET schedule stays unannotated (no `@Roles()` metadata at all) —
+    // annotating it with a role list would REMOVE access from MAINTAINER and
+    // AUDITOR, which "add, never remove" forbids.
+    expect(byKey.get('GET /api/v1/assets/{assetId}/schedule')).toEqual([]);
+    expect(
+      enumerateRoutes().find(
+        (r) => `${r.method} ${r.openapiPath}` === 'GET /api/v1/assets/{assetId}/schedule',
+      )?.roles,
+    ).toBeUndefined();
   });
 });

@@ -41,7 +41,7 @@ test('O-08: a 409 on one mutation is retained, the rest of the batch applies, an
   // not) — since slice 16 the button says WHY (SYS-23 honesty) and the
   // recovery panel offers the way out (o20-conflict-recovery.spec.ts).
   const submitButton = page.getByRole('button', {
-    name: /Submit|Sending|Resolve the sync problem/,
+    name: /Sign and submit|Sending|Resolve the sync problem/,
   });
   await expect(submitButton).toBeDisabled();
 });

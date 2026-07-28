@@ -1319,6 +1319,55 @@ paths:
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /jobs/adhoc:
+    post:
+      tags: [Jobs]
+      operationId: createAdhocJob
+      summary: Raise a job against an asset outside the maintenance plan
+      description: |
+        UR-028/PR-058. Roles: PLANNER, TEAM_LEADER, ENGINEER, ADMIN.
+        Area-scoped (PR-API-10) - a caller with `user_area_scope` rows may
+        only raise work on assets inside them.
+
+        The asset type's CURRENT template revision is FROZEN onto the job
+        exactly as a scheduler-generated job's is (DP-3/PR-049), the same
+        `PM-{year}-{sequence}` number is drawn, and the asset type's approval
+        route is attached - so an ad-hoc job travels the identical
+        record/verify/archive path.
+
+        It does NOT touch the plan. An ad-hoc job is created with an EMPTY
+        `frequencyScope`, which is what makes it structurally incapable of
+        advancing `schedule_rule.next_due_on` on completion or of being
+        credited as a prior completion when a planned job is voided; and it is
+        excluded from the schedule-period uniqueness key, so it neither
+        blocks generation of the planned PM for that period nor collides with
+        a second call-out on the same machine the same day.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAdhocJobRequest' }
+      responses:
+        '201':
+          description: Raised
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '403':
+          description: '`/errors/forbidden` - role not permitted; `/errors/out-of-scope` - the asset is outside the caller''s areas'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: |
+            `/errors/validation-failed` - the asset is inactive, its form
+            template has no CURRENT revision, or the assignee cannot work the
+            job; or the mandatory `reason` is shorter than 10 characters.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /jobs/{jobId}/attachments:
     parameters:
       - $ref: '#/components/parameters/JobId'
@@ -1412,11 +1461,27 @@ paths:
     post:
       tags: [Jobs]
       operationId: submitJob
-      summary: Submit a completed record for verification
+      summary: Submit a completed record for verification, signed by the performer
       description: |
         Atomic. Rejected if any mandatory item has no result. Never sent as part
         of an outbox batch - all preceding mutations for the job must be
         acknowledged first.
+
+        Slice 18-WORKFLOW: carries the PERFORMER'S DRAWN SIGNATURE
+        (`drawnSignature`, REQUIRED). The plant's process is "completed work -
+        team member will sign and submit to team lead for checks"; the paper
+        forms carry three signatures and the system previously captured two.
+        Produces a stage-0 `approval_step` with `action = SUBMITTED` carrying
+        the encrypted drawn signature PLUS a content-bound Ed25519 signature
+        over the canonical record (ADR-010, the same mechanism
+        `POST /jobs/{jobId}/verify` uses), so the assertion "I did this work"
+        commits to the record that was submitted and is verified by
+        `GET /records/{recordId}/integrity`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitJobRequest' }
       responses:
         '200':
           description: Submitted and routed to the verification queue
@@ -2611,8 +2676,12 @@ components:
 
     RoleCode:
       type: string
-      description: The closed set `role.code` holds — seeded by migration, not created through the API (UR-073).
-      enum: [MAINTAINER, TEAM_LEADER, ENGINEER, DOC_CONTROLLER, ADMIN, AUDITOR]
+      description: |
+        The closed set `role.code` holds — seeded by migration, not created
+        through the API (UR-073). `PLANNER` is the slice-18-WORKFLOW addition
+        (the maintenance planner who plans the PM schedule and raises work);
+        it is ADDITIVE — no member was removed or renamed.
+      enum: [MAINTAINER, PLANNER, TEAM_LEADER, ENGINEER, DOC_CONTROLLER, ADMIN, AUDITOR]
 
     Role:
       type: object
@@ -2920,6 +2989,15 @@ components:
         status: { $ref: '#/components/schemas/JobStatus' }
         assignedTo: { type: [string, 'null'], format: uuid }
         assignedToName: { type: [string, 'null'] }
+        isAdhoc:
+          type: boolean
+          description: |
+            UR-028 - raised OFF-PLAN rather than generated from the
+            maintenance schedule (slice 18-WORKFLOW). An ad-hoc job satisfies
+            no schedule period and is EXCLUDED from UR-067 plan compliance;
+            `/reports/overdue` and `/reports/pending` deliberately keep ad-hoc
+            rows (an overdue breakdown is real outstanding work), so this flag
+            is what stops those figures being ambiguous.
 
     Job:
       allOf:
@@ -3073,6 +3151,64 @@ components:
           type: string
           format: uuid
           description: The user this job is (re)assigned to.
+
+    SubmitJobRequest:
+      # Mirrors shared/src/job.ts `submitJobRequestSchema` exactly (contract
+      # test pins keys + required-ness both directions).
+      type: object
+      required: [drawnSignature]
+      properties:
+        drawnSignature:
+          type: string
+          description: |
+            The PERFORMER's signature (slice 18-WORKFLOW). Base64 PNG
+            data-URL (`data:image/png;base64,...`, or bare base64) captured
+            by the SAME on-system signature pad the verifier stages use -
+            stylus, finger and mouse through one pointer-event path.
+            MANDATORY: 422 (`/errors/validation-failed`) if absent, 422
+            (`/errors/attachment-rejected`) if it is not a valid PNG
+            (magic-byte check, S-30-style). Stored ENCRYPTED on
+            `approval_step.drawn_signature_ct` (field-encryption, PR-106),
+            never returned by any read path and never written to a log or an
+            audit payload.
+          examples: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...']
+
+    CreateAdhocJobRequest:
+      # Mirrors shared/src/job.ts `createAdhocJobRequestSchema` exactly
+      # (contract test pins keys + required-ness both directions).
+      type: object
+      required: [assetId, frequency, reason]
+      properties:
+        assetId:
+          type: string
+          format: uuid
+          description: The machine the work is being raised against.
+        frequency:
+          $ref: '#/components/schemas/Frequency'
+          description: |
+            Which depth of the frozen checklist is being performed. Labels
+            the record; it does NOT make the job count against the plan (the
+            job is created with an empty `frequencyScope`).
+        reason:
+          type: string
+          minLength: 10
+          description: |
+            Why this work is being raised off-plan. MANDATORY and audited
+            (UR-028), and enforced by the database too
+            (`job_adhoc_reason_length_chk`), the same way void (INV-12) and
+            return (INV-13) reasons are.
+        dueOn:
+          type: string
+          format: date
+          description: '`YYYY-MM-DD`. Defaults to today - the work is being raised now.'
+        assigneeId:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            Optional. When supplied the job is born ASSIGNED to this user,
+            who must satisfy the same rules `POST /jobs/{jobId}/assign`
+            applies (active, holds a result-recording role, can reach the
+            job's area) - otherwise 422.
 
     VerifyJobRequest:
       type: object
@@ -3320,7 +3456,7 @@ components:
     ComplianceReportRow:
       type: object
       required:
-        [areaId, areaCode, dueCount, completedOnTimeCount, completedLateCount, notCompletedCount, compliancePercent]
+        [areaId, areaCode, dueCount, completedOnTimeCount, completedLateCount, notCompletedCount, adhocExcludedCount, compliancePercent]
       properties:
         areaId: { type: [string, 'null'], format: uuid }
         areaCode: { type: [string, 'null'] }
@@ -3328,6 +3464,14 @@ components:
         completedOnTimeCount: { type: integer }
         completedLateCount: { type: integer }
         notCompletedCount: { type: integer }
+        adhocExcludedCount:
+          type: integer
+          description: |
+            Slice 18-WORKFLOW. Ad-hoc jobs (UR-028) due in the window that were
+            EXCLUDED from every bucket above - UR-067 measures the maintenance
+            PLAN, and off-plan work was never due under it. Reported so the
+            exclusion is visible and the figure reconciles against a raw job
+            count (AC-18).
         compliancePercent: { type: number }
 
     ComplianceReport:

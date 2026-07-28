@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from '../router';
 import { getCurrentUser, onCurrentUserChange, logout } from '../auth';
 import { rolesGetQueueTab } from '../components/NavShell';
+import { rolesCanRaiseJob } from '../lib/permissions';
 import { getServices, getSyncUserId } from '../state/services';
 import { pendingCountForUser } from '../offline/outbox';
 
@@ -51,9 +52,14 @@ export function Menu() {
 
   const hasQueueTab = rolesGetQueueTab(user?.roles);
   const isAdmin = user?.roles.includes('ADMIN') ?? false;
+  const canRaiseJob = rolesCanRaiseJob(user?.roles);
 
   const items: Array<{ label: string; to: string }> = [
     ...(hasQueueTab ? [] : [{ label: 'Verifier queue', to: '/queue' }]),
+    // Slice 18-WORKFLOW §2 — raising work off-plan. Presentation only: the
+    // URL stays reachable for anyone and the server's `@Roles` gate is what
+    // actually refuses (non-negotiable #6).
+    ...(canRaiseJob ? [{ label: 'Raise a job', to: '/jobs/raise' }] : []),
     // `from=menu` lets the Delegations screen point its back link here
     // rather than at the queue (review D-4) — presentation only, the router
     // still matches on pathname alone.

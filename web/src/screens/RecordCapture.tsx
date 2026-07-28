@@ -14,6 +14,7 @@ import { onSynced, notifySynced } from '../offline/sync-events';
 import type { CachedJob } from '../offline/db';
 import { uuidv7 } from '../lib/uuidv7';
 import { ItemStatusControl } from '../components/ItemStatusControl';
+import { SignaturePad } from '../components/SignaturePad';
 import { SyncStatusChip } from '../components/SyncStatusChip';
 import { useRouter } from '../router';
 import type { components } from '../api/generated/openapi-types';
@@ -70,6 +71,9 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   const [quotaBanner, setQuotaBanner] = useState(false);
   const [submitBanner, setSubmitBanner] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Slice 18-WORKFLOW §1 — the signature pad is open, awaiting the
+   * performer's signature. Submit does not happen until they sign. */
+  const [signing, setSigning] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const [recoveryBanner, setRecoveryBanner] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -292,14 +296,22 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     }
   }
 
-  async function handleSubmit() {
+  /**
+   * Slice 18-WORKFLOW §1 — the PERFORMER signs before the record leaves the
+   * device. `drawnSignature` comes from the SAME `SignaturePad` the verifier
+   * stages use (stylus, finger and mouse through one pointer-event path,
+   * blank-rejected client-side and magic-byte re-validated server-side); the
+   * pad is a `<canvas>` and works with no connection.
+   */
+  async function handleSubmit(drawnSignature: string) {
+    setSigning(false);
     setSubmitting(true);
     setSubmitBanner(null);
     try {
       const { db, transport } = getServices();
       const userId = getSyncUserId();
       if (!userId) return;
-      const result = await submitJob(db, transport, userId, jobId);
+      const result = await submitJob(db, transport, userId, jobId, drawnSignature);
       if (result.ok) {
         navigate('/jobs');
         return;
@@ -715,6 +727,25 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         )}
       </section>
 
+      {signing && (
+        <section
+          className="dialog"
+          aria-labelledby="perform-sign-heading"
+          data-testid="performer-signature"
+        >
+          <h2 id="perform-sign-heading">Sign to submit</h2>
+          <p>
+            By signing you confirm you carried out this maintenance and that the results recorded
+            above are yours. Draw your signature below with a stylus, finger or mouse.
+          </p>
+          <SignaturePad
+            disabled={submitting}
+            onCancel={() => setSigning(false)}
+            onDone={(pngDataUrl) => void handleSubmit(pngDataUrl)}
+          />
+        </section>
+      )}
+
       <div className="action-bar">
         {photosAwaitingAction && !uploadsInFlight && (
           <p className="field-hint" style={{ marginBottom: 'var(--space-2)' }}>
@@ -725,8 +756,11 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         <button
           type="button"
           className="btn-primary btn-block btn-capture"
-          disabled={!canSubmit || submitting}
-          onClick={() => void handleSubmit()}
+          disabled={!canSubmit || submitting || signing}
+          onClick={() => {
+            setSubmitBanner(null);
+            setSigning(true);
+          }}
         >
           {submitting
             ? 'Submitting…'
@@ -736,7 +770,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
                 ? 'Resolve the sync problem above to submit'
                 : counts.sendable > 0
                   ? `Sending ${counts.sendable} entr${counts.sendable === 1 ? 'y' : 'ies'}…`
-                  : 'Submit'}
+                  : 'Sign and submit'}
         </button>
       </div>
 

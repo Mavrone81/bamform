@@ -229,11 +229,24 @@ export type SubmitGuardError =
   | { ok: false; reason: 'server-rejected'; status: number; problem?: unknown };
 export type SubmitResult = { ok: true; status: number } | SubmitGuardError;
 
+/**
+ * Slice 18-WORKFLOW: `drawnSignature` (the PERFORMER's, a base64 PNG
+ * data-URL from `SignaturePad`) is REQUIRED and rides this one call. The pad
+ * itself works offline — it is a `<canvas>`, no network — and submit stays
+ * exactly what non-negotiable #2 makes it: a separate, atomic, never-batched
+ * request that refuses to run while any outbox row for the job remains. The
+ * signature is held in memory for the duration of the call only; it is never
+ * written to IndexedDB (an unsent record's signature would be a personal-data
+ * blob sitting unencrypted in browser storage) — which means a submission
+ * attempted offline is re-signed on the retry, by the same person, in front
+ * of the same record.
+ */
 export async function submitJob(
   db: BamFormDB,
   transport: SyncTransport,
   userId: string,
   jobId: string,
+  drawnSignature: string,
 ): Promise<SubmitResult> {
   const job = await db.jobs.get([userId, jobId]);
   if (job?.serverRemoved) {
@@ -260,7 +273,7 @@ export async function submitJob(
 
   let response: Awaited<ReturnType<SyncTransport['submitJob']>>;
   try {
-    response = await transport.submitJob(jobId, idempotencyKey);
+    response = await transport.submitJob(jobId, idempotencyKey, { drawnSignature });
   } catch {
     // SYS-14: a transport throw is NOT a rejection of the record — no
     // response reached us. Reset the visible state (the chip must not say

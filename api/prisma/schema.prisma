@@ -681,10 +681,14 @@ model Job {
 
   @@index([assetId, dueOn(sort: Desc)])
   // PR-052 idempotency key (I-INV-14) — since slice 17-VOID a PARTIAL unique
-  // index, `job_asset_frequency_scope_due_on_not_voided_key` ON (asset_id,
-  // frequency_scope, due_on) WHERE status <> 'voided': a VOIDED job never
-  // occupies its schedule period (SYS-19, owner decision 2026-07-27), so the
-  // scheduler can generate the replacement. Prisma's DSL cannot express
+  // index; since slice 18-WORKFLOW it is
+  // `job_asset_frequency_scope_due_on_scheduled_key` ON (asset_id,
+  // frequency_scope, due_on) WHERE status <> 'voided' AND is_adhoc = false.
+  // A VOIDED job never occupies its schedule period (SYS-19, owner decision
+  // 2026-07-27), so the scheduler can generate the replacement; and an
+  // AD-HOC job (UR-028) never occupies one at all — it is extra work, not
+  // the planned service, so it neither blocks generation nor collides with
+  // a second ad-hoc job raised the same day. Prisma's DSL cannot express
   // partial unique indexes (same as INV-01's one-current-revision index), so
   // it lives ONLY in raw SQL — see migrations 20260728000010 (create
   // partial) + 20260728000020 (drop the old full `@@unique`). Violations

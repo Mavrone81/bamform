@@ -115,6 +115,9 @@ describe('DBD §7 schema-enforced invariants', () => {
       'DOC_CONTROLLER',
       'ENGINEER',
       'MAINTAINER',
+      // Slice 18-WORKFLOW's additive seed (20260728020000) — the six
+      // original roles are all still here, which is the point.
+      'PLANNER',
       'TEAM_LEADER',
     ]);
   });

@@ -14,7 +14,7 @@
     "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.js --runInBand",
     "test:unit": "jest --config jest.unit.config.js",
     "test:contract": "jest --config jest.contract.config.js contract.spec.ts",
-    "test:route-coverage": "jest --config jest.contract.config.js route-coverage.spec.ts",
+    "test:route-coverage": "jest --config jest.contract.config.js \"route-(coverage|roles)\\.spec\\.ts\"",
     "test:scope-coverage": "jest --config jest.contract.config.js scope-coverage.spec.ts",
     "test:security": "jest --config jest.security.config.js --runInBand",
     "test:log-redaction": "jest --config jest.log-redaction.config.js"

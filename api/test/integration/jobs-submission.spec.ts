@@ -16,6 +16,7 @@ import {
 import { authHeader, mintAccessToken } from './helpers/test-auth';
 import { createTestApp } from './helpers/app';
 import { closeRedis, resetRedis } from './helpers/redis';
+import { realPngDataUrl } from './helpers/image-fixtures';
 
 /**
  * PR-045/UR-039/ADR-013 — the submission completeness gate. This is the
@@ -100,6 +101,7 @@ describe('Jobs — POST /jobs/{id}/submit (PR-045 completeness gate)', () => {
     const res = await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(422);
 
     expect(res.body).toMatchObject({ type: '/errors/incomplete-record' });
@@ -125,6 +127,7 @@ describe('Jobs — POST /jobs/{id}/submit (PR-045 completeness gate)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
   });
 
@@ -140,6 +143,7 @@ describe('Jobs — POST /jobs/{id}/submit (PR-045 completeness gate)', () => {
     const res = await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     expect(res.body.status).toBe('SUBMITTED');
@@ -171,6 +175,7 @@ describe('Jobs — POST /jobs/{id}/submit (PR-045 completeness gate)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
   });
 
@@ -179,6 +184,7 @@ describe('Jobs — POST /jobs/{id}/submit (PR-045 completeness gate)', () => {
     const res = await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(409);
     expect(res.body).toMatchObject({ type: '/errors/invalid-transition' });
   });
@@ -188,16 +194,18 @@ describe('Jobs — POST /jobs/{id}/submit (PR-045 completeness gate)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const res = await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(409);
     expect(res.body).toMatchObject({ type: '/errors/invalid-transition' });
   });
 
-  it('submit is idempotent when the client replays the same Idempotency-Key', async () => {
+  it('submit is idempotent when the client replays the same Idempotency-Key (with a re-drawn signature — the only replay a real client produces)', async () => {
     const { jobId, token } = await makeJobWithItems('in_progress', []);
     const key = randomUUID();
 
@@ -205,12 +213,18 @@ describe('Jobs — POST /jobs/{id}/submit (PR-045 completeness gate)', () => {
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
       .set('Idempotency-Key', key)
+      .send({ drawnSignature: realPngDataUrl(100) })
       .expect(200);
 
+    // Slice 18-WORKFLOW review, X-2: the signature is never persisted on the
+    // device, so a SYS-14 retry under the persisted key always carries
+    // freshly drawn bytes. Resending the identical fixture pinned a scenario
+    // the real client cannot produce.
     const second = await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
       .set('Idempotency-Key', key)
+      .send({ drawnSignature: realPngDataUrl(180) })
       .expect(200);
 
     expect(second.body).toEqual(first.body);

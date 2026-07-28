@@ -5,22 +5,26 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AccessTokenClaims } from '../auth/jwt/access-token.types';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { JOB_VIEW_ALL_ROLES } from '../jobs/job-access';
+import { ORG_REPORTING_ROLES } from '../jobs/job-access';
 import { ReportsService } from './reports.service';
 
 /**
  * PRD §9 report surface — `/reports/compliance|overdue|pending|measurements`.
- * Read-only. `@Roles(...JOB_VIEW_ALL_ROLES)` — the same broad-visibility set
- * `job-access.ts` already establishes for "see everything in area scope"
- * (TEAM_LEADER/ENGINEER/DOC_CONTROLLER/ADMIN/AUDITOR); these are
- * organisation-wide reports, not a per-user work list, so MAINTAINER
- * (own-jobs-only elsewhere) does not get a route here — mirrors
- * API_SPECIFICATION.md §4.1's "Export records" row, which draws the exact
- * same line.
+ * Read-only, organisation-wide aggregates rather than a per-user work list,
+ * so MAINTAINER (own-jobs-only elsewhere) does not get a route here — the
+ * same line API_SPECIFICATION.md §4.1's "Export records" row draws.
+ *
+ * Slice 18-WORKFLOW review, finding X-1 (Critical): this was
+ * `@Roles(...JOB_VIEW_ALL_ROLES)`, which meant adding PLANNER to that ACCESS
+ * PREDICATE silently handed a planning role the whole reports surface
+ * (measured: `GET /reports/compliance` 200 for PLANNER, 403 for MAINTAINER),
+ * contradicting the permission matrix slice 18 itself rewrote. It now uses
+ * `ORG_REPORTING_ROLES` — a list whose only job is annotating these bulk
+ * surfaces, so it cannot be widened as a side effect. See `job-access.ts`.
  */
 @Controller('reports')
 @UseGuards(RolesGuard)
-@Roles(...JOB_VIEW_ALL_ROLES)
+@Roles(...ORG_REPORTING_ROLES)
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 

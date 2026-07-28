@@ -99,7 +99,9 @@ describe('HttpSyncTransport', () => {
     setAccessToken('tok', 900);
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'SUBMITTED' }));
     const transport = new HttpSyncTransport();
-    const result = await transport.submitJob('job-1', 'idem-1');
+    const result = await transport.submitJob('job-1', 'idem-1', {
+      drawnSignature: 'data:image/png;base64,iVBORw0KGgo=',
+    });
     expect(result).toEqual({ status: 200, ok: true, body: { id: 'job-1', status: 'SUBMITTED' } });
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toContain('/jobs/job-1/submit');
@@ -111,7 +113,9 @@ describe('HttpSyncTransport', () => {
     const problem = { type: 'about:blank', title: 'incomplete-record', status: 422 };
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(problem, false, 422));
     const transport = new HttpSyncTransport();
-    const result = await transport.submitJob('job-1', 'idem-2');
+    const result = await transport.submitJob('job-1', 'idem-2', {
+      drawnSignature: 'data:image/png;base64,iVBORw0KGgo=',
+    });
     expect(result).toEqual({ status: 422, ok: false, problem });
   });
 
@@ -125,7 +129,9 @@ describe('HttpSyncTransport', () => {
       },
     } as unknown as Response);
     const transport = new HttpSyncTransport();
-    const result = await transport.submitJob('job-1', 'idem-3');
+    const result = await transport.submitJob('job-1', 'idem-3', {
+      drawnSignature: 'data:image/png;base64,iVBORw0KGgo=',
+    });
     expect(result).toEqual({ status: 500, ok: false, problem: undefined });
   });
 

@@ -151,6 +151,7 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
     await request(server)
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(users.maintainerToken))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     await request(server)
       .post(`/api/v1/jobs/${jobId}/verify`)
@@ -242,6 +243,7 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
     await request(server)
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(users.maintainerToken))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     await request(server)
       .post(`/api/v1/jobs/${jobId}/verify`)
@@ -390,11 +392,14 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
     expect(before.children.measurement_result.length).toBe(1);
     expect(before.children.part_used.length).toBe(1);
     expect(before.children.attachment.length).toBe(1);
-    expect(before.steps.length).toBe(2); // the two verification signatures (submit creates no approval_step)
-    // Both verify steps carry an encrypted drawn signature — the snapshot's
+    // Three signatures since slice 18-WORKFLOW: the PERFORMER's stage-0
+    // `submitted` step plus the two verification stages. (Before that slice
+    // submit created no approval_step at all.)
+    expect(before.steps.length).toBe(3);
+    // All three carry an encrypted drawn signature — the snapshot's
     // whole-row jsonb therefore includes drawn_signature_ct in the comparison.
     const drawnBefore = before.steps.filter((s) => s.row.drawn_signature_ct != null);
-    expect(drawnBefore.length).toBe(2);
+    expect(drawnBefore.length).toBe(3);
 
     // Sanity: the freshly archived record's signatures verify BEFORE void.
     for (const step of before.steps) {
@@ -515,7 +520,8 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
         run: () =>
           request(server)
             .post(`/api/v1/jobs/${jobId}/submit`)
-            .set(...authHeader(users.maintainerToken)),
+            .set(...authHeader(users.maintainerToken))
+            .send({ drawnSignature: realPngDataUrl() }),
       },
       {
         name: 'assign',

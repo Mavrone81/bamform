@@ -166,8 +166,13 @@ export class AssignmentService {
    * user cannot even open an out-of-scope job (`JobAccessService`). All three
    * are 422 validation-failed — a client defect in the chosen assignee, not
    * an authorisation failure of the CALLER (which would be 403).
+   *
+   * PUBLIC since slice 18-WORKFLOW: `AdhocJobService` accepts an optional
+   * assignee at creation time and must apply the IDENTICAL rule — a job
+   * raised off-plan and handed to someone who could never open it is the
+   * same dead end, and duplicating the check is how the two drift apart.
    */
-  private async assertAssignableUser(assigneeId: string, jobAreaId: string | null): Promise<void> {
+  async assertAssignableUser(assigneeId: string, jobAreaId: string | null): Promise<void> {
     const assignee = await this.prisma.appUser.findUnique({
       where: { id: assigneeId },
       include: { userRoles: { where: { active: true }, include: { role: true } } },

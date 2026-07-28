@@ -3,6 +3,7 @@ import { RouterProvider, useRouter, matchPath } from './router';
 import { SignIn } from './screens/SignIn';
 import { JobList } from './screens/JobList';
 import { RecordCapture } from './screens/RecordCapture';
+import { RaiseJob } from './screens/RaiseJob';
 import { VerifierQueue } from './screens/VerifierQueue';
 import { RecordReview } from './screens/RecordReview';
 import { Delegations } from './screens/Delegations';
@@ -138,6 +139,9 @@ function Screens() {
     if (matchPath('/admin/machines', path)) return <AdminMachines />;
     if (matchPath('/admin/areas', path)) return <AdminAreas />;
     if (matchPath('/menu', path)) return <Menu />;
+    // Slice 18-WORKFLOW §2 — must be matched BEFORE `/jobs/:id`, which would
+    // otherwise swallow `/jobs/raise` as a job id.
+    if (matchPath('/jobs/raise', path)) return <RaiseJob />;
     const jobParams = matchPath('/jobs/:id', path);
     if (jobParams) return <RecordCapture jobId={jobParams.id} />;
     return <JobList />;

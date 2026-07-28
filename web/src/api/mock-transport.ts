@@ -13,6 +13,8 @@ import type {
   DelegationsPage,
   CreateDelegationRequest,
   VerifyJobRequest,
+  SubmitJobRequest,
+  CreateAdhocJobRequest,
   JobActionResponse,
   DelegationActionResponse,
   Problem,
@@ -182,8 +184,28 @@ export class MockSyncTransport implements SyncTransport {
     return { results, syncToken: `mock-token-${this.idempotencyStore.size}` };
   }
 
-  async submitJob(jobId: string, idempotencyKey: string): Promise<SubmitJobResponse> {
+  /** Slice 18-WORKFLOW: the PERFORMER's signature rides this call and the
+   * server rejects a submission without one (422), so the fake enforces the
+   * same rule — a screen that forgets to capture it must fail HERE, in the
+   * unit/offline suites, not only against a real backend. */
+  async submitJob(
+    jobId: string,
+    idempotencyKey: string,
+    request: SubmitJobRequest,
+  ): Promise<SubmitJobResponse> {
     if (this.networkDown) throw new TransportError('mock: network down');
+    if (!request?.drawnSignature) {
+      return {
+        status: 422,
+        ok: false,
+        problem: {
+          type: '/errors/validation-failed',
+          title: 'Validation failed',
+          status: 422,
+          detail: 'drawnSignature is required (base64 PNG data-URL).',
+        } as Problem,
+      };
+    }
     const existing = this.submitIdempotencyStore.get(idempotencyKey);
     if (existing) return existing;
 
@@ -205,6 +227,26 @@ export class MockSyncTransport implements SyncTransport {
     const job = this.jobStore.get(jobId);
     if (!job) throw new TransportError(`mock: job ${jobId} not found`, undefined, 404);
     return job;
+  }
+
+  /** Slice 18-WORKFLOW — `POST /jobs/adhoc`. Online-only, like the real one. */
+  private adhocSeq = 0;
+  async createAdhocJob(request: CreateAdhocJobRequest): Promise<JobActionResponse> {
+    if (this.networkDown) throw new TransportError('mock: network down');
+    this.adhocSeq += 1;
+    const job: Job = {
+      id: `adhoc-job-${this.adhocSeq}`,
+      jobNumber: `PM-2026-${String(900000 + this.adhocSeq)}`,
+      assetId: request.assetId,
+      assetCode: 'MOCK-ASSET',
+      frequency: request.frequency,
+      frequencyScope: [],
+      dueOn: request.dueOn ?? new Date().toISOString().slice(0, 10),
+      status: request.assigneeId ? 'ASSIGNED' : 'SCHEDULED',
+      assignedTo: request.assigneeId ?? null,
+    };
+    this.jobStore.set(job.id, job);
+    return { status: 201, ok: true, body: job };
   }
 
   // ---- Slice 16 (D-2b): attachments, online-only ----

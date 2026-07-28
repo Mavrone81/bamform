@@ -22,13 +22,28 @@ import { AssetScheduleService } from './asset-schedule.service';
 export class AssetScheduleController {
   constructor(private readonly service: AssetScheduleService) {}
 
+  /**
+   * Deliberately carries NO `@Roles()`: reading an asset's schedule is open
+   * to every authenticated user (area-scoped inside the service), and it has
+   * been since slice 5. Slice 18-WORKFLOW's brief asks for PLANNER to be
+   * added to "schedule GET/PUT" — on GET that would be a REMOVAL, not an
+   * addition (an unannotated handler admits everyone; `@Roles('PLANNER',...)`
+   * would start refusing MAINTAINER and AUDITOR). The brief's own governing
+   * rule is "ADD, never remove", so GET is left exactly as it is: PLANNER can
+   * already read it, along with everyone else. See the report's role matrix.
+   */
   @Get()
   getSchedule(@Param('assetId') assetId: string, @CurrentUser() user: AccessTokenClaims) {
     return this.service.list(user.sub, assetId);
   }
 
+  /**
+   * UR-023/UR-025 — the manual next-due-date adjustment. Slice 18-WORKFLOW
+   * adds PLANNER: planning the PM schedule is what the role exists for.
+   * ADDITIVE — TEAM_LEADER/ENGINEER/ADMIN keep exactly the right they had.
+   */
   @Put()
-  @Roles('TEAM_LEADER', 'ENGINEER', 'ADMIN')
+  @Roles('PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN')
   adjustSchedule(
     @Param('assetId') assetId: string,
     @Body(new ZodValidationPipe(scheduleAdjustRequestSchema)) dto: ScheduleAdjustRequest,

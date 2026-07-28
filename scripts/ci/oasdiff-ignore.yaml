@@ -50,6 +50,26 @@
 #    discriminate on the `mfaRequired: true` literal
 #    (`shared/src/mfa.ts#isMfaChallengeResponse`).
 #
+# 2026-07-28, slice 18-WORKFLOW -- ONE change, the last line of this file:
+#
+#  - POST /jobs/{jobId}/submit gains a REQUIRED request body carrying
+#    `drawnSignature`. It is a real, intentional contract widening, and it is
+#    the shape the OWNER's process requires: "completed work -- team member
+#    will sign and submit to team lead for checks" (2026-07-28). The paper
+#    forms carry three signatures; the system captured two. An electronic
+#    record that asserts "I did this work" with no signature behind it is the
+#    defect, and the only honest fix is to make the field mandatory -- exactly
+#    the same reasoning, and the same field, as the VerifyJobRequest entry
+#    above.
+#
+#    Modelling it any other way would make the contract LESS truthful, not
+#    less breaking: an optional signature documents a system that accepts
+#    unsigned submissions, which after this slice it does not (422).
+#
+#    Client impact is real and intended: `web`'s RecordCapture now opens the
+#    signature pad before submitting, and the offline sync-engine's
+#    `submitJob` carries the PNG. There is no deployed third-party client.
+
 # If a genuinely new breaking change shows up in this list in a future
 # slice, do NOT copy-paste it in reflexively -- that defeats the gate.
 # Fix the regression, or if it's another deliberate, reviewed contract
@@ -62,3 +82,4 @@ in API POST /jobs/{jobId}/verify added the new required request property `drawnS
 in API POST /jobs/{jobId}/verify the response property `allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
 in API GET /sync/bootstrap the response property `jobs/items/allOf[subschema #2]/approvalSteps/items/actorName` became optional for the status `200` [response-property-became-optional].
 in API POST /auth/login the response body was restructured into a oneOf, so a field that was previously guaranteed may no longer be present [response-body-wrapped-in-one-of].
+in API POST /jobs/{jobId}/submit added required request body [request-body-added-required].

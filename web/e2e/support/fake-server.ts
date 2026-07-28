@@ -319,6 +319,29 @@ export class FakeServer {
     return assetType;
   }
 
+  /** Slice 18-WORKFLOW — a machine the "Raise a job" screen can offer,
+   * without going through the admin create flow first. */
+  seedAsset(input: { code: string; assetTypeId: string; description?: string }): FakeAsset {
+    const asset: FakeAsset = {
+      id: `asset-${++this.assetSeq}`,
+      code: input.code,
+      codeProvisional: false,
+      assetTypeId: input.assetTypeId,
+      description: input.description ?? null,
+      manufacturer: null,
+      model: null,
+      serialNumber: null,
+      areaId: null,
+      locationDetail: null,
+      commissionedOn: null,
+      scheduleAnchorDate: new Date().toISOString().slice(0, 10),
+      status: 'ACTIVE',
+      active: true,
+    };
+    this.assetsById.set(asset.id, asset);
+    return asset;
+  }
+
   /** Scopes a user directly (bypassing the PUT endpoint) so a spec can set
    * up a starting condition; the E-06 journey assigns scope through the UI. */
   seedUserAreaScope(userId: string, areaIds: string[]): void {
@@ -1108,6 +1131,23 @@ export class FakeServer {
   }
 
   private async handleSubmit(route: Route, jobId: string) {
+    // Slice 18-WORKFLOW §1 — the real server REFUSES an unsigned submission
+    // (422), so the fake does too: a screen that stops capturing the
+    // performer's signature must fail the offline suite, not sail through it.
+    const submitBody = route.request().postDataJSON() as { drawnSignature?: string } | null;
+    if (!submitBody?.drawnSignature) {
+      await route.fulfill({
+        status: 422,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({
+          type: '/errors/validation-failed',
+          title: 'Validation failed',
+          status: 422,
+          detail: 'drawnSignature is required (base64 PNG data-URL).',
+        }),
+      });
+      return;
+    }
     const key = await route.request().headerValue('idempotency-key');
     const dedupeKey = key ?? jobId;
     if (this.submitStore.has(dedupeKey)) {
@@ -1146,6 +1186,57 @@ export class FakeServer {
       body: JSON.stringify(body),
     });
   }
+
+  /**
+   * Slice 18-WORKFLOW §2 — `POST /jobs/adhoc` (UR-028). Mirrors the real
+   * endpoint's contract that the SCREEN depends on: the role gate, the
+   * mandatory >= 10-character reason, and a job that appears in the caller's
+   * list like any other. It also mirrors the property the whole slice turns
+   * on — `frequencyScope: []`, the marker that says this job credits no
+   * schedule period.
+   */
+  private async handleCreateAdhocJob(route: Route): Promise<void> {
+    const requester = await this.requireRoles(route, [
+      'PLANNER',
+      'TEAM_LEADER',
+      'ENGINEER',
+      'ADMIN',
+    ]);
+    if (!requester) return;
+    const body = route.request().postDataJSON() as {
+      assetId?: string;
+      frequency?: 'M1' | 'M3' | 'M6' | 'Y';
+      reason?: string;
+      dueOn?: string;
+    };
+    const asset = body.assetId ? this.assetsById.get(body.assetId) : undefined;
+    if (!asset) {
+      await this.fulfillProblem(route, 404, 'Not found', '/errors/not-found');
+      return;
+    }
+    if (!body.reason || body.reason.trim().length < 10) {
+      await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+      return;
+    }
+    const id = `adhoc-${++this.adhocSeq}`;
+    const job: SeedJob = {
+      id,
+      jobNumber: `PM-2026-${String(900000 + this.adhocSeq)}`,
+      assetCode: asset.code,
+      frequency: body.frequency ?? 'M1',
+      dueOn: body.dueOn ?? new Date().toISOString().slice(0, 10),
+      status: 'SCHEDULED',
+      items: [{ id: `${id}-item-1`, itemNo: 1, instruction: 'Ad-hoc check', mandatory: true }],
+    };
+    this.seedJob(job);
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...this.toApiJob(job), frequencyScope: [] }),
+    });
+  }
+
+  private adhocSeq = 0;
 
   // ---- Slice 16 (D-2b): attachments — online-only upload ----
 
@@ -2166,6 +2257,15 @@ export class FakeServer {
           .match(/\/jobs\/([^/]+)$/);
         return this.handleGetJob(route, match ? match[1] : 'unknown');
       }),
+    );
+    // Slice 18-WORKFLOW §2 — registered AFTER the generic `/jobs/{id}` route
+    // ABOVE, deliberately: Playwright resolves overlapping routes
+    // last-registered-first, and `/jobs/adhoc` matches `/jobs/([^/]+)$` too.
+    // Registering it earlier makes the by-id handler win and answer
+    // "Job not found" for every ad-hoc creation.
+    await page.route(
+      /\/api\/v1\/jobs\/adhoc$/,
+      this.guarded((route) => this.handleCreateAdhocJob(route)),
     );
     // ---- Slice 13-UI-B: the admin surface. Anchored regexes so the
     // more-specific /users/{id}/mfa-reset and /users/{id}/area-scopes

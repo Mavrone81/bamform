@@ -1,4 +1,4 @@
-import { test, expect, DEFAULT_JOB } from '../support/fixtures';
+import { test, expect, signAndSubmit, DEFAULT_JOB } from '../support/fixtures';
 
 /**
  * SYS-5 (O-20): before this slice one 409 wedged the device forever —
@@ -41,10 +41,10 @@ test('O-20a: wedge → “Keep my entries and resend” → conflict clears with
   // current version), so it applies — the review's stale-replay trap is the
   // thing this assertion would catch.
   await expect(page.getByText('Conflict — needs your input')).toBeHidden({ timeout: 10_000 });
-  const submit = page.getByRole('button', { name: 'Submit', exact: true });
+  const submit = page.getByRole('button', { name: 'Sign and submit', exact: true });
   await expect(submit).toBeEnabled({ timeout: 10_000 });
 
-  await submit.click();
+  await signAndSubmit(page);
   await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
   expect(server.submitCount.get(DEFAULT_JOB.id)).toBe(1);
 });
@@ -74,7 +74,7 @@ test('O-20b: wedge → “Discard mine, use the server’s” → local edit dro
     'aria-pressed',
     'false',
   );
-  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Sign and submit', exact: true })).toBeEnabled();
   // Nothing was ever applied server-side for the discarded mutation.
   expect(Array.from(server.appliedCount.values())).toHaveLength(0);
 });
@@ -141,7 +141,7 @@ test('O-20d (H-3): job reassigned away while edits were offline — non-409 fail
   // The job is honestly flagged: kept visible, but never submittable here.
   await expect(page.getByText(/reassigned or removed on the server/)).toBeVisible();
   await expect(
-    page.getByRole('button', { name: /Submit|Sending|Resolve the sync problem/ }),
+    page.getByRole('button', { name: /Sign and submit|Sending|Resolve the sync problem/ }),
   ).toBeDisabled();
   // Nothing was ever applied server-side for the refused mutation.
   expect(Array.from(server.appliedCount.values())).toHaveLength(0);

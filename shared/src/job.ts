@@ -47,6 +47,18 @@ export const jobSummarySchema = z.object({
   status: jobStatusSchema,
   assignedTo: z.string().uuid().nullable().optional(),
   assignedToName: z.string().nullable().optional(),
+  /**
+   * UR-028 — raised OFF-PLAN rather than generated from the maintenance
+   * schedule (slice 18-WORKFLOW; added on review finding X-4).
+   *
+   * Every list that shows jobs shows both kinds, and the two mean different
+   * things: an ad-hoc job satisfies no schedule period and is excluded from
+   * UR-067 plan compliance. The `/reports/overdue` and `/reports/pending`
+   * worklists deliberately KEEP ad-hoc rows — an overdue breakdown is real
+   * outstanding work and hiding it would be a worse defect than counting it —
+   * so this flag is what stops those numbers being ambiguous.
+   */
+  isAdhoc: z.boolean().optional(),
 });
 export type JobSummary = z.infer<typeof jobSummarySchema>;
 
@@ -212,6 +224,60 @@ export const verifyJobRequestSchema = z.object({
   comment: z.string().nullable().optional(),
 });
 export type VerifyJobRequest = z.infer<typeof verifyJobRequestSchema>;
+
+/**
+ * `POST /jobs/{id}/submit` request body — slice 18-WORKFLOW.
+ *
+ * The PERFORMER's signature. The owner's process (2026-07-28) is explicit:
+ * "Completed work — team member will sign and submit to team lead for
+ * checks". Until this slice submit recorded only who and when; the paper
+ * forms carry three signatures and the system captured two. Same shape and
+ * the same server-side handling as `VerifyJobRequest.drawnSignature` (base64
+ * PNG data-URL, magic-byte validated, field-encrypted, never logged) — the
+ * SAME `SignaturePad` captures it, which supports stylus AND mouse through
+ * one pointer-event code path.
+ *
+ * MANDATORY, not optional: an unsigned submission asserts nothing, and the
+ * signature is what binds a named human to "I did this work". There is
+ * deliberately no config flag — see slice-18-workflow-report.md §1.
+ */
+export const submitJobRequestSchema = z.object({
+  drawnSignature: z.string().min(1, 'drawnSignature is required (base64 PNG data-URL).'),
+});
+export type SubmitJobRequest = z.infer<typeof submitJobRequestSchema>;
+
+/**
+ * `POST /jobs/adhoc` request body — UR-028/PR-058, deferred in slice 5 and
+ * picked up in slice 18-WORKFLOW. Raises a job against an asset OUTSIDE the
+ * maintenance plan.
+ *
+ * `reason` is mandatory and >= 10 characters, the same "a reason under 10
+ * characters isn't a reason" convention as void (INV-12), return (INV-13)
+ * and the schedule adjustment — and it is backed by a database CHECK
+ * (`job_adhoc_reason_length_chk`), not the service alone.
+ *
+ * `frequency` labels which depth of the frozen checklist is being performed;
+ * it is NOT derived, because guessing it would put an untruth into a signed
+ * record. It does NOT make the job count against the plan: an ad-hoc job is
+ * created with an EMPTY `frequencyScope`, which is what makes it structurally
+ * incapable of advancing `schedule_rule.next_due_on` (see the report's
+ * independence proof).
+ */
+export const createAdhocJobRequestSchema = z.object({
+  assetId: z.string().uuid(),
+  frequency: frequencySchema,
+  reason: z
+    .string()
+    .trim()
+    .min(10, 'reason must be at least 10 characters (UR-028 — why this work is off-plan).'),
+  /** `YYYY-MM-DD`. Defaults to today (the work is being raised now). */
+  dueOn: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'dueOn must be a YYYY-MM-DD date.')
+    .optional(),
+  assigneeId: z.string().uuid().nullable().optional(),
+});
+export type CreateAdhocJobRequest = z.infer<typeof createAdhocJobRequestSchema>;
 
 /**
  * `POST /jobs/{id}/assign` request body — UR-029/PR-030 (slice 15-SYSWIRE,

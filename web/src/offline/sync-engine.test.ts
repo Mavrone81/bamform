@@ -307,7 +307,13 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
       clientRecordedAt: new Date().toISOString(),
     });
     const transport = new MockSyncTransport();
-    const result = await submitJob(db, transport, 'user-1', 'job-1');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result).toEqual({ ok: false, reason: 'pending-mutations', pendingCount: 1 });
   });
 
@@ -325,7 +331,13 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
     transport.forceConflict(entry.id);
     await drain(db, transport, 'user-1');
 
-    const result = await submitJob(db, transport, 'user-1', 'job-1');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.reason).toBe('pending-mutations');
@@ -346,7 +358,13 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
     const submitSpy = vi.spyOn(transport, 'submitJob');
 
     await drain(db, transport, 'user-1');
-    const result = await submitJob(db, transport, 'user-1', 'job-1');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
 
     expect(result).toEqual({ ok: true, status: 200 });
     expect(submitSpy).toHaveBeenCalledTimes(1);
@@ -365,7 +383,13 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
     const job = await db.jobs.get(['user-1', 'job-1']);
     await db.jobs.put({ ...job!, serverRemoved: true });
     const transport = new MockSyncTransport();
-    const result = await submitJob(db, transport, 'user-1', 'job-1');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result).toEqual({ ok: false, reason: 'server-removed' });
   });
 
@@ -377,7 +401,13 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
       status: 422,
     };
     transport.submitJob = async () => ({ status: 422, ok: false, problem });
-    const result = await submitJob(db, transport, 'user-1', 'job-1');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result).toEqual({ ok: false, reason: 'server-rejected', status: 422, problem });
     const cached = await getCachedJob(db, 'user-1', 'job-1');
     expect(cached?.submitState).toBe('none');
@@ -385,14 +415,26 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
 
   it('is a no-op-safe guard even for a job not present in the local cache', async () => {
     const transport = new MockSyncTransport();
-    const result = await submitJob(db, transport, 'user-1', 'ghost-job');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'ghost-job',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result).toEqual({ ok: true, status: 200 });
   });
 
   it('SYS-14: a transport throw (network died mid-submit) returns reason "network" and resets the chip — never an unhandled rejection, never stuck "Sending"', async () => {
     const transport = new MockSyncTransport();
     transport.networkDown = true;
-    const result = await submitJob(db, transport, 'user-1', 'job-1');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result).toEqual({ ok: false, reason: 'network' });
     const cached = await getCachedJob(db, 'user-1', 'job-1');
     expect(cached?.submitState).toBe('none'); // not wedged at 'submitting'
@@ -404,21 +446,33 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
     const keys: string[] = [];
     const realSubmit = transport.submitJob.bind(transport);
     let failFirst = true;
-    transport.submitJob = async (jobId, idempotencyKey) => {
+    transport.submitJob = async (jobId, idempotencyKey, request) => {
       keys.push(idempotencyKey);
       if (failFirst) {
         failFirst = false;
         // The server APPLIED the submit; the response never arrived.
-        await realSubmit(jobId, idempotencyKey);
+        await realSubmit(jobId, idempotencyKey, request);
         throw new Error('response lost');
       }
-      return realSubmit(jobId, idempotencyKey);
+      return realSubmit(jobId, idempotencyKey, request);
     };
 
-    const first = await submitJob(db, transport, 'user-1', 'job-1');
+    const first = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(first).toEqual({ ok: false, reason: 'network' });
 
-    const second = await submitJob(db, transport, 'user-1', 'job-1');
+    const second = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(second).toEqual({ ok: true, status: 200 });
 
     expect(keys).toHaveLength(2);
@@ -429,11 +483,61 @@ describe('submitJob — non-negotiable #2: separate atomic call after every muta
     expect(cached?.submitIdempotencyKey).toBeNull(); // cleared on ack
   });
 
+  // ------------------------------------------- slice 18-WORKFLOW §1
+
+  it("carries the PERFORMER's drawn signature on the submit call itself — never through the outbox", async () => {
+    const transport = new MockSyncTransport();
+    const seen: Array<{ jobId: string; drawnSignature: string }> = [];
+    const real = transport.submitJob.bind(transport);
+    transport.submitJob = async (jobId, idempotencyKey, request) => {
+      seen.push({ jobId, drawnSignature: request.drawnSignature });
+      return real(jobId, idempotencyKey, request);
+    };
+
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'job-1',
+      'data:image/png;base64,iVBORw0KGgoPERFORMER',
+    );
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(seen).toEqual([
+      { jobId: 'job-1', drawnSignature: 'data:image/png;base64,iVBORw0KGgoPERFORMER' },
+    ]);
+
+    // Non-negotiable #2 is untouched: nothing about the signature turned
+    // submit into an outbox mutation.
+    const rows = await db.outbox.toArray();
+    expect(rows.some((row) => row.path.includes('/submit'))).toBe(false);
+  });
+
+  it('never persists the signature bytes to IndexedDB — a held record leaves no signature blob behind', async () => {
+    const transport = new MockSyncTransport();
+    transport.networkDown = true;
+    const signature = 'data:image/png;base64,iVBORw0KGgoSECRETINK';
+    const result = await submitJob(db, transport, 'user-1', 'job-1', signature);
+    expect(result).toEqual({ ok: false, reason: 'network' });
+
+    const jobs = JSON.stringify(await db.jobs.toArray());
+    const outbox = JSON.stringify(await db.outbox.toArray());
+    expect(jobs).not.toContain('SECRETINK');
+    expect(outbox).not.toContain('SECRETINK');
+  });
+
+  it('the server refuses an unsigned submission — the fake enforces the same 422 the API does', async () => {
+    const transport = new MockSyncTransport();
+    const result = await submitJob(db, transport, 'user-1', 'job-1', '');
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result).toMatchObject({ reason: 'server-rejected', status: 422 });
+  });
+
   it('an explicit server rejection clears the persisted key — the NEXT submit after fixing the record is a new request', async () => {
     const transport = new MockSyncTransport();
     const problem = { type: 'about:blank', title: 'incomplete', status: 422 };
     transport.submitJob = async () => ({ status: 422, ok: false, problem });
-    await submitJob(db, transport, 'user-1', 'job-1');
+    await submitJob(db, transport, 'user-1', 'job-1', 'data:image/png;base64,iVBORw0KGgo=');
     const cached = await getCachedJob(db, 'user-1', 'job-1');
     expect(cached?.submitIdempotencyKey).toBeNull();
   });
@@ -483,7 +587,13 @@ describe('submitJob — outcomes for a job absent from the local cache', () => {
   it('a network throw for an uncached job still returns reason network without crashing', async () => {
     const transport = new MockSyncTransport();
     transport.networkDown = true;
-    const result = await submitJob(db, transport, 'user-1', 'ghost-job');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'ghost-job',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result).toEqual({ ok: false, reason: 'network' });
   });
 
@@ -491,7 +601,13 @@ describe('submitJob — outcomes for a job absent from the local cache', () => {
     const transport = new MockSyncTransport();
     const problem = { type: 'about:blank', title: 'nope', status: 422 };
     transport.submitJob = async () => ({ status: 422, ok: false, problem });
-    const result = await submitJob(db, transport, 'user-1', 'ghost-job');
+    const result = await submitJob(
+      db,
+      transport,
+      'user-1',
+      'ghost-job',
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
     expect(result).toEqual({ ok: false, reason: 'server-rejected', status: 422, problem });
   });
 });
