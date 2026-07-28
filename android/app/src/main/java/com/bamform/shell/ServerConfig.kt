@@ -37,7 +37,19 @@ object ServerConfig {
      *  - scheme must be http or https; a bare host/IP gets http:// (plant-
      *    internal hosts rarely have TLS) and the UI shows the http warning
      *  - no userinfo (credentials-in-URL are rejected outright)
-     *  - path/query/fragment are dropped: the shell always loads the origin.
+     *  - path/query/fragment are dropped: the shell always loads the origin
+     *  - the host is lower-cased.
+     *
+     * The lower-casing is not cosmetic (review R-6). This function's output
+     * is what [MainActivity.installBridge] hands to `addWebMessageListener`
+     * as the origin allow-list, and that rule is matched against the
+     * document's own origin, which the browser always reports lower-cased.
+     * A `HOST.local` typed into the card would therefore produce a rule the
+     * WebView never matches: the shell would install **no** channel and the
+     * in-page Server field would simply never appear, with nothing anywhere
+     * saying why. It fails closed either way — this makes it not fail at all.
+     * `lowercase()` (not the deprecated `toLowerCase()`) is Locale.ROOT, so
+     * a Turkish device locale cannot turn `I` into `ı` here.
      */
     fun normalize(raw: String): String? {
         var s = raw.trim()
@@ -46,7 +58,7 @@ object ServerConfig {
         val uri = Uri.parse(s)
         if (uri.scheme != "http" && uri.scheme != "https") return null
         if (uri.userInfo != null) return null
-        val host = uri.host
+        val host = uri.host?.lowercase()
         if (host.isNullOrBlank()) return null
         val port = if (uri.port != -1) ":${uri.port}" else ""
         return "${uri.scheme}://$host$port"

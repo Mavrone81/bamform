@@ -51,16 +51,63 @@ confined it).
 The channel is now `WebViewCompat.addWebMessageListener` with an allow-list
 of exactly one origin — the configured one, re-registered on every switch —
 so the `window.BamFormShell` object is **created only in documents from that
-origin**. The listener additionally refuses subframes and re-checks the
-calling frame's origin. Off-origin main-frame documents (POST or history
-navigations) are also stopped and bounced back to the configured origin, so
-a foreign page cannot render full-screen inside the shell's chrome.
+origin**. The listener additionally refuses subframes (the allow-list is
+origin-scoped, *not* frame-scoped: an attacker page that embeds the
+configured origin in an `<iframe>` really does get a live
+`window.BamFormShell` in that inner frame, and the subframe refusal is the
+only thing that drops its messages) and re-checks the calling frame's origin.
+
+**This boundary is the safety property. The navigation guard is not.**
+Off-origin main-frame documents (POST or history navigations) are also
+stopped in `onPageStarted` and bounced back to the configured origin — but
+`onPageStarted` fires when the document *starts*, so whether the foreign
+page has already executed script by then is a **race**, and it has been
+observed going both ways on the same build. The guard reliably stops a
+foreign page **staying**; it does not reliably stop it **running**. What
+makes that safe is that the channel is origin-scoped, so a foreign document
+has no bridge to reach whether its script ran or not. Do not read the guard
+as a second lock on the bridge; it is anti-phishing, stopping a foreign page
+from sitting full-screen inside the shell's chrome pretending to be BamForm.
 
 **If the device's WebView is older than v88** the feature is unavailable and
 the shell installs **no channel at all** — it does not fall back to
 `addJavascriptInterface`. The in-page Server field simply will not appear;
 re-point such a device from the native card (which shows whenever the server
 is unreachable). This is deliberate: no field is better than a hijackable one.
+
+### Off-origin links leave the app with no tap
+
+Any main-frame navigation away from the configured origin is handed to the
+system browser (`Intent(ACTION_VIEW, uri)` — deliberately **not**
+`Intent.parseUri`, so an `intent://` URL cannot be turned into an arbitrary
+intent). That happens with **zero user interaction**: `location.href`, a
+`<meta http-equiv=refresh>` and a 302 chain each move the technician into
+Chrome at the target URL without a tap. This is pre-existing WebView shell
+behaviour and is not a bridge issue — the bridge does not follow. But it
+means a compromised or spoofed BamForm page can silently relocate a
+technician to a browser, where the same phishing works without even the
+shell's chrome to contradict it. Treat "the page the shell loads" as
+security-relevant; it is the whole trust root (see the cleartext note below).
+
+### The unreachable-server card gates on 5xx, not on content
+
+When the configured server answers the main frame with an HTTP **5xx**, or
+is unreachable at the socket level, the shell shows its native card
+("… answered with HTTP 502 instead of the app", Retry, server field) instead
+of a raw WebView error page. That covers the case that actually bites a
+plant: a `docker compose up --build` window, or a misconfigured reverse
+proxy.
+
+It does **not** cover a server that answers **200 with the wrong content**.
+A captive portal, a hotel/guest-Wi-Fi splash, or an ISP interception page
+returning 200 renders inside the shell as if it were BamForm. Nothing is
+persisted and no records move — the failure is visible and non-destructive,
+and the technician sees a page that is obviously not BamForm — but the shell
+will not tell them so. On a **cleartext plant LAN this is precisely the
+on-path attacker's shape**, which is why it is written here and not only in
+the build report: the person provisioning devices is the one who needs to
+know. The better design gates the card on the native health probe rather
+than on the HTTP status; that is a tracked follow-up, not what is built.
 
 ### The health probe is rate-limited
 
@@ -127,6 +174,29 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebre
 
 `./gradlew assembleDebug` needs no signing material. `./gradlew lint` is
 kept clean (intentional suppressions are commented at the site).
+
+### What CI checks, and what it does not
+
+Two gates in `.github/workflows/ci.yml`, both blocking:
+
+- **Job 12 · Android shell (Gradle)** runs `./gradlew assembleDebug lint` on
+  every PR. Debug only, so it needs no keystore and no secrets; it refuses to
+  run at all if signing material is found in the checkout.
+- **Job 1** runs `scripts/ci/assert-shell-protocol-contract.mjs`, which binds
+  the Kotlin and TypeScript halves of the bridge (channel name, protocol
+  version, message vocabulary in both directions) and pins the security
+  invariants a compiler cannot see: the `addWebMessageListener` allow-list
+  must stay `setOf(configuredOrigin)`, `onPostMessage` must keep all four of
+  its guards ahead of the type dispatch, and `ServerConfig.normalize` must
+  keep lower-casing the host.
+
+**Neither gate runs the bridge.** `android/app/src` has no `test/` or
+`androidTest/`: the protocol gate is static text analysis, so it proves the
+guards are *present*, not that they still *work*. Behavioural coverage of
+`ShellBridge.onPostMessage` (a Robolectric test on the four guards) is a
+tracked follow-up; until it lands, the runtime evidence for the trust
+boundary is the manual emulator attack suite recorded in
+`.superpowers/sdd/android-shell-review.md`.
 
 ## Release signing — READ THIS BEFORE LOSING ANYTHING
 

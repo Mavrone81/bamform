@@ -59,8 +59,16 @@ class ShellBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
         isMainFrame: Boolean,
         replyProxy: JavaScriptReplyProxy,
     ) {
-        // Belt and braces over the allow-list. The control lives in the top
-        // document; nothing legitimate speaks from a subframe.
+        // LOAD-BEARING SECURITY, not defence in depth. The allow-list on
+        // addWebMessageListener is origin-scoped, NOT frame-scoped: an
+        // attacker page that embeds the configured origin in an <iframe>
+        // gets a real, live `window.BamFormShell` inside that inner frame —
+        // the re-review measured exactly that (A → attacker(B) → A:
+        // `window-bam-props=["BamFormShell"]`, and postMessage did not
+        // throw). This line is the ONLY thing that dropped those messages,
+        // and it is what makes the boundary frame-scoped. Deleting it
+        // re-opens a real hole. The control lives in the top document;
+        // nothing legitimate ever speaks from a subframe.
         if (!isMainFrame) return
         if (!ServerConfig.sameOrigin(activity.currentOrigin(), sourceOrigin.toString())) return
         if (message.type != WebMessageCompat.TYPE_STRING) return
