@@ -10,6 +10,7 @@ import {
 } from '../auth';
 import { MfaEnrolment } from '../components/MfaEnrolment';
 import { BrandMark } from '../components/BrandMark';
+import { ShellServerControl } from '../components/ShellServerControl';
 import { useRouter } from '../router';
 
 /**
@@ -217,6 +218,8 @@ export function SignIn() {
           >
             {submitting ? 'Signing in…' : 'Sign in'}
           </button>
+          {/* Android-shell only: absent from the DOM in a normal browser. */}
+          <ShellServerControl />
         </form>
       )}
 

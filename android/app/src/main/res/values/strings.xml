@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name">BamForm</string>
+
+    <!-- Server switching (offline card + bridge toasts) -->
+    <string name="server_label">Server address</string>
+    <string name="server_connect">Connect</string>
+    <string name="server_checking">Checking server…</string>
+    <string name="server_switched">Connected. Loading BamForm…</string>
+    <string name="server_http_warning">No HTTPS: offline mode and installability are limited by the browser engine; use HTTPS for full offline support.</string>
+
+    <!-- Validation / probe errors -->
+    <string name="err_invalid_url">Enter a valid server address, e.g. https://form.bevorasg.com or 192.168.1.50:8080.</string>
+    <string name="err_bad_health" tools:ignore="PluralsCandidate">The server answered, but not like a BamForm server (HTTP %1$d from /api/v1/healthz). Check the address.</string>
+    <string name="err_unknown_host">Host not found. Check the address and that you are on the plant network.</string>
+    <string name="err_timeout">The server did not answer in time. Check the address, network or VPN.</string>
+    <string name="err_ssl">Secure connection failed (%1$s). The server’s HTTPS certificate is not trusted by this device.</string>
+    <string name="err_generic">Could not reach the server: %1$s</string>
+    <string name="err_too_fast">Too many server checks in a row. Wait a moment, then try again.</string>
+    <string name="err_offorigin_blocked">A page from another server tried to open inside BamForm. It was blocked and BamForm reloaded.</string>
+
+    <!-- Offline card -->
+    <string name="offline_title">Server unreachable</string>
+    <string name="offline_detail">BamForm at %1$s did not respond. Check that you are on the plant network, then retry — or point the app at a different server below.</string>
+    <string name="offline_detail_http" tools:ignore="PluralsCandidate">BamForm at %1$s answered with HTTP %2$d instead of the app. The server is probably restarting or its reverse proxy is misconfigured. Retry in a moment — or point the app at a different server below.</string>
+    <string name="offline_detail_crash">BamForm’s display stopped responding repeatedly on this device (usually low memory). Close other apps and retry — or point the app at a different server below.</string>
+    <string name="offline_retry">Retry</string>
+    <string name="chooser_title">Attach a file</string>
+</resources>

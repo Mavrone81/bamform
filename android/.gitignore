@@ -1,0 +1,13 @@
+# Build state
+.gradle/
+build/
+local.properties
+
+# Signing material — the keystore and its passwords must NEVER be committed.
+# Losing the keystore means future APKs cannot upgrade-in-place (see README).
+keystore/
+
+# IDE
+.idea/
+*.iml
+.DS_Store

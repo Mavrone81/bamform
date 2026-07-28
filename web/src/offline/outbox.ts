@@ -133,6 +133,17 @@ export async function pendingCountForUser(db: BamFormDB, userId: string): Promis
   return db.outbox.where('userId').equals(userId).count();
 }
 
+/** EVERY unacked row on this device, whoever owns it — the number the
+ * Android shell's server switch must warn about (review W-1). IndexedDB is
+ * per-origin, so re-pointing the shell at another server does not migrate
+ * these rows, it hides them: they stay in the old origin's database,
+ * undrainable until the shell is pointed back. Nobody is signed in when
+ * that switch happens, so `pendingCountForUser` cannot answer the question
+ * — the whole origin is what gets stranded, not one user's slice of it. */
+export async function pendingCountAll(db: BamFormDB): Promise<number> {
+  return db.outbox.count();
+}
+
 export interface JobOutboxCounts {
   total: number;
   /** pending / sending — rows genuinely on their way. */

@@ -18,6 +18,19 @@ node_modules
 **/node_modules
 dist
 **/dist
+build
+**/build
+.gradle
+**/.gradle
+# The Android shell is never part of an image. Both Dockerfiles do `COPY . .`
+# in a build stage, which without this line copied
+# android/keystore/bamform-release.keystore AND keystore.properties (the
+# signing password in plaintext) into every builder layer — and 37 MB of
+# android/build output into every build context, re-introducing exactly the
+# bloat this file exists to prevent. Production images build from the git
+# clone, where android/.gitignore keeps the keystore out of the tree
+# entirely, so nothing ever leaked; this closes the local-build case.
+android
 .git
 secrets
 .nyc_output

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground. The 512-unit artwork is centred inside an
+     838-unit viewport so it sits within the 66/108 adaptive safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="838"
+    android:viewportHeight="838">
+    <group
+        android:translateX="163"
+        android:translateY="163">
+        <path
+            android:pathData="M256,69 L416,160 V352 L256,443 L96,352 V160 Z"
+            android:strokeColor="@color/brand_amber"
+            android:strokeLineJoin="round"
+            android:strokeWidth="32" />
+        <path
+            android:pathData="M176,261 L235,320 L341,197"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="43" />
+    </group>
+</vector>

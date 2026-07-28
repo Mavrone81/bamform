@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mirrors the PWA's design tokens (web/src theme): graphite chrome,
+     cool-steel canvas, white panels, amber mark, deep-blue accent. -->
+<resources>
+    <color name="chrome">#16191D</color>
+    <color name="canvas">#E9EDF0</color>
+    <color name="panel">#FFFFFF</color>
+    <color name="panel_sunken">#F4F6F8</color>
+    <color name="ink">#16191D</color>
+    <color name="ink_soft">#3F4650</color>
+    <color name="ink_faint">#5A626C</color>
+    <color name="border">#C3CAD1</color>
+    <color name="border_strong">#78828D</color>
+    <color name="brand_amber">#F5B82E</color>
+    <color name="accent">#0F4D8A</color>
+    <color name="accent_ink">#FFFFFF</color>
+    <color name="destructive">#A1160F</color>
+    <color name="signal_good">#1E7C46</color>
+    <color name="warn_bg">#FBF3DC</color>
+</resources>

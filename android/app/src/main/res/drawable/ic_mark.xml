@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The BamForm hex-nut + check mark (from web/public/icon.svg), transparent
+     background, for the graphite header where the chrome IS the background. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="28dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path
+        android:pathData="M256,69 L416,160 V352 L256,443 L96,352 V160 Z"
+        android:strokeColor="@color/brand_amber"
+        android:strokeLineJoin="round"
+        android:strokeWidth="32" />
+    <path
+        android:pathData="M176,261 L235,320 L341,197"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="43" />
+</vector>

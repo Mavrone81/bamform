@@ -64,6 +64,15 @@ jobs:
       # not compose grants — so assert the contract mechanically.
       - name: Compose grants every secret its services actually load
         run: node scripts/ci/assert-compose-runtime-contract.mjs
+      # The Android shell's trust boundary is one origin-scoped JS channel
+      # whose two halves are written in different languages and compiled by
+      # different toolchains — nothing else in this repo reads both. The
+      # adversarial re-review (R-1) found that widening the origin allow-list
+      # to setOf("*"), or deleting the isMainFrame guard, would have gone
+      # green through every gate here. This is that gate. It is pure Node
+      # (no Gradle, no SDK), so it belongs in the fast job.
+      - name: Android shell — Kotlin/TS protocol agreement + bridge security invariants
+        run: node scripts/ci/assert-shell-protocol-contract.mjs
 
   # ---------------------------------------------------------------- 2
   secret-scan:
@@ -413,7 +422,14 @@ jobs:
   # --------------------------------------------------------------- 10
   build:
     name: 10 · Build images
-    needs: [e2e, accessibility]
+    # `android` is listed here for one reason: it makes job 12 a HARD gate.
+    # It carries no `needs` of its own so it starts at t=0 and finishes long
+    # before this job's real prerequisites (the e2e/a11y chain) do — it costs
+    # the pipeline no wall-clock — but a red Android build now blocks Build
+    # images and, transitively, Migration check, exactly like every other
+    # gate in this file. A job nothing depends on is advisory, and advisory
+    # security gates are theatre.
+    needs: [e2e, accessibility, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -458,3 +474,68 @@ jobs:
         run: bash scripts/ci/assert-migration-reversal-documented.sh
       - name: Large-table indexes use CONCURRENTLY (M-06)
         run: bash scripts/ci/assert-concurrent-indexes.sh
+
+  # --------------------------------------------------------------- 12
+  android:
+    name: 12 · Android shell (Gradle)
+    # NO `needs`: this starts at t=0 alongside jobs 1 and 2 and finishes in
+    # ~2-4 min, so it never sits on the critical path. Its failure still
+    # blocks the pipeline because job 10 lists it in `needs` — see the note
+    # there.
+    #
+    # WHY THIS JOB EXISTS. Until it, `.github/workflows/ci.yml` never invoked
+    # Gradle and `android/app/src` had no test source set: NOTHING mechanical
+    # in this repo read the Kotlin at all. The shell's entire trust boundary —
+    # the one-entry origin allow-list, the subframe refusal, the sourceOrigin
+    # re-check — was verified only by manual emulator runs. The adversarial
+    # re-review (R-1, .superpowers/sdd/android-shell-review.md) called that
+    # the same defect class as the Critical it had just closed: a security
+    # claim with no mechanism behind it.
+    #
+    # SCOPE, honestly. This job compiles and lints. It does not run the
+    # bridge: `android/app/src` still has no test/ or androidTest/, so no
+    # behaviour is executed here. The invariants that a compiler cannot see
+    # are asserted statically in job 1
+    # (scripts/ci/assert-shell-protocol-contract.mjs); a Robolectric test on
+    # ShellBridge.onPostMessage is the tracked follow-up that would make the
+    # guards behaviourally tested rather than merely present.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Release signing material lives in android/keystore/ and is
+      # .gitignored (see android/README.md). This job builds DEBUG only, so
+      # it needs no secret of any kind — no keystore, no passwords, nothing
+      # from `secrets.*`. Assert that, so the day someone commits the
+      # keystore "to make CI sign a release" this job refuses rather than
+      # quietly publishing a signing key into every fork and log.
+      - name: No signing material may be present in a CI checkout
+        run: |
+          if [ -e android/keystore ]; then
+            echo "android/keystore exists in the checkout — release signing material must NEVER be committed (android/README.md). Refusing to build." >&2
+            exit 1
+          fi
+          echo "OK: no signing material in the checkout; this job builds debug only."
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"   # matches compileOptions/jvmTarget in android/app/build.gradle.kts
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0"
+      # Caches the Gradle user home (wrapper dist, AGP/Kotlin plugin jars,
+      # androidx artifacts) keyed on the build files.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: android
+      - name: assembleDebug + lint
+        # Debug: no signing config is consulted, so no secrets are required.
+        # `lint` aborts on any lint ERROR (AGP default abortOnError=true);
+        # the two intentional suppressions are commented at their site in
+        # android/app/build.gradle.kts.
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug lint
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-lint
+          path: android/app/build/reports/lint-results-debug.*
