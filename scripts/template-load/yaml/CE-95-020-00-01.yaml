@@ -1,0 +1,502 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 020 00 01
+title: ASM Wire Bond Preventive Maintenance Record
+asset_type_code: ASM_WIRE_BOND
+asset_type_name: ASM Wire Bond
+printed_revision: C
+current_revision: D
+source_file: CE 95 020 00 01 ASM Wire Bond Preventive Maintenance Record.xlsx
+source_sha256: 9879d71ec54875f3116e8e9338848efd803c34222c13337737155d39c342e7da
+sheet_name: CE 95 020 00 01
+frequency_banner: Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - AW01
+  - AW02
+  - AW03
+  - AW04
+revision_history:
+  - code: '0'
+    date: '2021-03-24'
+    details: New Release
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: A
+    date: '2021-05-19'
+    details: "1. Retitle to add ASM\r\n2. Updated PM frequency\r\n3. Updated to include calibration reading recording"
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: B
+    date: '2021-09-21'
+    details: "1. Include temperature measurement recording \r\n2.  Include quaterly inspection for safety interlock / emergency stop"
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: C
+    date: '2024-03-20'
+    details: Update intruction for Item 2 and 3
+    revised_by: Sara
+    approved_by: Suren
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D6
+  partsRequired: D9:M14
+  ppe: D15:D18
+  safety: C20
+  procedure: C22:C23
+  remarks: A50
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M3
+    instruction: Inspection and check safety interlock / emergency stop is functional
+    stable_key: CE-95-020-00-01::inspection-and-check-safety-interlock-emergency-stop-is-func
+    display_order: 0
+    source_row: 26
+  - item_no: 2
+    printed_no: '2'
+    frequency: M3
+    instruction: Check Input / Output spindle condition
+    stable_key: CE-95-020-00-01::check-input-output-spindle-condition
+    display_order: 1
+    source_row: 27
+  - item_no: 3
+    printed_no: '3'
+    frequency: M3
+    instruction: Vacuum Clean under the work holder area
+    stable_key: CE-95-020-00-01::vacuum-clean-under-the-work-holder-area
+    display_order: 2
+    source_row: 28
+  - item_no: 4
+    printed_no: '4'
+    frequency: M3
+    instruction: Clean work holder linear scale
+    stable_key: CE-95-020-00-01::clean-work-holder-linear-scale
+    display_order: 3
+    source_row: 29
+  - item_no: 5
+    printed_no: '5'
+    frequency: M3
+    instruction: Clean voice coil motor
+    stable_key: CE-95-020-00-01::clean-voice-coil-motor
+    display_order: 4
+    source_row: 30
+  - item_no: 6
+    printed_no: '6'
+    frequency: M3
+    instruction: Clean and lubricate track leadscrew
+    stable_key: CE-95-020-00-01::clean-and-lubricate-track-leadscrew
+    display_order: 5
+    source_row: 31
+  - item_no: 7
+    printed_no: '7'
+    frequency: M3
+    instruction: Clean and lubricate track cross roller way
+    stable_key: CE-95-020-00-01::clean-and-lubricate-track-cross-roller-way
+    display_order: 6
+    source_row: 32
+  - item_no: 8
+    printed_no: '8'
+    frequency: M3
+    instruction: Clean the indexer sensors
+    stable_key: CE-95-020-00-01::clean-the-indexer-sensors
+    display_order: 7
+    source_row: 33
+  - item_no: 9
+    printed_no: '9'
+    frequency: M6
+    instruction: Check functionality and cleaning of all cooling fans
+    stable_key: CE-95-020-00-01::check-functionality-and-cleaning-of-all-cooling-fans
+    display_order: 8
+    source_row: 34
+  - item_no: 10
+    printed_no: '10'
+    frequency: M6
+    instruction: Clean coil bracket and grease LM guide
+    stable_key: CE-95-020-00-01::clean-coil-bracket-and-grease-lm-guide
+    display_order: 9
+    source_row: 35
+  - item_no: 11
+    printed_no: '11'
+    frequency: M6
+    instruction: Check and exchanging Air Filters if neccesary
+    stable_key: CE-95-020-00-01::check-and-exchanging-air-filters-if-neccesary
+    display_order: 10
+    source_row: 36
+  - item_no: 12
+    printed_no: '12'
+    frequency: M6
+    instruction: Check ESD Grounding (less than 1.0 ohm)
+    stable_key: CE-95-020-00-01::check-esd-grounding-less-than-1-0-ohm
+    display_order: 11
+    source_row: 37
+  - item_no: 13
+    printed_no: '13'
+    frequency: 'Y'
+    instruction: Calibrate Workholder, BH Setup, Heater Block Setup, Bond Force
+    stable_key: CE-95-020-00-01::calibrate-workholder-bh-setup-heater-block-setup-bond-force
+    display_order: 12
+    source_row: 38
+  - item_no: 14
+    printed_no: '14'
+    frequency: 'Y'
+    instruction: Calibrate Wire Clamp, Transducer Vibration Calibration (TVC)
+    stable_key: CE-95-020-00-01::calibrate-wire-clamp-transducer-vibration-calibration-tvc
+    display_order: 13
+    source_row: 39
+measurements:
+  - section: Workholder Calibration
+    description: Heater Block Flatness Check
+    unit: um
+    spec_type: RANGE
+    lower_limit: null
+    upper_limit: 20
+    nominal: null
+    tolerance: null
+    spec_display: Hmin ≤ 20 um
+    stable_key: CE-95-020-00-01::heater-block-flatness-check
+    display_order: 0
+    source_row: 54
+    source_cells:
+      - E54
+      - J54
+  - section: Workholder Calibration
+    description: Vacuum Check with WCTP + LF
+    unit: mmHg
+    spec_type: RANGE
+    lower_limit: -600
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: '>-600 mmHg'
+    stable_key: CE-95-020-00-01::vacuum-check-with-wctp-lf
+    display_order: 1
+    source_row: 55
+    source_cells:
+      - E55
+      - J55
+  - section: BH Setup & Calibration
+    description: Bond Head Position Flat Level
+    unit: um
+    spec_type: RANGE
+    lower_limit: -36500
+    upper_limit: -30500
+    nominal: null
+    tolerance: null
+    spec_display: '-36500 ~ -30500 um'
+    stable_key: CE-95-020-00-01::bond-head-position-flat-level
+    display_order: 2
+    source_row: 56
+    source_cells:
+      - E56
+      - J56
+  - section: BH Setup & Calibration
+    description: 91 steps calibration
+    unit: μm/encoder
+    spec_type: RANGE
+    lower_limit: 0.19
+    upper_limit: 0.21
+    nominal: null
+    tolerance: null
+    spec_display: 0.19 – 0.21 μm/encoder
+    stable_key: CE-95-020-00-01::91-steps-calibration
+    display_order: 3
+    source_row: 57
+    source_cells:
+      - E57
+      - J57
+  - section: BH Setup & Calibration Heater Block Setup
+    description: Top Plate Close Position
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -0.5
+    upper_limit: 0.5
+    nominal: null
+    tolerance: null
+    spec_display: '-0.50 ~ 0.5 mm'
+    stable_key: CE-95-020-00-01::top-plate-close-position
+    display_order: 4
+    source_row: 58
+    source_cells:
+      - E58
+      - J58
+  - section: BH Setup & Calibration Heater Block Setup
+    description: Window Clamp Close Position
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -0.2
+    upper_limit: 0.2
+    nominal: null
+    tolerance: null
+    spec_display: '-0.20 ~ 0.20 mm'
+    stable_key: CE-95-020-00-01::window-clamp-close-position
+    display_order: 5
+    source_row: 59
+    source_cells:
+      - E59
+      - J59
+  - section: BH Setup & Calibration Heater Block Setup
+    description: Track Height Calibration, Rear Track
+    unit: um
+    spec_type: TOLERANCE
+    lower_limit: -30
+    upper_limit: 30
+    nominal: 0
+    tolerance: 30
+    spec_display: ± 30 um
+    stable_key: CE-95-020-00-01::track-height-calibration-rear-track
+    display_order: 6
+    source_row: 60
+    source_cells:
+      - E60
+      - J60
+  - section: BH Setup & Calibration Heater Block Setup
+    description: Track Height Calibration, Top Plate
+    unit: null
+    spec_type: TEXT
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: '-295 - -305'
+    unparsed_reason: printed range is high-to-low (-295 > -305) — inverted per INV-04; client decision required
+    stable_key: CE-95-020-00-01::track-height-calibration-top-plate
+    display_order: 7
+    source_row: 61
+    source_cells:
+      - E61
+      - J61
+  - section: BH Setup & Calibration Heater Block Setup
+    description: Track Height Calibration, Front Track
+    unit: um
+    spec_type: TOLERANCE
+    lower_limit: -30
+    upper_limit: 30
+    nominal: 0
+    tolerance: 30
+    spec_display: ± 30 um
+    stable_key: CE-95-020-00-01::track-height-calibration-front-track
+    display_order: 8
+    source_row: 62
+    source_cells:
+      - E62
+      - J62
+  - section: BH Setup & Calibration Heater Block Setup
+    description: Heater Block Temperature Measurement
+    unit: °C
+    spec_type: TOLERANCE
+    lower_limit: 145
+    upper_limit: 155
+    nominal: 150
+    tolerance: 5
+    spec_display: 150°C ± 5°C
+    stable_key: CE-95-020-00-01::heater-block-temperature-measurement
+    display_order: 9
+    source_row: 63
+    source_cells:
+      - E63
+      - J63
+  - section: Bond Force Calibration
+    description: Force Ratio Check
+    unit: null
+    spec_type: RANGE
+    lower_limit: 1.24
+    upper_limit: 1.36
+    nominal: null
+    tolerance: null
+    spec_display: 1.24 – 1.36
+    stable_key: CE-95-020-00-01::force-ratio-check
+    display_order: 10
+    source_row: 64
+    source_cells:
+      - E64
+      - J64
+  - section: Bond Force Calibration
+    description: Bond Force Verification Input Force 25g
+    unit: g
+    spec_type: RANGE
+    lower_limit: 22
+    upper_limit: 28
+    nominal: null
+    tolerance: null
+    spec_display: 22 - 28 g
+    stable_key: CE-95-020-00-01::bond-force-verification-input-force-25g
+    display_order: 11
+    source_row: 65
+    source_cells:
+      - E65
+      - J65
+  - section: Bond Force Calibration
+    description: Bond Force Verification Input Force 100g
+    unit: g
+    spec_type: RANGE
+    lower_limit: 95
+    upper_limit: 105
+    nominal: null
+    tolerance: null
+    spec_display: 95 - 105 g
+    source_spec_display: 95 - 28 g
+    correction: B-04 (client revision D)
+    stable_key: CE-95-020-00-01::bond-force-verification-input-force-100g
+    display_order: 12
+    source_row: 66
+    source_cells:
+      - E66
+      - J66
+  - section: Bond Force Calibration
+    description: Bond Force Verification Input Force 200g
+    unit: g
+    spec_type: RANGE
+    lower_limit: 195
+    upper_limit: 205
+    nominal: null
+    tolerance: null
+    spec_display: 195 - 205 g
+    stable_key: CE-95-020-00-01::bond-force-verification-input-force-200g
+    display_order: 13
+    source_row: 67
+    source_cells:
+      - E67
+      - J67
+  - section: Wire Clamp Calibration Wire Clamp Force Verification
+    description: Input Force 50g
+    unit: g
+    spec_type: RANGE
+    lower_limit: 47
+    upper_limit: 53
+    nominal: null
+    tolerance: null
+    spec_display: 47 - 53 g
+    stable_key: CE-95-020-00-01::input-force-50g
+    display_order: 14
+    source_row: 68
+    source_cells:
+      - E68
+      - J68
+  - section: Wire Clamp Calibration Wire Clamp Force Verification
+    description: Input Force 100g
+    unit: g
+    spec_type: RANGE
+    lower_limit: 97
+    upper_limit: 103
+    nominal: null
+    tolerance: null
+    spec_display: 97 - 103 g
+    stable_key: CE-95-020-00-01::input-force-100g
+    display_order: 15
+    source_row: 69
+    source_cells:
+      - E69
+      - J69
+  - section: Wire Clamp Calibration Wire Clamp Force Verification
+    description: Input Force 180g
+    unit: g
+    spec_type: RANGE
+    lower_limit: 177
+    upper_limit: 183
+    nominal: null
+    tolerance: null
+    spec_display: 177 - 183 g
+    stable_key: CE-95-020-00-01::input-force-180g
+    display_order: 16
+    source_row: 70
+    source_cells:
+      - E70
+      - J70
+  - section: Transducer Calibration (TVC)
+    description: Transducer Calibration US1
+    unit: DAC
+    spec_type: TOLERANCE
+    lower_limit: -10
+    upper_limit: 10
+    nominal: 0
+    tolerance: 10
+    spec_display: ± 10 DAC
+    stable_key: CE-95-020-00-01::transducer-calibration-us1
+    display_order: 17
+    source_row: 71
+    source_cells:
+      - E71
+      - J71
+  - section: Transducer Calibration (TVC)
+    description: Transducer Calibration US2
+    unit: '%'
+    spec_type: RANGE
+    lower_limit: 100
+    upper_limit: 180
+    nominal: null
+    tolerance: null
+    spec_display: 100 – 180 %
+    stable_key: CE-95-020-00-01::transducer-calibration-us2
+    display_order: 18
+    source_row: 72
+    source_cells:
+      - E72
+      - J72
+  - section: Transducer Calibration (TVC)
+    description: Tranducer Impedance
+    unit: ohm
+    spec_type: RANGE
+    lower_limit: 5
+    upper_limit: 24
+    nominal: null
+    tolerance: null
+    spec_display: 5 – 24 ohm
+    stable_key: CE-95-020-00-01::tranducer-impedance
+    display_order: 19
+    source_row: 73
+    source_cells:
+      - E73
+      - J73
+notes:
+  - >-
+    B-04: specification at J66 printed as "95 - 28 g" — loaded as "95 - 105 g" per B-04 (client
+    revision D).
+  - >-
+    N-01: "Track Height Calibration, Top Plate" specification printed as "-295 - -305" — high-to-low
+    printed range with no unit; inverted per INV-04 and NOT client-dispositioned (unlike B-04).
+    Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client decision.
+    PR-TLP-05.
+  - >-
+    N-05: TLP §5.1 states 21 calibration measurements; the source sheet has 20 measurement rows. The
+    source wins; discrepancy recorded.
+  - >-
+    B-04 load revision: B-04: Bond Force Verification Input Force 100g specification printed as "95
+    - 28 g" (inverted, INV-04). Client decision (TLP §3 option (a)): corrected to 95 - 105 g and
+    loaded as new revision D through the normal authoring workflow.
+ambiguities:
+  - code: B-04
+    message: >-
+      specification at J66 printed as "95 - 28 g" — loaded as "95 - 105 g" per B-04 (client revision
+      D).
+    cells:
+      - J66
+  - code: N-01
+    message: >-
+      "Track Height Calibration, Top Plate" specification printed as "-295 - -305" — high-to-low
+      printed range with no unit; inverted per INV-04 and NOT client-dispositioned (unlike B-04).
+      Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client decision.
+      PR-TLP-05.
+    cells:
+      - J61
+  - code: N-05
+    message: >-
+      TLP §5.1 states 21 calibration measurements; the source sheet has 20 measurement rows. The
+      source wins; discrepancy recorded.
+    cells: []

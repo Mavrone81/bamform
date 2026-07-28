@@ -785,6 +785,25 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /approval-routes:
+    get:
+      tags: [Asset Types]
+      operationId: listApprovalRoutes
+      summary: List approval routes
+      description: |
+        Slice 13-TL. Read-only, seeded reference data (PR-DBD-09) - resolves
+        the approvalRouteId that POST /asset-types requires. Routes are
+        never created via the API.
+      responses:
+        '200':
+          description: Active approval routes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ApprovalRoute' }
+        '401': { $ref: '#/components/responses/Problem' }
+
   /templates:
     get:
       tags: [Templates]
@@ -810,6 +829,35 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/FormTemplate' }
         '401': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Templates]
+      operationId: createTemplate
+      summary: Create a form template shell (BAMFORM-TLP-001 template load)
+      description: |
+        ENGINEER or DOC_CONTROLLER. Slice 13-TL - exists solely for the
+        TLP-001 load tooling (PR-TLP-07: the load is an authenticated,
+        audited operation through the real API, never a DB migration).
+        Content (items, measurements, standing content) still arrives only
+        through the revision-authoring endpoints below.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTemplateRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FormTemplate' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: Document number already exists (INV-07)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
 
   /templates/{templateId}:
     parameters:
@@ -2736,6 +2784,22 @@ components:
           type: [string, 'null']
           format: uuid
           description: Resolves to null if no revision has ever been approved
+
+    CreateTemplateRequest:
+      type: object
+      required: [documentNumber, title]
+      properties:
+        documentNumber: { type: string, minLength: 1, examples: ['CE 95 020 00 01'] }
+        title: { type: string, minLength: 1 }
+
+    ApprovalRoute:
+      type: object
+      required: [id, code, name, active]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, examples: ['SINGLE_STAGE_TL_OR_ENG'] }
+        name: { type: string }
+        active: { type: boolean }
 
     TemplateRevision:
       type: object

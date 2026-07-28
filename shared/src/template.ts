@@ -39,6 +39,19 @@ export const formTemplateSchema = z.object({
 });
 export type FormTemplate = z.infer<typeof formTemplateSchema>;
 
+/**
+ * Slice 13-TL: `POST /templates` — the endpoint BAMFORM-TLP-001's load
+ * tooling drives (PR-TLP-07: the load is an authenticated operation
+ * attributable to a named person, producing audit events — not a DB
+ * migration, PR-DBD-10). Content arrives through the slice-4 revision
+ * authoring endpoints; this creates only the template shell.
+ */
+export const createTemplateRequestSchema = z.object({
+  documentNumber: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+});
+export type CreateTemplateRequest = z.infer<typeof createTemplateRequestSchema>;
+
 // -------------------------------------------------------------------- standing_content
 
 export const partRequiredSchema = z.object({

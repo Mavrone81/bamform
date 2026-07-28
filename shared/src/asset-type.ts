@@ -28,6 +28,20 @@ export const assetTypeCreateSchema = z.object({
 });
 export type AssetTypeCreate = z.infer<typeof assetTypeCreateSchema>;
 
+/**
+ * Slice 13-TL: `GET /approval-routes` — read-only reference data (seeded by
+ * migration, PR-DBD-09). Exists so `POST /asset-types`' required
+ * `approvalRouteId` can be resolved over HTTP (the template-load tooling
+ * and the admin UI both need it; previously there was no HTTP source).
+ */
+export const approvalRouteSchema = z.object({
+  id: z.string().uuid(),
+  code: z.string(),
+  name: z.string(),
+  active: z.boolean(),
+});
+export type ApprovalRoute = z.infer<typeof approvalRouteSchema>;
+
 export const assetTypeUpdateSchema = z.object({
   name: z.string().trim().min(1).optional(),
   description: z.string().nullable().optional(),

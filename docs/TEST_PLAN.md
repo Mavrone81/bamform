@@ -326,6 +326,46 @@ clear is audited — `AssetUpdate.areaId` is nullable in Zod and openapi alike.
 | I-VOID-11 | PDF of a voided-archived record | renders VOID watermark/banner/footer with reason + voider name over the untouched content |
 | I-VOID-12 | Complete → void → regenerate → complete the replacement (review V-1 / probe P5) | compliance reads ONE period, completed — never `due=2, completed=1, notCompleted=1` |
 
+## 6.2 Template load — slice 13-TL (BAMFORM-TLP-001, AC-01)
+
+`api/test/integration/template-load/`: `xlsx-reader.spec.ts` (I-TL-01..04), `parse.spec.ts`
+(I-TL-05..16 + the §4.2 spec-parser table), `yaml-drift.spec.ts` (I-TL-17..18),
+`load-e2e.spec.ts` (I-TL-19..24 — also discharges **U-CAS-08's real-data case** end-to-end),
+`loader-endpoints.spec.ts` (I-TL-25..27). All run against the REAL workbooks in
+`Sample of Forms/` (PR-TST-18's real-template-content exception); the reader is additionally
+validated against a manually transcribed fixture
+(`scripts/template-load/fixtures/doc4-manual-transcription.json`).
+
+| ID | Case | Expected |
+|---|---|---|
+| I-TL-01 | Hand-rolled xlsx reader over all 12 real workbooks | reads every file; 2 sheets each incl. `Revision History` |
+| I-TL-02 | Doc 4 vs the manually transcribed reference fixture | every transcribed cell reproduced VERBATIM (incl. `95 - 28 g`), and (02b) zero non-empty cells outside the fixture — the comparison is complete, not sampled |
+| I-TL-03 | Entities, rich-text runs, CRLF in shared strings | decoded exactly (doc 9 curly apostrophe, doc 4 multi-line revision details) |
+| I-TL-04 | Formula error cells (defect B-01) | surfaced as `#ERROR:#REF!`/`#ERROR:#VALUE!`, never as ordinary text |
+| I-TL-05 | 12 documents parsed | document numbers + titles verbatim (incl. machine-identifier blanks and doc 12's embedded CRLF) |
+| I-TL-06 | Item counts + per-frequency distribution per document | matches the SOURCE sheets — 146 items total; the TLP §2 145 total is a source-vs-TLP discrepancy captured as N-04 |
+| I-TL-07 | Instruction verbatimness | interior verbatim, edges trimmed (per the TLP §6.1 example + API contract); interior quirks (`Bond Force  DAC`, `Trasport`) survive |
+| I-TL-08 | Standing content mapping (TLP §4.1) | PPE with `(If required)` qualifiers, safety/procedure/remarks verbatim incl. the three cascade-anomaly remark variants (OI-08 territory) |
+| I-TL-09 | Doc 4 measurements | 20 rows (TLP said 21 → N-05); sections inherited; **B-04 loaded as 95–105 g per client revision D, source text preserved**; ` -295 - -305` escalated as TEXT (N-01); §4.2 forms parsed |
+| I-TL-10 | Doc 6 measurements | 24 spec lines incl. continuation rows; PASS_FAIL judgements; comma-decimal + qualitative specs escalated as TEXT (N-02/N-08); duplicated `XY =` registered (N-03) |
+| I-TL-11 | Doc 5 dual-variant USL/LSL, doc 8 LCL/UCL, doc 1 Pass/Fail | 38 / 1 / 1 measurements; min/max normalisation with label-swap register (N-06); synthesised displays flagged |
+| I-TL-12 | Doc 11 defective numbering | 11 rows loaded, positional numbers, printed numbers (incl. the missing one) preserved; N-04 registered |
+| I-TL-13 | Revision histories | verbatim codes (doc 5's `'B '`), serials → ISO dates, B-02 gap detected, B-03-class out-of-order dates found on docs 5/7/10/12 |
+| I-TL-14 | Stable keys (PR-TLP-06) | `{doc-number}::{slug}`, unique within each document |
+| I-TL-15 | Load revision codes | doc 4 loads as client revision D; all others at printed revision; B-01 registered for docs 1/9 |
+| I-TL-16 | Stray out-of-grid cells | doc 5 `Q38`, doc 6 `AA53` surfaced (N-07), never loaded |
+| I-TL-17 | Committed YAML drift guard (PR-TLP-08/09/10) | byte-match vs re-extraction + lossless round-trip |
+| I-TL-18 | Committed AC-01 evidence pack drift guard | byte-match vs regeneration (12 files + REGISTER.md) |
+| I-TL-19 | Loader over real HTTP, then immediate re-run | 12 created; re-run 12 unchanged, ZERO writes, no duplicate machines (idempotency) |
+| I-TL-20 | Revision plans | doc 1: codes `0,A,C,D,E` over contiguous ordinals 0–4 (B-02 visible); doc 4 ends CURRENT at D with C superseded |
+| I-TL-21 | Loaded content vs YAML | doc 4's CURRENT: 14 items + 20 measurements exactly; B-04 = 95–105 g; N-01 = TEXT; standing content intact |
+| I-TL-22 | Sample machines (B-09 / decision 2026-07-27) | `PROV-XXXXXXXX` codes, `codeProvisional=true` (RED), SAMPLE-marked; schedule rules materialised per template frequency |
+| I-TL-23 | **Proof of life** | scheduler tick generates jobs; ASM Y job's `frequency_scope` = {M3,M6,Y} (U-CAS-08) and its checklist/measurements EQUAL the YAML; second tick generates 0 |
+| I-TL-24 | Attributability (PR-TLP-07) | audit events: 12 `form_template:create`, 12 `asset_type:create`, 13 `asset:create`, 34 `template_revision:approve` |
+| I-TL-25 | `POST /templates` | 201 + audit event; duplicate document number 409 (INV-07), never a silent upsert |
+| I-TL-26 | `POST /templates` gating | MAINTAINER 403, anonymous 401, invalid body 422 with no row created |
+| I-TL-27 | `GET /approval-routes` | seeded route listed for any authenticated user; anonymous 401 |
+
 ---
 
 # 7. Contract Tests

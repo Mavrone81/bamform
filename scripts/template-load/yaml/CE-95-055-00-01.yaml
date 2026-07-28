@@ -1,0 +1,155 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 055 00 01
+title: "Preventive Maintenance Work Instruction / \r\nRecord AVS 35-____"
+asset_type_code: AVS_35
+asset_type_name: AVS 35
+printed_revision: A
+current_revision: A
+source_file: CE 95 055 00 01 Preventive Maintenance Work Instruction Record AVS.xlsx
+source_sha256: 3ca2d70a9768d04c6f2393dccefd142ca2d5b60b072db28c26941605d66d7891
+sheet_name: CE 95 055 00 01
+frequency_banner: Monthly (1M) Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2022-12-15'
+    details: Creation
+    revised_by: Jackson Chin
+    approved_by: Suren
+  - code: A
+    date: '2022-04-27'
+    details: Add Headline name is Preventive Maintenance Work Instruction / Record AVS 35-____
+    revised_by: Sara
+    approved_by: Suren
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D6
+  partsRequired: D9:M14
+  ppe: D15:D18
+  safety: C20
+  procedure: C22:C23
+  remarks: A51
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M1
+    instruction: Check all the push button and selector switch function.
+    stable_key: CE-95-055-00-01::check-all-the-push-button-and-selector-switch-function
+    display_order: 0
+    source_row: 26
+  - item_no: 2
+    printed_no: '2'
+    frequency: M1
+    instruction: Check reed switch for winding/unwinding and dancing roller function.
+    stable_key: CE-95-055-00-01::check-reed-switch-for-winding-unwinding-and-dancing-roller-f
+    display_order: 1
+    source_row: 27
+  - item_no: 3
+    printed_no: '3'
+    frequency: M1
+    instruction: Check reel stopper clean debits defect punch
+    stable_key: CE-95-055-00-01::check-reel-stopper-clean-debits-defect-punch
+    display_order: 2
+    source_row: 28
+  - item_no: 4
+    printed_no: '4'
+    frequency: M1
+    instruction: Clean camera lens with blower
+    stable_key: CE-95-055-00-01::clean-camera-lens-with-blower
+    display_order: 3
+    source_row: 29
+  - item_no: 5
+    printed_no: '5'
+    frequency: M3
+    instruction: Check all door switch sensor
+    stable_key: CE-95-055-00-01::check-all-door-switch-sensor
+    display_order: 4
+    source_row: 30
+  - item_no: 6
+    printed_no: '6'
+    frequency: M3
+    instruction: Check the movement all door
+    stable_key: CE-95-055-00-01::check-the-movement-all-door
+    display_order: 5
+    source_row: 31
+  - item_no: 7
+    printed_no: '7'
+    frequency: M6
+    instruction: Greasing the shaft and linear guide for vision sliding unit.
+    stable_key: CE-95-055-00-01::greasing-the-shaft-and-linear-guide-for-vision-sliding-unit
+    display_order: 6
+    source_row: 32
+  - item_no: 8
+    printed_no: '8'
+    frequency: M6
+    instruction: Greasing the linear guide for the dancing roller.
+    stable_key: CE-95-055-00-01::greasing-the-linear-guide-for-the-dancing-roller
+    display_order: 7
+    source_row: 33
+  - item_no: 9
+    printed_no: '9'
+    frequency: 'Y'
+    instruction: Check the e-stop and safety door interlock function.
+    stable_key: CE-95-055-00-01::check-the-e-stop-and-safety-door-interlock-function
+    display_order: 8
+    source_row: 34
+  - item_no: 10
+    printed_no: '10'
+    frequency: 'Y'
+    instruction: Check the electrical cabinet for burnt mark on relay and contactor, replace if necessary.
+    stable_key: CE-95-055-00-01::check-the-electrical-cabinet-for-burnt-mark-on-relay-and-con
+    display_order: 9
+    source_row: 35
+  - item_no: 11
+    printed_no: '11'
+    frequency: 'Y'
+    instruction: Check and tighten all electrical terminals at the control panel.
+    stable_key: CE-95-055-00-01::check-and-tighten-all-electrical-terminals-at-the-control-pa
+    display_order: 10
+    source_row: 36
+  - item_no: 12
+    printed_no: '12'
+    frequency: 'Y'
+    instruction: Check UPS Function , replace if necessary
+    stable_key: CE-95-055-00-01::check-ups-function-replace-if-necessary
+    display_order: 11
+    source_row: 37
+  - item_no: 13
+    printed_no: '13'
+    frequency: 'Y'
+    instruction: Check the incoming air regulator in proper operation condition.
+    stable_key: CE-95-055-00-01::check-the-incoming-air-regulator-in-proper-operation-conditi
+    display_order: 12
+    source_row: 38
+measurements: []
+notes:
+  - >-
+    B-03: revision history dates are out of chronological order as printed (0=2022-12-15,
+    A=2022-04-27). Loaded in printed order with dates AS PRINTED; not silently reordered (TLP §3
+    B-03, PR-TLP-03).
+ambiguities:
+  - code: B-03
+    message: >-
+      revision history dates are out of chronological order as printed (0=2022-12-15, A=2022-04-27).
+      Loaded in printed order with dates AS PRINTED; not silently reordered (TLP §3 B-03,
+      PR-TLP-03).
+    cells: []

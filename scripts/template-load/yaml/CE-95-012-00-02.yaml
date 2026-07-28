@@ -1,0 +1,85 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 012 00 02
+title: Preventive Maintenance Record PM01
+asset_type_code: POWATEC_MOUNTING
+asset_type_name: Powatec Mounting
+printed_revision: '0'
+current_revision: '0'
+source_file: CE 95 012 00 02 Powatec Mounting Preventive Maintenance Record PM01.xlsx
+source_sha256: 9dc2235c18370a48ba8a5b308384ab50035d34b4178c73d59dbdd7006bde2e49
+sheet_name: 'CE '
+frequency_banner: Monthly (1M) Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2025-06-11'
+    details: Creation
+    revised_by: Kughan Sukumaran
+    approved_by: Surendran Ganesan
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D6
+  partsRequired: D9:M11
+  ppe: D12:D15
+  safety: C17
+  procedure: C19:C20
+  remarks: A47
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M1
+    instruction: Vacuum clean the surface area
+    stable_key: CE-95-012-00-02::vacuum-clean-the-surface-area
+    display_order: 0
+    source_row: 26
+  - item_no: 2
+    printed_no: '2'
+    frequency: M1
+    instruction: Check the rotating knife bearing condition
+    stable_key: CE-95-012-00-02::check-the-rotating-knife-bearing-condition
+    display_order: 1
+    source_row: 27
+  - item_no: 3
+    printed_no: '3'
+    frequency: M1
+    instruction: Check the handle spring condition
+    stable_key: CE-95-012-00-02::check-the-handle-spring-condition
+    display_order: 2
+    source_row: 28
+  - item_no: 4
+    printed_no: '4'
+    frequency: M1
+    instruction: Clean and lubricate the knife linear guide
+    stable_key: CE-95-012-00-02::clean-and-lubricate-the-knife-linear-guide
+    display_order: 3
+    source_row: 29
+measurements: []
+notes:
+  - >-
+    N-09: worksheet is named "CE ", not the document number. Cosmetic; the document number is taken
+    from the title block.
+ambiguities:
+  - code: N-09
+    message: >-
+      worksheet is named "CE ", not the document number. Cosmetic; the document number is taken from
+      the title block.
+    cells: []

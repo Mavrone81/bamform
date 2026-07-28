@@ -1,0 +1,99 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 012 00 01
+title: Preventive Maintenance Record EP01
+asset_type_code: EMERALD_PICK_PLACE
+asset_type_name: Emerald Pick and Place
+printed_revision: '0'
+current_revision: '0'
+source_file: CE 95 012 00 01 Emerald Pick and Place Preventive Maintenance Record EP01.xlsx
+source_sha256: 0e766ccfb0917c558d8b9baa4897e66239293a51824320f1b672b0567d0a863b
+sheet_name: 'CE '
+frequency_banner: Monthly (1M) Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2025-06-11'
+    details: Creation
+    revised_by: Kughan Sukumaran
+    approved_by: Surendran Ganesan
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D6
+  partsRequired: D9:M11
+  ppe: D12:D15
+  safety: C17
+  procedure: C19:C20
+  remarks: A39
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M1
+    instruction: Clean and lubricate X & Y- axis ball screw and linear guide
+    stable_key: CE-95-012-00-01::clean-and-lubricate-x-y-axis-ball-screw-and-linear-guide
+    display_order: 0
+    source_row: 23
+  - item_no: 2
+    printed_no: '2'
+    frequency: M1
+    instruction: Check door gas spring condition
+    stable_key: CE-95-012-00-01::check-door-gas-spring-condition
+    display_order: 1
+    source_row: 24
+  - item_no: 3
+    printed_no: '3'
+    frequency: M1
+    instruction: Inspection and check safety interlock / emergency stop is functional
+    stable_key: CE-95-012-00-01::inspection-and-check-safety-interlock-emergency-stop-is-func
+    display_order: 2
+    source_row: 25
+  - item_no: 4
+    printed_no: '4'
+    frequency: M1
+    instruction: Clean and lubricate conveyor ball screw and linear guide
+    stable_key: CE-95-012-00-01::clean-and-lubricate-conveyor-ball-screw-and-linear-guide
+    display_order: 3
+    source_row: 26
+  - item_no: 5
+    printed_no: '5'
+    frequency: M3
+    instruction: Visual Check conveyor belt for wear and tear
+    stable_key: CE-95-012-00-01::visual-check-conveyor-belt-for-wear-and-tear
+    display_order: 4
+    source_row: 27
+  - item_no: 6
+    printed_no: '6'
+    frequency: M3
+    instruction: Check machine button and switch condition
+    stable_key: CE-95-012-00-01::check-machine-button-and-switch-condition
+    display_order: 5
+    source_row: 28
+measurements: []
+notes:
+  - >-
+    N-09: worksheet is named "CE ", not the document number. Cosmetic; the document number is taken
+    from the title block.
+ambiguities:
+  - code: N-09
+    message: >-
+      worksheet is named "CE ", not the document number. Cosmetic; the document number is taken from
+      the title block.
+    cells: []
