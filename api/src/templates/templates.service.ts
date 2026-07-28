@@ -1,18 +1,59 @@
 import { Injectable } from '@nestjs/common';
-import type { FormTemplate } from '@bamform/shared';
-import { notFoundProblem } from '../common/domain-problems';
+import { AuditActionT, Prisma } from '@prisma/client';
+import type { CreateTemplateRequest, FormTemplate } from '@bamform/shared';
+import { AuditEventService } from '../audit/audit-event.service';
+import type { ActorMeta } from '../common/actor-meta';
+import { conflictProblem, notFoundProblem } from '../common/domain-problems';
 import { decodeCursor, normaliseLimit, paginate, type Page } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { toFormTemplate } from './mappers';
 
 /**
- * PR-021 `form_template`. Read-only in this slice — the twelve source
- * templates are loaded by BAMFORM-TLP-001's separate tooling (PR-DBD-10),
- * not through this API; there is deliberately no `POST /templates` here.
+ * PR-021 `form_template`. The twelve source templates are loaded by
+ * BAMFORM-TLP-001's tooling (PR-DBD-10) — slice 13-TL added the bounded
+ * `create` below exactly for that tooling, because PR-TLP-07 requires the
+ * load to run as an authenticated operation attributable to a named person,
+ * producing audit events, through the real API (not a DB migration and not
+ * direct DB writes). Everything else remains read-only; template CONTENT
+ * still arrives only through the slice-4 revision-authoring endpoints.
  */
 @Injectable()
 export class TemplatesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditEventService,
+  ) {}
+
+  async create(dto: CreateTemplateRequest, actor: ActorMeta): Promise<FormTemplate> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const row = await tx.formTemplate.create({
+          data: { documentNumber: dto.documentNumber, title: dto.title },
+        });
+
+        await this.audit.record(tx, {
+          actorId: actor.actorId,
+          action: AuditActionT.create,
+          entityType: 'form_template',
+          entityId: row.id,
+          after: { documentNumber: row.documentNumber, title: row.title },
+          sourceIp: actor.sourceIp,
+          requestId: actor.requestId,
+        });
+
+        return toFormTemplate(row, null, null);
+      });
+    } catch (error) {
+      // INV-07: document numbers are unique. Loudly conflict — the loader's
+      // idempotency comes from reading back, never from silent upserts.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw conflictProblem(
+          `A form template with document number '${dto.documentNumber}' already exists.`,
+        );
+      }
+      throw error;
+    }
+  }
 
   async list(params: { limit?: unknown; cursor?: string }): Promise<Page<FormTemplate>> {
     const limit = normaliseLimit(params.limit);

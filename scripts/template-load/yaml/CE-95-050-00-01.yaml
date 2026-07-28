@@ -1,0 +1,153 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 050 00 01
+title: MB E-Test Preventive Maintenance Record______
+asset_type_code: MB_E_TEST
+asset_type_name: MB E-Test
+printed_revision: D
+current_revision: D
+source_file: CE 95 050 00 01 MB E-test Preventive Maintenance Record .xlsx
+source_sha256: 0c031e1165823882c1df3c3d564435c475c9c238f29b5a64a39feb07e7cdcefa
+sheet_name: CE 95 050 00 01
+frequency_banner: Monthly (1M) Three Month (3M) Six Month (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2021-04-05'
+    details: New Release
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: A
+    date: '2021-04-19'
+    details: Updated PM frequency
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: B
+    date: '2021-09-21'
+    details: "1. Include monthly replacement for test head probe pin.\r\n2. Include quaterly inspection for safety interlock / emergency stop\r\n3. Add footnote"
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: C
+    date: '2023-04-27'
+    details: Add Headline name is MB E-Test Preventive Maintenance Record ______
+    revised_by: Sara
+    approved_by: Suren
+  - code: D
+    date: '2023-03-20'
+    details: Update instruction for Item 2,5,6 and 10
+    revised_by: Sara
+    approved_by: Suren
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For 6M and Y maintenance, 1M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D8
+  partsRequired: D11:M16
+  ppe: D17:D20
+  safety: C22
+  procedure: C24:C25
+  remarks: A50
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M1
+    instruction: Check each sensors are working and ensure its at correct state.
+    stable_key: CE-95-050-00-01::check-each-sensors-are-working-and-ensure-its-at-correct-sta
+    display_order: 0
+    source_row: 28
+  - item_no: 2
+    printed_no: '2'
+    frequency: M1
+    instruction: Check Winding/Unwinding spindle condition
+    stable_key: CE-95-050-00-01::check-winding-unwinding-spindle-condition
+    display_order: 1
+    source_row: 29
+  - item_no: 3
+    printed_no: '3'
+    frequency: M1
+    instruction: >-
+      Check disconnecting sprocket wheel and ensure the wheels is at lock position after
+      Initilization.
+    stable_key: CE-95-050-00-01::check-disconnecting-sprocket-wheel-and-ensure-the-wheels-is
+    display_order: 2
+    source_row: 30
+  - item_no: 4
+    printed_no: '4'
+    frequency: M1
+    instruction: Check the vacuum pump functionality and efficiency
+    stable_key: CE-95-050-00-01::check-the-vacuum-pump-functionality-and-efficiency
+    display_order: 3
+    source_row: 31
+  - item_no: 5
+    printed_no: '5'
+    frequency: M1
+    instruction: Check all machine switches condition
+    stable_key: CE-95-050-00-01::check-all-machine-switches-condition
+    display_order: 4
+    source_row: 32
+  - item_no: 6
+    printed_no: '6'
+    frequency: M1
+    instruction: Check inspection lamp condition
+    stable_key: CE-95-050-00-01::check-inspection-lamp-condition
+    display_order: 5
+    source_row: 33
+  - item_no: 7
+    printed_no: '7'
+    frequency: M3
+    instruction: Inspection and check safety interlock / emergency stop is functional
+    stable_key: CE-95-050-00-01::inspection-and-check-safety-interlock-emergency-stop-is-func
+    display_order: 6
+    source_row: 34
+  - item_no: 8
+    printed_no: '8'
+    frequency: M6
+    instruction: Clean and Lubricate the Leadscrew of the tester punch X axis
+    stable_key: CE-95-050-00-01::clean-and-lubricate-the-leadscrew-of-the-tester-punch-x-axis
+    display_order: 7
+    source_row: 35
+  - item_no: 9
+    printed_no: '9'
+    frequency: M6
+    instruction: Check ESD Grounding (less than 1.0 ohm)
+    stable_key: CE-95-050-00-01::check-esd-grounding-less-than-1-0-ohm
+    display_order: 8
+    source_row: 36
+  - item_no: 10
+    printed_no: '10'
+    frequency: M6
+    instruction: Check teminal panel for any abnormality
+    stable_key: CE-95-050-00-01::check-teminal-panel-for-any-abnormality
+    display_order: 9
+    source_row: 37
+measurements: []
+notes:
+  - >-
+    B-03: revision history dates are out of chronological order as printed (0=2021-04-05,
+    A=2021-04-19, B=2021-09-21, C=2023-04-27, D=2023-03-20). Loaded in printed order with dates AS
+    PRINTED; not silently reordered (TLP §3 B-03, PR-TLP-03). NOTE: TLP §3 flags this defect only on
+    CE 95 055 00 01; the same anomaly exists here.
+ambiguities:
+  - code: B-03
+    message: >-
+      revision history dates are out of chronological order as printed (0=2021-04-05, A=2021-04-19,
+      B=2021-09-21, C=2023-04-27, D=2023-03-20). Loaded in printed order with dates AS PRINTED; not
+      silently reordered (TLP §3 B-03, PR-TLP-03). NOTE: TLP §3 flags this defect only on CE 95 055
+      00 01; the same anomaly exists here.
+    cells: []

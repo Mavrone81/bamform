@@ -11,6 +11,15 @@ package-lock.json
 # so Prettier's YAML parser errors on it. Not code we format.
 scripts/ci/oasdiff-ignore.yaml
 
+# Slice 13-TL: GENERATED template-load artefacts (BAMFORM-TLP-001). The
+# drift guard (api/test/integration/template-load/yaml-drift.spec.ts,
+# I-TL-17/18) requires these to BYTE-match regeneration from the source
+# workbooks — a Prettier rewrite would break that equality, so they are
+# exempt. Regenerate via scripts/template-load/src/cli-extract.ts, never
+# hand-edit.
+scripts/template-load/yaml/
+scripts/template-load/evidence/
+
 # Pre-existing scaffolding this slice does not own (BUILD_HANDOFF §2 /
 # slice-1-brief.md constraints) — left in its original formatting.
 docs/

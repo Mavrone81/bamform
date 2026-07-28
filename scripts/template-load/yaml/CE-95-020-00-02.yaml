@@ -1,0 +1,861 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 020 00 02
+title: Besi Esec Wire Bond Preventive Maintenance Record EW_____
+asset_type_code: BESI_ESEC_WIRE_BOND
+asset_type_name: Besi Esec Wire Bond
+printed_revision: C
+current_revision: C
+source_file: CE 95 020 00 02 Besi Wire Bond Preventive Maintenance Record.xlsx
+source_sha256: d885f3604d1154632150131fc91dcf0d2cccf999e9c371592c726604ac981ba6
+sheet_name: CE 95 020 00 02
+frequency_banner: Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2021-03-24'
+    details: New Release
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: A
+    date: '2021-09-21'
+    details: "1.  Include quaterly inspection for safety interlock / emergency stop\r\n2. Include yearly Heater Block Calibration and temperature measurement recording\r\n3. Add footnote"
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: 'B '
+    date: '2023-08-06'
+    details: Add Headline name is Besi Esec Wire Bond Preventive Maintenance Record EW_____
+    revised_by: Sara
+    approved_by: Suren
+  - code: C
+    date: '2023-03-20'
+    details: Update instruction for Item 2,3 and 4, Change the  instruction
+    revised_by: Sara
+    approved_by: Suren
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D6
+  partsRequired: D9:M14
+  ppe: D15:D18
+  safety: C20
+  procedure: C22:C23
+  remarks: A51
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M3
+    instruction: Inspection and check safety interlock / emergency stop is functional
+    stable_key: CE-95-020-00-02::inspection-and-check-safety-interlock-emergency-stop-is-func
+    display_order: 0
+    source_row: 26
+  - item_no: 2
+    printed_no: '2'
+    frequency: M3
+    instruction: Vacuum Clean under the indexer
+    stable_key: CE-95-020-00-02::vacuum-clean-under-the-indexer
+    display_order: 1
+    source_row: 27
+  - item_no: 3
+    printed_no: '3'
+    frequency: M3
+    instruction: Check Input / Output spindle condition
+    stable_key: CE-95-020-00-02::check-input-output-spindle-condition
+    display_order: 2
+    source_row: 28
+  - item_no: 4
+    printed_no: '4'
+    frequency: M3
+    instruction: Visual check the tubing condition
+    stable_key: CE-95-020-00-02::visual-check-the-tubing-condition
+    display_order: 3
+    source_row: 29
+  - item_no: 5
+    printed_no: '5'
+    frequency: M3
+    instruction: Cleaning the indexer sensors
+    stable_key: CE-95-020-00-02::cleaning-the-indexer-sensors
+    display_order: 4
+    source_row: 30
+  - item_no: 6
+    printed_no: '6'
+    frequency: M6
+    instruction: Check functionality and cleaning of all cooling fans
+    stable_key: CE-95-020-00-02::check-functionality-and-cleaning-of-all-cooling-fans
+    display_order: 5
+    source_row: 31
+  - item_no: 7
+    printed_no: '7'
+    frequency: M6
+    instruction: Cleaning and lubricating the rails of the indexer
+    stable_key: CE-95-020-00-02::cleaning-and-lubricating-the-rails-of-the-indexer
+    display_order: 6
+    source_row: 32
+  - item_no: 8
+    printed_no: '8'
+    frequency: M6
+    instruction: Cleaning the surface of the indexer linear stepper motor
+    stable_key: CE-95-020-00-02::cleaning-the-surface-of-the-indexer-linear-stepper-motor
+    display_order: 7
+    source_row: 33
+  - item_no: 10
+    printed_no: '10'
+    frequency: M6
+    instruction: Check and exchanging Air Filters if neccesary
+    stable_key: CE-95-020-00-02::check-and-exchanging-air-filters-if-neccesary
+    display_order: 8
+    source_row: 34
+  - item_no: 11
+    printed_no: '11'
+    frequency: M6
+    instruction: Check ESD Grounding (less than 1.0 ohm)
+    stable_key: CE-95-020-00-02::check-esd-grounding-less-than-1-0-ohm
+    display_order: 9
+    source_row: 35
+  - item_no: 12
+    printed_no: '12'
+    frequency: 'Y'
+    instruction: Heater Block Calibration
+    stable_key: CE-95-020-00-02::heater-block-calibration
+    display_order: 10
+    source_row: 36
+  - item_no: 13
+    printed_no: '13'
+    frequency: 'Y'
+    instruction: Bond force sensor gap adjustment to 0.25 mm
+    stable_key: CE-95-020-00-02::bond-force-sensor-gap-adjustment-to-0-25-mm
+    display_order: 11
+    source_row: 37
+  - item_no: 14
+    printed_no: '14'
+    frequency: 'Y'
+    instruction: Wire clamp alignment to Transducer center
+    stable_key: CE-95-020-00-02::wire-clamp-alignment-to-transducer-center
+    display_order: 12
+    source_row: 38
+  - item_no: 15
+    printed_no: '15'
+    frequency: 'Y'
+    instruction: BHD Z height calibration, basic & main calibrations
+    stable_key: CE-95-020-00-02::bhd-z-height-calibration-basic-main-calibrations
+    display_order: 13
+    source_row: 39
+  - item_no: 16
+    printed_no: '16'
+    frequency: 'Y'
+    instruction: Bond force calibration, OTC Calibration
+    stable_key: CE-95-020-00-02::bond-force-calibration-otc-calibration
+    display_order: 14
+    source_row: 40
+measurements:
+  - section: Heater Block calibration
+    description: Temperature Measurement 150°C — ESEC 3100 / plus
+    unit: null
+    spec_type: RANGE
+    lower_limit: 145
+    upper_limit: 155
+    nominal: null
+    tolerance: null
+    spec_display: USL 145 / LSL 155
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::temperature-measurement-150-c-esec-3100-plus
+    display_order: 0
+    source_row: 57
+    source_cells:
+      - E57
+      - I57
+      - J57
+  - section: Heater Block calibration
+    description: Temperature Measurement 150°C — ESEC 3200
+    unit: null
+    spec_type: RANGE
+    lower_limit: 145
+    upper_limit: 155
+    nominal: null
+    tolerance: null
+    spec_display: USL 145 / LSL 155
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::temperature-measurement-150-c-esec-3200
+    display_order: 1
+    source_row: 57
+    source_cells:
+      - E57
+      - K57
+      - L57
+  - section: BHD Z height calibration
+    description: Z lower limit (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -0.7
+    upper_limit: -0.5
+    nominal: null
+    tolerance: null
+    spec_display: USL -0.7 / LSL -0.5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::z-lower-limit-mm-esec-3100-plus
+    display_order: 2
+    source_row: 58
+    source_cells:
+      - E58
+      - I58
+      - J58
+  - section: BHD Z height calibration
+    description: Z lower limit (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -0.7
+    upper_limit: -0.5
+    nominal: null
+    tolerance: null
+    spec_display: USL -0.7 / LSL -0.5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::z-lower-limit-mm-esec-3200
+    display_order: 3
+    source_row: 58
+    source_cells:
+      - E58
+      - K58
+      - L58
+  - section: BHD main calibation
+    description: upper focus limit, J7 (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 3.6
+    upper_limit: 4.6
+    nominal: null
+    tolerance: null
+    spec_display: USL 4.6 / LSL 3.6
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::upper-focus-limit-j7-mm-esec-3100-plus
+    display_order: 4
+    source_row: 59
+    source_cells:
+      - E59
+      - I59
+      - J59
+  - section: BHD main calibation
+    description: upper focus limit, J7 (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 3.6
+    upper_limit: 4.6
+    nominal: null
+    tolerance: null
+    spec_display: USL 4.6 / LSL 3.6
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::upper-focus-limit-j7-mm-esec-3200
+    display_order: 5
+    source_row: 59
+    source_cells:
+      - E59
+      - K59
+      - L59
+  - section: BHD main calibation
+    description: lower focus limit (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -4.2
+    upper_limit: -2.8
+    nominal: null
+    tolerance: null
+    spec_display: USL -2.8 / LSL -4.2
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::lower-focus-limit-mm-esec-3100-plus
+    display_order: 6
+    source_row: 60
+    source_cells:
+      - E60
+      - I60
+      - J60
+  - section: BHD main calibation
+    description: lower focus limit (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -4.5
+    upper_limit: -2.8
+    nominal: null
+    tolerance: null
+    spec_display: USL -2.8 / LSL -4.5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::lower-focus-limit-mm-esec-3200
+    display_order: 7
+    source_row: 60
+    source_cells:
+      - E60
+      - K60
+      - L60
+  - section: BHD main calibation
+    description: optic armlength Rv, J8 (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 124.5
+    upper_limit: 125.7
+    nominal: null
+    tolerance: null
+    spec_display: USL 125.7 / LSL 124.5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::optic-armlength-rv-j8-mm-esec-3100-plus
+    display_order: 8
+    source_row: 61
+    source_cells:
+      - E61
+      - I61
+      - J61
+  - section: BHD main calibation
+    description: optic armlength Rv, J8 (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 129.5
+    upper_limit: 130.5
+    nominal: null
+    tolerance: null
+    spec_display: USL 130.5 / LSL 129.5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::optic-armlength-rv-j8-mm-esec-3200
+    display_order: 9
+    source_row: 61
+    source_cells:
+      - E61
+      - K61
+      - L61
+  - section: BHD main calibation
+    description: camera rotation (deg) — ESEC 3100 / plus
+    unit: deg
+    spec_type: RANGE
+    lower_limit: -0.09
+    upper_limit: 0.09
+    nominal: null
+    tolerance: null
+    spec_display: USL 0.09 / LSL -0.09
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::camera-rotation-deg-esec-3100-plus
+    display_order: 10
+    source_row: 62
+    source_cells:
+      - E62
+      - I62
+      - J62
+  - section: BHD main calibation
+    description: camera rotation (deg) — ESEC 3200
+    unit: deg
+    spec_type: RANGE
+    lower_limit: -0.1
+    upper_limit: 0.1
+    nominal: null
+    tolerance: null
+    spec_display: USL 0.1 / LSL -0.1
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::camera-rotation-deg-esec-3200
+    display_order: 11
+    source_row: 62
+    source_cells:
+      - E62
+      - K62
+      - L62
+  - section: BHD main calibation
+    description: camera scale X (um) — ESEC 3100 / plus
+    unit: um
+    spec_type: RANGE
+    lower_limit: 2.8
+    upper_limit: 3
+    nominal: null
+    tolerance: null
+    spec_display: USL 3.0 / LSL 2.8
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::camera-scale-x-um-esec-3100-plus
+    display_order: 12
+    source_row: 63
+    source_cells:
+      - E63
+      - I63
+      - J63
+  - section: BHD main calibation
+    description: camera scale X (um) — ESEC 3200
+    unit: um
+    spec_type: RANGE
+    lower_limit: 2.9
+    upper_limit: 3.1
+    nominal: null
+    tolerance: null
+    spec_display: USL 3.1 / LSL 2.9
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::camera-scale-x-um-esec-3200
+    display_order: 13
+    source_row: 63
+    source_cells:
+      - E63
+      - K63
+      - L63
+  - section: BHD main calibation
+    description: camera scale Y (um) — ESEC 3100 / plus
+    unit: um
+    spec_type: RANGE
+    lower_limit: 2.8
+    upper_limit: 3
+    nominal: null
+    tolerance: null
+    spec_display: USL 3.0 / LSL 2.8
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::camera-scale-y-um-esec-3100-plus
+    display_order: 14
+    source_row: 64
+    source_cells:
+      - E64
+      - I64
+      - J64
+  - section: BHD main calibation
+    description: camera scale Y (um) — ESEC 3200
+    unit: um
+    spec_type: RANGE
+    lower_limit: 2.9
+    upper_limit: 3.1
+    nominal: null
+    tolerance: null
+    spec_display: USL 3.1 / LSL 2.9
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::camera-scale-y-um-esec-3200
+    display_order: 15
+    source_row: 64
+    source_cells:
+      - E64
+      - K64
+      - L64
+  - section: BHD main calibation
+    description: calibrated X range (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 53.2
+    upper_limit: 56
+    nominal: null
+    tolerance: null
+    spec_display: USL 56.0 / LSL 53.2
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::calibrated-x-range-mm-esec-3100-plus
+    display_order: 16
+    source_row: 65
+    source_cells:
+      - E65
+      - I65
+      - J65
+  - section: BHD main calibation
+    description: calibrated X range (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 60.4
+    upper_limit: 70
+    nominal: null
+    tolerance: null
+    spec_display: USL 70.0 / LSL 60.4
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::calibrated-x-range-mm-esec-3200
+    display_order: 17
+    source_row: 65
+    source_cells:
+      - E65
+      - K65
+      - L65
+  - section: BHD main calibation
+    description: calibrated Y range (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 70.4
+    upper_limit: 73
+    nominal: null
+    tolerance: null
+    spec_display: USL 73.0 / LSL 70.4
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::calibrated-y-range-mm-esec-3100-plus
+    display_order: 18
+    source_row: 66
+    source_cells:
+      - E66
+      - I66
+      - J66
+  - section: BHD main calibation
+    description: calibrated Y range (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 70.4
+    upper_limit: 80
+    nominal: null
+    tolerance: null
+    spec_display: USL 80.0 / LSL 70.4
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::calibrated-y-range-mm-esec-3200
+    display_order: 19
+    source_row: 66
+    source_cells:
+      - E66
+      - K66
+      - L66
+  - section: BHD main calibation
+    description: mech. X limit right (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 26.4
+    upper_limit: 29
+    nominal: null
+    tolerance: null
+    spec_display: USL 29.0 / LSL 26.4
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-x-limit-right-mm-esec-3100-plus
+    display_order: 20
+    source_row: 67
+    source_cells:
+      - E67
+      - I67
+      - J67
+  - section: BHD main calibation
+    description: mech. X limit right (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 30.2
+    upper_limit: 33
+    nominal: null
+    tolerance: null
+    spec_display: USL 33.0 / LSL 30.2
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-x-limit-right-mm-esec-3200
+    display_order: 21
+    source_row: 67
+    source_cells:
+      - E67
+      - K67
+      - L67
+  - section: BHD main calibation
+    description: mech. X limit left (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -29
+    upper_limit: -26.4
+    nominal: null
+    tolerance: null
+    spec_display: USL -26.4 / LSL -29.0
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-x-limit-left-mm-esec-3100-plus
+    display_order: 22
+    source_row: 68
+    source_cells:
+      - E68
+      - I68
+      - J68
+  - section: BHD main calibation
+    description: mech. X limit left (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -33
+    upper_limit: -30.2
+    nominal: null
+    tolerance: null
+    spec_display: USL -30.2 / LSL -33.0
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-x-limit-left-mm-esec-3200
+    display_order: 23
+    source_row: 68
+    source_cells:
+      - E68
+      - K68
+      - L68
+  - section: BHD main calibation
+    description: mech. Y limit rear (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 35.2
+    upper_limit: 37.25
+    nominal: null
+    tolerance: null
+    spec_display: USL 37.25 / LSL 35.20
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-y-limit-rear-mm-esec-3100-plus
+    display_order: 24
+    source_row: 69
+    source_cells:
+      - E69
+      - I69
+      - J69
+  - section: BHD main calibation
+    description: mech. Y limit rear (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: 35.2
+    upper_limit: 40
+    nominal: null
+    tolerance: null
+    spec_display: USL 40.0 / LSL 35.2
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-y-limit-rear-mm-esec-3200
+    display_order: 25
+    source_row: 69
+    source_cells:
+      - E69
+      - K69
+      - L69
+  - section: BHD main calibation
+    description: mech. Y limit front (mm) — ESEC 3100 / plus
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -37.25
+    upper_limit: -35.2
+    nominal: null
+    tolerance: null
+    spec_display: USL -35.20 / LSL -37.25
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-y-limit-front-mm-esec-3100-plus
+    display_order: 26
+    source_row: 70
+    source_cells:
+      - E70
+      - I70
+      - J70
+  - section: BHD main calibation
+    description: mech. Y limit front (mm) — ESEC 3200
+    unit: mm
+    spec_type: RANGE
+    lower_limit: -40
+    upper_limit: -35.2
+    nominal: null
+    tolerance: null
+    spec_display: USL -35.2 / LSL -40.0
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::mech-y-limit-front-mm-esec-3200
+    display_order: 27
+    source_row: 70
+    source_cells:
+      - E70
+      - K70
+      - L70
+  - section: Bond Force Calibration
+    description: Motor constant Kt, J2 — ESEC 3100 / plus
+    unit: null
+    spec_type: RANGE
+    lower_limit: 4.5
+    upper_limit: 5.5
+    nominal: null
+    tolerance: null
+    spec_display: USL 5.5 / LSL 4.5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::motor-constant-kt-j2-esec-3100-plus
+    display_order: 28
+    source_row: 71
+    source_cells:
+      - E71
+      - I71
+      - J71
+  - section: Bond Force Calibration
+    description: Motor constant Kt, J2 — ESEC 3200
+    unit: null
+    spec_type: RANGE
+    lower_limit: 4
+    upper_limit: 5
+    nominal: null
+    tolerance: null
+    spec_display: USL 5.0 / LSL 4.0
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::motor-constant-kt-j2-esec-3200
+    display_order: 29
+    source_row: 71
+    source_cells:
+      - E71
+      - K71
+      - L71
+  - section: Bond Force Calibration
+    description: Bond force gradient, J4 — ESEC 3100 / plus
+    unit: null
+    spec_type: RANGE
+    lower_limit: 1
+    upper_limit: 3
+    nominal: null
+    tolerance: null
+    spec_display: USL 3.0 / LSL 1.0
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::bond-force-gradient-j4-esec-3100-plus
+    display_order: 30
+    source_row: 72
+    source_cells:
+      - E72
+      - I72
+      - J72
+  - section: Bond Force Calibration
+    description: Bond force gradient, J4 — ESEC 3200
+    unit: null
+    spec_type: RANGE
+    lower_limit: 1
+    upper_limit: 3
+    nominal: null
+    tolerance: null
+    spec_display: USL 3.0 / LSL 1.0
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::bond-force-gradient-j4-esec-3200
+    display_order: 31
+    source_row: 72
+    source_cells:
+      - E72
+      - K72
+      - L72
+  - section: Ultrasonic System Properties
+    description: Transducer Impedance (ohm) — ESEC 3100 / plus
+    unit: ohm
+    spec_type: RANGE
+    lower_limit: 5
+    upper_limit: 15
+    nominal: null
+    tolerance: null
+    spec_display: USL 15 / LSL 5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::transducer-impedance-ohm-esec-3100-plus
+    display_order: 32
+    source_row: 73
+    source_cells:
+      - E73
+      - I73
+      - J73
+  - section: Ultrasonic System Properties
+    description: Transducer Impedance (ohm) — ESEC 3200
+    unit: ohm
+    spec_type: RANGE
+    lower_limit: 5
+    upper_limit: 15
+    nominal: null
+    tolerance: null
+    spec_display: USL 15 / LSL 5
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::transducer-impedance-ohm-esec-3200
+    display_order: 33
+    source_row: 73
+    source_cells:
+      - E73
+      - K73
+      - L73
+  - section: Ultrasonic System Properties
+    description: Transducer Frequency (khz) — ESEC 3100 / plus
+    unit: khz
+    spec_type: RANGE
+    lower_limit: 122
+    upper_limit: 132
+    nominal: null
+    tolerance: null
+    spec_display: USL 132 / LSL 122
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::transducer-frequency-khz-esec-3100-plus
+    display_order: 34
+    source_row: 74
+    source_cells:
+      - E74
+      - I74
+      - J74
+  - section: Ultrasonic System Properties
+    description: Transducer Frequency (khz) — ESEC 3200
+    unit: khz
+    spec_type: RANGE
+    lower_limit: 122
+    upper_limit: 132
+    nominal: null
+    tolerance: null
+    spec_display: USL 132 / LSL 122
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::transducer-frequency-khz-esec-3200
+    display_order: 35
+    source_row: 74
+    source_cells:
+      - E74
+      - K74
+      - L74
+  - section: Ultrasonic System Properties
+    description: Measurement Read Out OTC — ESEC 3100 / plus
+    unit: null
+    spec_type: RANGE
+    lower_limit: 0.2
+    upper_limit: 1
+    nominal: null
+    tolerance: null
+    spec_display: USL 1.0 / LSL 0.2
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::measurement-read-out-otc-esec-3100-plus
+    display_order: 36
+    source_row: 75
+    source_cells:
+      - E75
+      - I75
+      - J75
+  - section: Ultrasonic System Properties
+    description: Measurement Read Out OTC — ESEC 3200
+    unit: null
+    spec_type: RANGE
+    lower_limit: 0.2
+    upper_limit: 1
+    nominal: null
+    tolerance: null
+    spec_display: USL 1.0 / LSL 0.2
+    synthesized_display: true
+    stable_key: CE-95-020-00-02::measurement-read-out-otc-esec-3200
+    display_order: 37
+    source_row: 75
+    source_cells:
+      - E75
+      - K75
+      - L75
+notes:
+  - 'N-10: printed item numbering is non-contiguous (skips before 10) — loaded verbatim as printed.'
+  - >-
+    N-06: the calibration table carries TWO machine-variant limit pairs (ESEC 3100 / plus and ESEC
+    3200) in explicit USL/LSL columns. Loaded as two measurements per printed row (descriptions
+    suffixed with the variant) so no limit is lost; a technician records the pair matching the
+    machine's variant. Additionally the USL/LSL column labels are inconsistently ordered in the
+    source (the USL column holds the SMALLER endpoint at I57, K57, I58, K58); parsed limits use
+    min/max so no inverted range is loaded. Client to confirm both the modelling and the intended
+    labels.
+  - >-
+    N-07: stray cell outside the form grid: Q38 = "Preheat, Bond Process heat, and Post Heat blocks
+    calibration\r\n" — not loaded.
+  - >-
+    B-03: revision history dates are out of chronological order as printed (0=2021-03-24,
+    A=2021-09-21, B=2023-08-06, C=2023-03-20). Loaded in printed order with dates AS PRINTED; not
+    silently reordered (TLP §3 B-03, PR-TLP-03). NOTE: TLP §3 flags this defect only on CE 95 055 00
+    01; the same anomaly exists here.
+ambiguities:
+  - code: N-10
+    message: printed item numbering is non-contiguous (skips before 10) — loaded verbatim as printed.
+    cells: []
+  - code: N-06
+    message: >-
+      the calibration table carries TWO machine-variant limit pairs (ESEC 3100 / plus and ESEC 3200)
+      in explicit USL/LSL columns. Loaded as two measurements per printed row (descriptions suffixed
+      with the variant) so no limit is lost; a technician records the pair matching the machine's
+      variant. Additionally the USL/LSL column labels are inconsistently ordered in the source (the
+      USL column holds the SMALLER endpoint at I57, K57, I58, K58); parsed limits use min/max so no
+      inverted range is loaded. Client to confirm both the modelling and the intended labels.
+    cells:
+      - I57
+      - K57
+      - I58
+      - K58
+  - code: N-07
+    message: >-
+      stray cell outside the form grid: Q38 = "Preheat, Bond Process heat, and Post Heat blocks
+      calibration\r\n" — not loaded.
+    cells:
+      - Q38
+  - code: B-03
+    message: >-
+      revision history dates are out of chronological order as printed (0=2021-03-24, A=2021-09-21,
+      B=2023-08-06, C=2023-03-20). Loaded in printed order with dates AS PRINTED; not silently
+      reordered (TLP §3 B-03, PR-TLP-03). NOTE: TLP §3 flags this defect only on CE 95 055 00 01;
+      the same anomaly exists here.
+    cells: []

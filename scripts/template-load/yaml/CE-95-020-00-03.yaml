@@ -1,0 +1,599 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 020 00 03
+title: KNS Wire Bond Preventive Maintenance Record KW___
+asset_type_code: KNS_WIRE_BOND
+asset_type_name: KNS Wire Bond
+printed_revision: B
+current_revision: B
+source_file: CE 95 020 00 03 KNS Wire Bond Preventive Maintenance Record.xlsx
+source_sha256: 9c3fe3f1df8ac2b26dc53df823d5648a9ec85ce2b054b05d5916baecab96576a
+sheet_name: CE 95 020 00 01
+frequency_banner: Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2023-05-03'
+    details: New Release
+    revised_by: Kughan Sukumaran
+    approved_by: Surendran Ganesan
+  - code: A
+    date: '2024-03-20'
+    details: Update instruction for Item 2
+    revised_by: Saravanan Durairaj
+    approved_by: Surendran Ganesan
+  - code: B
+    date: '2024-08-23'
+    details: Add item 1 Calibration Record
+    revised_by: Saravanan Durairaj
+    approved_by: Surendran Ganesan
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D5
+  partsRequired: D8:M9
+  ppe: D10:D13
+  safety: C14
+  procedure: C16:C17
+  remarks: A42
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M3
+    instruction: Inspection and check safety interlock / emergency stop is functional
+    stable_key: CE-95-020-00-03::inspection-and-check-safety-interlock-emergency-stop-is-func
+    display_order: 0
+    source_row: 20
+  - item_no: 2
+    printed_no: '2'
+    frequency: M3
+    instruction: Check Winding/Unwinding spindle condition
+    stable_key: CE-95-020-00-03::check-winding-unwinding-spindle-condition
+    display_order: 1
+    source_row: 21
+  - item_no: 3
+    printed_no: '3'
+    frequency: M3
+    instruction: Inspect air/vacuum hoses
+    stable_key: CE-95-020-00-03::inspect-air-vacuum-hoses
+    display_order: 2
+    source_row: 22
+  - item_no: 4
+    printed_no: '4'
+    frequency: M3
+    instruction: Clean work holder linear scale
+    stable_key: CE-95-020-00-03::clean-work-holder-linear-scale
+    display_order: 3
+    source_row: 23
+  - item_no: 5
+    printed_no: '5'
+    frequency: M3
+    instruction: Check condition of card cage air filter
+    stable_key: CE-95-020-00-03::check-condition-of-card-cage-air-filter
+    display_order: 4
+    source_row: 24
+  - item_no: 6
+    printed_no: '6'
+    frequency: M3
+    instruction: Clean and lubricate track leadscrew
+    stable_key: CE-95-020-00-03::clean-and-lubricate-track-leadscrew
+    display_order: 5
+    source_row: 25
+  - item_no: 7
+    printed_no: '7'
+    frequency: M3
+    instruction: Clean XY Amplifier filter
+    stable_key: CE-95-020-00-03::clean-xy-amplifier-filter
+    display_order: 6
+    source_row: 26
+  - item_no: 8
+    printed_no: '8'
+    frequency: M3
+    instruction: Clean Z-node filter
+    stable_key: CE-95-020-00-03::clean-z-node-filter
+    display_order: 7
+    source_row: 27
+  - item_no: 10
+    printed_no: '10'
+    frequency: M6
+    instruction: Clean X and Y servomotors
+    stable_key: CE-95-020-00-03::clean-x-and-y-servomotors
+    display_order: 8
+    source_row: 28
+  - item_no: 11
+    printed_no: '11'
+    frequency: M6
+    instruction: Check and Adjust wire clamp opening gap
+    stable_key: CE-95-020-00-03::check-and-adjust-wire-clamp-opening-gap
+    display_order: 9
+    source_row: 29
+  - item_no: 12
+    printed_no: '12'
+    frequency: M6
+    instruction: Check tightness of ground strap
+    stable_key: CE-95-020-00-03::check-tightness-of-ground-strap
+    display_order: 10
+    source_row: 30
+  - item_no: 13
+    printed_no: '13'
+    frequency: M6
+    instruction: Check/Replace Power Supply Fan Filter
+    stable_key: CE-95-020-00-03::check-replace-power-supply-fan-filter
+    display_order: 11
+    source_row: 31
+  - item_no: 14
+    printed_no: '14'
+    frequency: M6
+    instruction: Check ESD Grounding (less than 1.0 ohm)
+    stable_key: CE-95-020-00-03::check-esd-grounding-less-than-1-0-ohm
+    display_order: 12
+    source_row: 32
+  - item_no: 15
+    printed_no: '15'
+    frequency: 'Y'
+    instruction: Make sure that there are no loose connections
+    stable_key: CE-95-020-00-03::make-sure-that-there-are-no-loose-connections
+    display_order: 13
+    source_row: 33
+  - item_no: 16
+    printed_no: '16'
+    frequency: 'Y'
+    instruction: Calibrate Bond head , Work holder , Bond force , Transducer  & Vision System
+    stable_key: CE-95-020-00-03::calibrate-bond-head-work-holder-bond-force-transducer-vision
+    display_order: 14
+    source_row: 34
+measurements:
+  - section: BH Setup & Calibration
+    description: EFO Height
+    unit: mils
+    spec_type: RANGE
+    lower_limit: 225
+    upper_limit: 235
+    nominal: null
+    tolerance: null
+    spec_display: 225 - 235 mils
+    stable_key: CE-95-020-00-03::efo-height
+    display_order: 0
+    source_row: 45
+    source_cells:
+      - E45
+      - J45
+  - section: BH Setup & Calibration
+    description: Wire Clamp Opening
+    unit: Div
+    spec_type: RANGE
+    lower_limit: 1.5
+    upper_limit: 2
+    nominal: null
+    tolerance: null
+    spec_display: 1.5 - 2 Div
+    stable_key: CE-95-020-00-03::wire-clamp-opening
+    display_order: 1
+    source_row: 46
+    source_cells:
+      - E46
+      - J46
+  - section: BH Setup & Calibration
+    description: Bond head Flatness
+    unit: ENC
+    spec_type: RANGE
+    lower_limit: null
+    upper_limit: 30
+    nominal: null
+    tolerance: null
+    spec_display: Side to Side <30 ENC
+    stable_key: CE-95-020-00-03::bond-head-flatness
+    display_order: 2
+    source_row: 47
+    source_cells:
+      - E47
+      - J47
+  - section: BH Setup & Calibration
+    description: Bond head Flatness
+    unit: ENC
+    spec_type: RANGE
+    lower_limit: null
+    upper_limit: 10
+    nominal: null
+    tolerance: null
+    spec_display: Front to Back <10 ENC
+    stable_key: CE-95-020-00-03::bond-head-flatness-2
+    display_order: 3
+    source_row: 48
+    source_cells:
+      - E48
+      - J48
+  - section: BH Setup & Calibration
+    description: X,Y,Z Encoder Signal Amplitude
+    unit: '%'
+    spec_type: RANGE
+    lower_limit: 93
+    upper_limit: 107
+    nominal: null
+    tolerance: null
+    spec_display: 93 - 107%
+    stable_key: CE-95-020-00-03::x-y-z-encoder-signal-amplitude
+    display_order: 4
+    source_row: 49
+    source_cells:
+      - E49
+      - J49
+  - section: Work Holder Calibration
+    description: Maximum Window Clamp Opening
+    unit: null
+    spec_type: TEXT
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: 75 mils
+    unparsed_reason: specification does not match any TLP §4.2 printed form
+    stable_key: CE-95-020-00-03::maximum-window-clamp-opening
+    display_order: 5
+    source_row: 53
+    source_cells:
+      - E53
+      - J53
+  - section: Work Holder Calibration
+    description: Heater Block Flatness Check
+    unit: mils
+    spec_type: RANGE
+    lower_limit: null
+    upper_limit: 4
+    nominal: null
+    tolerance: null
+    spec_display: Hmin ≤ 4mils
+    stable_key: CE-95-020-00-03::heater-block-flatness-check
+    display_order: 6
+    source_row: 54
+    source_cells:
+      - E54
+      - J54
+  - section: Work Holder Calibration
+    description: Rail Width Measurement
+    unit: null
+    spec_type: TEXT
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: 35mm Plate
+    unparsed_reason: specification does not match any TLP §4.2 printed form
+    stable_key: CE-95-020-00-03::rail-width-measurement
+    display_order: 7
+    source_row: 55
+    source_cells:
+      - E55
+      - J55
+  - section: Work Holder Calibration
+    description: Clamp Calibration
+    unit: null
+    spec_type: PASS_FAIL
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: Pass / Fail
+    stable_key: CE-95-020-00-03::clamp-calibration
+    display_order: 8
+    source_row: 56
+    source_cells:
+      - E56
+      - J56
+  - section: Work Holder Calibration
+    description: Rail Height Calibration
+    unit: null
+    spec_type: TEXT
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: Optimal
+    unparsed_reason: qualitative specification with no numeric content
+    stable_key: CE-95-020-00-03::rail-height-calibration
+    display_order: 9
+    source_row: 57
+    source_cells:
+      - E57
+      - J57
+  - section: Work Holder Calibration
+    description: Gripper Force Calibration
+    unit: null
+    spec_type: PASS_FAIL
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: Pass / Fail
+    stable_key: CE-95-020-00-03::gripper-force-calibration
+    display_order: 10
+    source_row: 58
+    source_cells:
+      - E58
+      - J58
+  - section: Work Holder Calibration
+    description: Ejector Force Calibration
+    unit: null
+    spec_type: PASS_FAIL
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: Pass / Fail
+    stable_key: CE-95-020-00-03::ejector-force-calibration
+    display_order: 11
+    source_row: 59
+    source_cells:
+      - E59
+      - J59
+  - section: Work Holder Calibration
+    description: Heater Block Temperature Measurement
+    unit: °C
+    spec_type: TOLERANCE
+    lower_limit: 167
+    upper_limit: 173
+    nominal: 170
+    tolerance: 3
+    spec_display: 170°C ± 3°C
+    stable_key: CE-95-020-00-03::heater-block-temperature-measurement
+    display_order: 12
+    source_row: 60
+    source_cells:
+      - E60
+      - J60
+  - section: Bond Force Calibration
+    description: Bond Force  DAC
+    unit: null
+    spec_type: TEXT
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: 6.4 - 7,1 counts/gram
+    unparsed_reason: comma-decimal number in specification — client to confirm intended value
+    stable_key: CE-95-020-00-03::bond-force-dac
+    display_order: 13
+    source_row: 61
+    source_cells:
+      - E61
+      - J61
+  - section: Bond Force Calibration
+    description: Sensor A/D
+    unit: counts/gram
+    spec_type: RANGE
+    lower_limit: 11
+    upper_limit: 24
+    nominal: null
+    tolerance: null
+    spec_display: 11 - 24 counts/gram
+    stable_key: CE-95-020-00-03::sensor-a-d
+    display_order: 14
+    source_row: 62
+    source_cells:
+      - E62
+      - J62
+  - section: Transducer Calibration
+    description: Resonant Frequency
+    unit: KHz (High Freq)
+    spec_type: TOLERANCE
+    lower_limit: 117
+    upper_limit: 127
+    nominal: 122
+    tolerance: 5
+    spec_display: 122 ± 5KHz (High Freq)
+    stable_key: CE-95-020-00-03::resonant-frequency
+    display_order: 15
+    source_row: 63
+    source_cells:
+      - E63
+      - J63
+  - section: Transducer Calibration
+    description: Transducer Impedance
+    unit: Ohms (High Freq)
+    spec_type: RANGE
+    lower_limit: 15
+    upper_limit: 75
+    nominal: null
+    tolerance: null
+    spec_display: 15 - 75 Ohms (High Freq)
+    stable_key: CE-95-020-00-03::transducer-impedance
+    display_order: 16
+    source_row: 64
+    source_cells:
+      - E64
+      - J64
+  - section: Vision System
+    description: PRS Calibration
+    unit: mils
+    spec_type: RANGE
+    lower_limit: 0.1384
+    upper_limit: 0.153
+    nominal: null
+    tolerance: null
+    spec_display: XX = +0.13840 to + 0.15300 mils
+    stable_key: CE-95-020-00-03::prs-calibration
+    display_order: 17
+    source_row: 65
+    source_cells:
+      - E65
+      - J65
+  - section: Vision System
+    description: PRS Calibration
+    unit: mils
+    spec_type: RANGE
+    lower_limit: 0.1384
+    upper_limit: 0.153
+    nominal: null
+    tolerance: null
+    spec_display: YY = +0.13840 to + 0.15300 mils
+    stable_key: CE-95-020-00-03::prs-calibration-2
+    display_order: 18
+    source_row: 66
+    source_cells:
+      - E66
+      - J66
+  - section: Vision System
+    description: PRS Calibration
+    unit: mils
+    spec_type: RANGE
+    lower_limit: -0.003
+    upper_limit: 0.003
+    nominal: null
+    tolerance: null
+    spec_display: XY = -0.00300 to +0.00300 mils
+    stable_key: CE-95-020-00-03::prs-calibration-3
+    display_order: 19
+    source_row: 67
+    source_cells:
+      - E67
+      - J67
+  - section: Vision System
+    description: PRS Calibration
+    unit: mils
+    spec_type: RANGE
+    lower_limit: -0.003
+    upper_limit: 0.003
+    nominal: null
+    tolerance: null
+    spec_display: XY = -0.00300 to +0.00300 mils
+    stable_key: CE-95-020-00-03::prs-calibration-4
+    display_order: 20
+    source_row: 68
+    source_cells:
+      - E68
+      - J68
+  - section: Pressure Setting
+    description: Diffuser Setting
+    unit: psi
+    spec_type: TOLERANCE
+    lower_limit: 28
+    upper_limit: 32
+    nominal: 30
+    tolerance: 2
+    spec_display: 30 ± 2 psi
+    stable_key: CE-95-020-00-03::diffuser-setting
+    display_order: 21
+    source_row: 69
+    source_cells:
+      - E69
+      - J69
+  - section: Pressure Setting
+    description: Air Guide Setting
+    unit: psi
+    spec_type: TOLERANCE
+    lower_limit: 23
+    upper_limit: 33
+    nominal: 28
+    tolerance: 5
+    spec_display: 28 ± 5 psi
+    stable_key: CE-95-020-00-03::air-guide-setting
+    display_order: 22
+    source_row: 70
+    source_cells:
+      - E70
+      - J70
+  - section: Pressure Setting
+    description: Wire Tensioner
+    unit: psi
+    spec_type: TOLERANCE
+    lower_limit: 11
+    upper_limit: 21
+    nominal: 16
+    tolerance: 5
+    spec_display: 16 ± 5 psi
+    stable_key: CE-95-020-00-03::wire-tensioner
+    display_order: 23
+    source_row: 71
+    source_cells:
+      - E71
+      - J71
+notes:
+  - >-
+    B-06: worksheet is named "CE 95 020 00 01" — copied from CE 95 020 00 01 (TLP §3 B-06).
+    Cosmetic; the document number is taken from the title block.
+  - 'N-10: printed item numbering is non-contiguous (skips before 10) — loaded verbatim as printed.'
+  - >-
+    N-08: "Maximum Window Clamp Opening" specification "75 mils" is specification does not match any
+    TLP §4.2 printed form — loaded as spec_type TEXT verbatim; client to confirm the intended
+    judgement. (sheet1!J53)
+  - >-
+    N-08: "Rail Width Measurement" specification "35mm Plate" is specification does not match any
+    TLP §4.2 printed form — loaded as spec_type TEXT verbatim; client to confirm the intended
+    judgement. (sheet1!J55)
+  - >-
+    N-08: "Rail Height Calibration" specification "Optimal" is qualitative specification with no
+    numeric content — loaded as spec_type TEXT verbatim; client to confirm the intended judgement.
+    (sheet1!J57)
+  - >-
+    N-02: "Bond Force  DAC" specification printed as "6.4 - 7,1 counts/gram" — comma decimal
+    (evident intent 7.1). Loaded as spec_type TEXT verbatim pending a client decision. (sheet1!J61)
+  - >-
+    N-03: "PRS Calibration" prints the spec line label "XY =" twice — evident intent is YX for one
+    of them. Both lines loaded verbatim; client to confirm.
+  - 'N-07: stray cell outside the form grid: AA53 = "a" — not loaded.'
+ambiguities:
+  - code: B-06
+    message: >-
+      worksheet is named "CE 95 020 00 01" — copied from CE 95 020 00 01 (TLP §3 B-06). Cosmetic;
+      the document number is taken from the title block.
+    cells: []
+  - code: N-10
+    message: printed item numbering is non-contiguous (skips before 10) — loaded verbatim as printed.
+    cells: []
+  - code: N-08
+    message: >-
+      "Maximum Window Clamp Opening" specification "75 mils" is specification does not match any TLP
+      §4.2 printed form — loaded as spec_type TEXT verbatim; client to confirm the intended
+      judgement. (sheet1!J53)
+    cells:
+      - J53
+  - code: N-08
+    message: >-
+      "Rail Width Measurement" specification "35mm Plate" is specification does not match any TLP
+      §4.2 printed form — loaded as spec_type TEXT verbatim; client to confirm the intended
+      judgement. (sheet1!J55)
+    cells:
+      - J55
+  - code: N-08
+    message: >-
+      "Rail Height Calibration" specification "Optimal" is qualitative specification with no numeric
+      content — loaded as spec_type TEXT verbatim; client to confirm the intended judgement.
+      (sheet1!J57)
+    cells:
+      - J57
+  - code: N-02
+    message: >-
+      "Bond Force  DAC" specification printed as "6.4 - 7,1 counts/gram" — comma decimal (evident
+      intent 7.1). Loaded as spec_type TEXT verbatim pending a client decision. (sheet1!J61)
+    cells:
+      - J61
+  - code: N-03
+    message: >-
+      "PRS Calibration" prints the spec line label "XY =" twice — evident intent is YX for one of
+      them. Both lines loaded verbatim; client to confirm.
+    cells:
+      - J65
+      - J66
+      - J67
+      - J68
+  - code: N-07
+    message: 'stray cell outside the form grid: AA53 = "a" — not loaded.'
+    cells:
+      - AA53

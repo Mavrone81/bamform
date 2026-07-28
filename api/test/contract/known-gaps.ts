@@ -149,6 +149,14 @@ export const COLLECTION_ENDPOINTS: readonly CollectionEndpointClassification[] =
   },
   {
     method: 'GET',
+    path: '/api/v1/approval-routes',
+    areaScoped: false,
+    reason:
+      'approval_route (DBD §6.13) is seeded global reference data (PR-DBD-09) with no areaId ' +
+      'column — added by slice 13-TL so POST /asset-types can resolve approvalRouteId over HTTP.',
+  },
+  {
+    method: 'GET',
     path: '/api/v1/assets',
     areaScoped: true,
     reason: 'asset.areaId exists (DBD §6.8); PR-API-10 requires filtering by user_area_scope.',

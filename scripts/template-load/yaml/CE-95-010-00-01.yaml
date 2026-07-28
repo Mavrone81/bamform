@@ -1,0 +1,246 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 010 00 01
+title: BESI Die Attach Preventive Maintenance Record ED____
+asset_type_code: BESI_DIE_ATTACH
+asset_type_name: BESI Die Attach
+printed_revision: E
+current_revision: E
+source_file: CE 95 010 00 01 Besi Die Attach Preventive Maintenance Record.xlsx
+source_sha256: 8fee9efbd7b5fb0d74e1e9f7f8f4d8d6fa1c76bc19405dda03112ce778fb0fcf
+sheet_name: CE 95 010 00 01
+frequency_banner: Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2021-03-22'
+    details: New Release
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: A
+    date: '2021-05-19'
+    details: "1. Retitle to add BESI\r\n2. Updated PM frequency\r\n3. Updated to include recording of Inline curing oven temperature profile"
+    revised_by: Jess Lai Yoon Kiaw
+    approved_by: Heng Cheng Kim
+  - code: C
+    date: '2023-03-21'
+    details: "1. Include quaterly inspection for safety interlock / emergency stop\r\n2. Add footnote \r\n3. Add Headline name is BESI Die Attach Preventive Maintenance Record ED____"
+    revised_by: Saravanan Durairaj
+    approved_by: Surendran Ganesan
+  - code: D
+    date: '2024-03-20'
+    details: Update the  instruction for Item 2,5,6,7 and 8
+    revised_by: Saravanan Durairaj
+    approved_by: Surendran Ganesan
+  - code: E
+    date: '2025-06-13'
+    details: Added Item No. 8, 12, 13
+    revised_by: Ernesto
+    approved_by: Surendran Ganesan
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D8
+  partsRequired: D11:M16
+  ppe: D17:D20
+  safety: C22
+  procedure: C24:C25
+  remarks: A58
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M3
+    instruction: Inspection and check safety interlock / emergency stop is functional
+    stable_key: CE-95-010-00-01::inspection-and-check-safety-interlock-emergency-stop-is-func
+    display_order: 0
+    source_row: 28
+  - item_no: 2
+    printed_no: '2'
+    frequency: M3
+    instruction: 'Cleaning and lubricating (Leadframe Handler: indexer, Wafer Handler)'
+    stable_key: CE-95-010-00-01::cleaning-and-lubricating-leadframe-handler-indexer-wafer-han
+    display_order: 1
+    source_row: 29
+  - item_no: 3
+    printed_no: '3'
+    frequency: M3
+    instruction: Check or replace main drive belt (Pick + Place Y- Slide)
+    stable_key: CE-95-010-00-01::check-or-replace-main-drive-belt-pick-place-y-slide
+    display_order: 2
+    source_row: 30
+  - item_no: 4
+    printed_no: '4'
+    frequency: M3
+    instruction: Check or replace cable hose set (Pick + Place Y- Slide)
+    stable_key: CE-95-010-00-01::check-or-replace-cable-hose-set-pick-place-y-slide
+    display_order: 3
+    source_row: 31
+  - item_no: 5
+    printed_no: '5'
+    frequency: M3
+    instruction: Run in & Check Bondhead Initialization position
+    stable_key: CE-95-010-00-01::run-in-check-bondhead-initialization-position
+    display_order: 4
+    source_row: 32
+  - item_no: 6
+    printed_no: '6'
+    frequency: M3
+    instruction: Check Air Leaking Noise
+    stable_key: CE-95-010-00-01::check-air-leaking-noise
+    display_order: 5
+    source_row: 33
+  - item_no: 7
+    printed_no: '7'
+    frequency: M3
+    instruction: Check Input / Output Spindle condition
+    stable_key: CE-95-010-00-01::check-input-output-spindle-condition
+    display_order: 6
+    source_row: 34
+  - item_no: 8
+    printed_no: '8'
+    frequency: M3
+    instruction: Check/Calibrate Indexer Track ( 35mm jig )
+    stable_key: CE-95-010-00-01::check-calibrate-indexer-track-35mm-jig
+    display_order: 7
+    source_row: 35
+  - item_no: 9
+    printed_no: '9'
+    frequency: M3
+    instruction: Check Inspection light condition
+    stable_key: CE-95-010-00-01::check-inspection-light-condition
+    display_order: 8
+    source_row: 36
+  - item_no: 10
+    printed_no: '10'
+    frequency: M3
+    instruction: 'Check all belts (Wafer Handler: Wafer loader, Wafer Table, Expansion Unit)'
+    stable_key: CE-95-010-00-01::check-all-belts-wafer-handler-wafer-loader-wafer-table-expan
+    display_order: 9
+    source_row: 37
+  - item_no: 11
+    printed_no: '11'
+    frequency: M3
+    instruction: Functional check and inspection of moving clamp
+    stable_key: CE-95-010-00-01::functional-check-and-inspection-of-moving-clamp
+    display_order: 10
+    source_row: 38
+  - item_no: 12
+    printed_no: '12'
+    frequency: M3
+    instruction: Check Lower & Upper Jaw of tape Hold & Trasport
+    stable_key: CE-95-010-00-01::check-lower-upper-jaw-of-tape-hold-trasport
+    display_order: 11
+    source_row: 39
+  - item_no: 13
+    printed_no: '13'
+    frequency: M3
+    instruction: Check Anvil Block Condition
+    stable_key: CE-95-010-00-01::check-anvil-block-condition
+    display_order: 12
+    source_row: 40
+  - item_no: 14
+    printed_no: '14'
+    frequency: M3
+    instruction: Check inline oven output roller condition and alignment
+    stable_key: CE-95-010-00-01::check-inline-oven-output-roller-condition-and-alignment
+    display_order: 13
+    source_row: 41
+  - item_no: 15
+    printed_no: '15'
+    frequency: M6
+    instruction: Inline curving oven temperature calibration
+    stable_key: CE-95-010-00-01::inline-curving-oven-temperature-calibration
+    display_order: 14
+    source_row: 42
+  - item_no: 16
+    printed_no: '16'
+    frequency: M6
+    instruction: Y-Slide rollers & synchronization belt check or replacement (Pick + Place Y- Slide)
+    stable_key: CE-95-010-00-01::y-slide-rollers-synchronization-belt-check-or-replacement-pi
+    display_order: 15
+    source_row: 43
+  - item_no: 17
+    printed_no: '17'
+    frequency: M6
+    instruction: Check ESD Grounding (less than 1.0 ohm)
+    stable_key: CE-95-010-00-01::check-esd-grounding-less-than-1-0-ohm
+    display_order: 16
+    source_row: 44
+  - item_no: 18
+    printed_no: '18'
+    frequency: 'Y'
+    instruction: Check Electrical Panel for any burn mark or wiring condition
+    stable_key: CE-95-010-00-01::check-electrical-panel-for-any-burn-mark-or-wiring-condition
+    display_order: 17
+    source_row: 45
+measurements:
+  - section: Inline curing oven calibration record.
+    description: >-
+      Recipe name : __________________________________ compare temperature profile with Module
+      Assembly Diagram with same recipe name.
+    unit: null
+    spec_type: PASS_FAIL
+    lower_limit: null
+    upper_limit: null
+    nominal: null
+    tolerance: null
+    spec_display: Pass / Fail
+    synthesized_display: true
+    stable_key: CE-95-010-00-01::recipe-name-compare-temperature-profile-with-module-assembly
+    display_order: 0
+    source_row: 64
+    source_cells:
+      - A61
+      - A64
+notes:
+  - >-
+    N-08: the inline curing oven calibration block is free text with Pass/Fail tick columns; loaded
+    as a single PASS_FAIL measurement whose spec_display ("Pass / Fail") is synthesised from those
+    columns. Source cells shown in the evidence table.
+  - >-
+    B-01: formula error(s) in the Revision History header (A1, B1, D1) — header values re-entered
+    from the intact title block (TLP §3 B-01).
+  - >-
+    B-02: revision codes run 0, A, C, D, E — the sequence has a gap. Client answered "no need" (Q8):
+    loaded with contiguous sequence ordinals while the historical letters are retained; the gap
+    stays visible here and in the revision history (TLP §3 B-02, PR-TLP-03).
+ambiguities:
+  - code: N-08
+    message: >-
+      the inline curing oven calibration block is free text with Pass/Fail tick columns; loaded as a
+      single PASS_FAIL measurement whose spec_display ("Pass / Fail") is synthesised from those
+      columns. Source cells shown in the evidence table.
+    cells:
+      - A61
+      - A64
+  - code: B-01
+    message: >-
+      formula error(s) in the Revision History header (A1, B1, D1) — header values re-entered from
+      the intact title block (TLP §3 B-01).
+    cells:
+      - A1
+      - B1
+      - D1
+  - code: B-02
+    message: >-
+      revision codes run 0, A, C, D, E — the sequence has a gap. Client answered "no need" (Q8):
+      loaded with contiguous sequence ordinals while the historical letters are retained; the gap
+      stays visible here and in the revision history (TLP §3 B-02, PR-TLP-03).
+    cells: []

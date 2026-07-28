@@ -1,0 +1,153 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 050 00 03
+title: OS Loading Preventive Maintenance Record IMOS 0__
+asset_type_code: OS_LOADING
+asset_type_name: OS Loading
+printed_revision: '0'
+current_revision: '0'
+source_file: CE 95 050 00 03 OS Loading Preventive Maintenance Record IMOS.xlsx
+source_sha256: 0898ec488e5d923359c1cf514b8b30560b1ca473440614ab75c449644122229f
+sheet_name: 'CE '
+frequency_banner: Monthly (1M) Three Monthly (3M) Six Monthly (6M)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2024-04-23'
+    details: Creation
+    revised_by: Sara
+    approved_by: Suren
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass (If Required)
+    - Hand Gloves (If Required)
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    A thorough inspection on the machine must be done at least one month prior to the maintenance.
+
+    Prepare the list of parts which may have to be replaced. Source the parts before commencing the
+    job
+  remarks: For Y maintenance, 3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D6
+  partsRequired: D9:M14
+  ppe: D15:D18
+  safety: C20
+  procedure: C22:C23
+  remarks: A47
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M1
+    instruction: Check each sensors are working and ensure its at correct state.
+    stable_key: CE-95-050-00-03::check-each-sensors-are-working-and-ensure-its-at-correct-sta
+    display_order: 0
+    source_row: 26
+  - item_no: 2
+    printed_no: '2'
+    frequency: M1
+    instruction: Check wear and tear of the track base. (Black POM material)
+    stable_key: CE-95-050-00-03::check-wear-and-tear-of-the-track-base-black-pom-material
+    display_order: 1
+    source_row: 27
+  - item_no: 3
+    printed_no: '3'
+    frequency: M1
+    instruction: Check Winding/Unwinding spindle condition
+    stable_key: CE-95-050-00-03::check-winding-unwinding-spindle-condition
+    display_order: 2
+    source_row: 28
+  - item_no: 4
+    printed_no: null
+    frequency: M1
+    instruction: Check all machine switches condition
+    stable_key: CE-95-050-00-03::check-all-machine-switches-condition
+    display_order: 3
+    source_row: 29
+  - item_no: 5
+    printed_no: '4'
+    frequency: M3
+    instruction: Inspection and check safety interlock / emergency stop is functional
+    stable_key: CE-95-050-00-03::inspection-and-check-safety-interlock-emergency-stop-is-func
+    display_order: 4
+    source_row: 30
+  - item_no: 6
+    printed_no: '5'
+    frequency: M3
+    instruction: Check wear and tear of the timing belt.
+    stable_key: CE-95-050-00-03::check-wear-and-tear-of-the-timing-belt
+    display_order: 5
+    source_row: 31
+  - item_no: 7
+    printed_no: '6'
+    frequency: M6
+    instruction: Check wear and tear of the sprocket wheel.
+    stable_key: CE-95-050-00-03::check-wear-and-tear-of-the-sprocket-wheel
+    display_order: 6
+    source_row: 32
+  - item_no: 8
+    printed_no: '7'
+    frequency: M6
+    instruction: Check downholder up/down for a smooth movement.
+    stable_key: CE-95-050-00-03::check-downholder-up-down-for-a-smooth-movement
+    display_order: 7
+    source_row: 33
+  - item_no: 9
+    printed_no: '8'
+    frequency: M6
+    instruction: Check wear and tear of downholder up/down cam mechanism.
+    stable_key: CE-95-050-00-03::check-wear-and-tear-of-downholder-up-down-cam-mechanism
+    display_order: 8
+    source_row: 34
+  - item_no: 10
+    printed_no: '10'
+    frequency: M6
+    instruction: Check teminal panel for any abnormality
+    stable_key: CE-95-050-00-03::check-teminal-panel-for-any-abnormality
+    display_order: 9
+    source_row: 35
+  - item_no: 11
+    printed_no: '11'
+    frequency: M6
+    instruction: Check the functionality of the UPS.
+    stable_key: CE-95-050-00-03::check-the-functionality-of-the-ups
+    display_order: 10
+    source_row: 36
+measurements: []
+notes:
+  - >-
+    N-09: worksheet is named "CE ", not the document number. Cosmetic; the document number is taken
+    from the title block.
+  - >-
+    N-04: the checklist has 11 instruction rows but the printed numbering is defective: one row
+    ("Check all machine switches condition") has no printed number and the printed sequence skips 9.
+    Items are loaded with positional numbers 1..11; the printed numbers are preserved in the AC-01
+    evidence. TLP §2 counted 10 items for this document (and 145 in total) — the source sheet has 11
+    (146 in total). Client to confirm.
+  - 'N-10: printed item numbering is non-contiguous (skips before 10) — loaded verbatim as printed.'
+ambiguities:
+  - code: N-09
+    message: >-
+      worksheet is named "CE ", not the document number. Cosmetic; the document number is taken from
+      the title block.
+    cells: []
+  - code: N-04
+    message: >-
+      the checklist has 11 instruction rows but the printed numbering is defective: one row ("Check
+      all machine switches condition") has no printed number and the printed sequence skips 9. Items
+      are loaded with positional numbers 1..11; the printed numbers are preserved in the AC-01
+      evidence. TLP §2 counted 10 items for this document (and 145 in total) — the source sheet has
+      11 (146 in total). Client to confirm.
+    cells:
+      - sheet1!A29
+  - code: N-10
+    message: printed item numbering is non-contiguous (skips before 10) — loaded verbatim as printed.
+    cells: []

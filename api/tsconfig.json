@@ -1,4 +1,10 @@
 {
+  // rootDir is the REPO root (slice 13-TL): the template-load integration
+  // specs (test/integration/template-load/*) import the loader sources from
+  // scripts/template-load/src/, which TS would otherwise reject with TS6059
+  // ("not under rootDir") — the same widening tsconfig.jest.json already
+  // applies for shared/src. Emit layout is unaffected: `nest build` uses
+  // tsconfig.build.json, which overrides rootDir back to "src".
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "module": "commonjs",
@@ -7,7 +13,7 @@
     "emitDecoratorMetadata": true,
     "allowSyntheticDefaultImports": true,
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "..",
     "baseUrl": "./",
     "incremental": true,
     "strictNullChecks": true,

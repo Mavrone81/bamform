@@ -1,0 +1,149 @@
+# Intermediate template-load YAML (BAMFORM-TLP-001 §6.1, PR-TLP-08/09/10).
+# GENERATED from the source workbook named below — do not edit by hand;
+# regenerate with: npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli-extract.ts
+document_number: CE 95 030 00 03
+title: Pre-mixer machine Preventive Maintenance Record DP_____
+asset_type_code: PRE_MIXER
+asset_type_name: Pre-mixer machine
+printed_revision: '0'
+current_revision: '0'
+source_file: CE 95 030 00 03 Pre-mixer machine Preventive Maintenance Record DP_____.xlsx
+source_sha256: f2e89e4bbbd4e7d606e446e3489e122de106a5a5780f97d1203a100f275c3bdc
+sheet_name: 'CE '
+frequency_banner: Three Monthly (3M) Six Monthly (6M) Yearly (Y)
+machine_columns:
+  - Status
+revision_history:
+  - code: '0'
+    date: '2024-05-08'
+    details: New Release
+    revised_by: Sara
+    approved_by: Suren
+standing_content:
+  special_tools: ________________________
+  parts_required: []
+  ppe:
+    - Safety Shoes
+    - Ear Plugs (If required)
+    - Safety Glass
+    - Hand Gloves
+  safety: >-
+    Please switch off the main power and put the lock out/ tag on the power disconnect.  (if
+    required)
+  procedure: >-
+    To make sure have stock on hand for the list of parts that need to be replaced. Source the parts
+    before commencing the job
+
+    To request machine down time before carrying out machine PM
+  remarks: For Y maintenance,  3M and 6M must be performed at the same time.
+standing_content_sources:
+  specialTools: D6
+  partsRequired: D9:M14
+  ppe: D15:D18
+  safety: C20
+  procedure: C22:C23
+  remarks: A44
+items:
+  - item_no: 1
+    printed_no: '1'
+    frequency: M3
+    instruction: To perform machine seal check, replace seal O-ring if necessary
+    stable_key: CE-95-030-00-03::to-perform-machine-seal-check-replace-seal-o-ring-if-necessa
+    display_order: 0
+    source_row: 26
+  - item_no: 2
+    printed_no: '2'
+    frequency: M3
+    instruction: To verify all the solenoid valve functioning, replace if necessary
+    stable_key: CE-95-030-00-03::to-verify-all-the-solenoid-valve-functioning-replace-if-nece
+    display_order: 1
+    source_row: 27
+  - item_no: 3
+    printed_no: '3'
+    frequency: M3
+    instruction: To verify vacuum generator valve functioning, replace if necessary
+    stable_key: CE-95-030-00-03::to-verify-vacuum-generator-valve-functioning-replace-if-nece
+    display_order: 2
+    source_row: 28
+  - item_no: 4
+    printed_no: '4'
+    frequency: M3
+    instruction: Resin tank sealing testing
+    stable_key: CE-95-030-00-03::resin-tank-sealing-testing
+    display_order: 3
+    source_row: 29
+  - item_no: 5
+    printed_no: '5'
+    frequency: M6
+    instruction: To verify agitator motor functional.
+    stable_key: CE-95-030-00-03::to-verify-agitator-motor-functional
+    display_order: 4
+    source_row: 30
+  - item_no: 6
+    printed_no: '6'
+    frequency: M6
+    instruction: To perform resin level sensor verification
+    stable_key: CE-95-030-00-03::to-perform-resin-level-sensor-verification
+    display_order: 5
+    source_row: 31
+  - item_no: 7
+    printed_no: '7'
+    frequency: M6
+    instruction: To perform EMO function check
+    stable_key: CE-95-030-00-03::to-perform-emo-function-check
+    display_order: 6
+    source_row: 32
+  - item_no: 8
+    printed_no: '8'
+    frequency: 'Y'
+    instruction: To carry out 20L tank maintenance
+    stable_key: CE-95-030-00-03::to-carry-out-20l-tank-maintenance
+    display_order: 7
+    source_row: 33
+  - item_no: 9
+    printed_no: '9'
+    frequency: 'Y'
+    instruction: To carry out feeding pumps maintenance
+    stable_key: CE-95-030-00-03::to-carry-out-feeding-pumps-maintenance
+    display_order: 8
+    source_row: 34
+measurements:
+  - section: Resin tank sealing test
+    description: Vaccum reading after one hour setting 300mbar
+    unit: mbar
+    spec_type: RANGE
+    lower_limit: 290
+    upper_limit: 310
+    nominal: null
+    tolerance: null
+    spec_display: LCL 290 / UCL 310
+    synthesized_display: true
+    stable_key: CE-95-030-00-03::vaccum-reading-after-one-hour-setting-300mbar
+    display_order: 0
+    source_row: 50
+    source_cells:
+      - E50
+      - I50
+      - K50
+notes:
+  - >-
+    N-09: worksheet is named "CE ", not the document number. Cosmetic; the document number is taken
+    from the title block.
+  - >-
+    N-08: the record table prints bare LCL/UCL column values; spec_display is synthesised as "LCL n
+    / UCL n" with unit "mbar" (TLP §4.2's explicit-LCL/UCL row). Source cells shown in the evidence
+    table.
+ambiguities:
+  - code: N-09
+    message: >-
+      worksheet is named "CE ", not the document number. Cosmetic; the document number is taken from
+      the title block.
+    cells: []
+  - code: N-08
+    message: >-
+      the record table prints bare LCL/UCL column values; spec_display is synthesised as "LCL n /
+      UCL n" with unit "mbar" (TLP §4.2's explicit-LCL/UCL row). Source cells shown in the evidence
+      table.
+    cells:
+      - I50
+      - K50
