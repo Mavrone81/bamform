@@ -17,11 +17,57 @@ import { ItemStatusControl } from '../components/ItemStatusControl';
 import { SignaturePad } from '../components/SignaturePad';
 import { SyncStatusChip } from '../components/SyncStatusChip';
 import { useRouter } from '../router';
+
 import type { components } from '../api/generated/openapi-types';
 
 type ItemStatus = components['schemas']['ItemStatus'];
 type ApprovalStep = components['schemas']['ApprovalStep'];
 type Attachment = components['schemas']['Attachment'];
+
+/**
+ * Turn an RFC 7807 problem into something a technician can act on.
+ *
+ * The owner hit "The server rejected this submission: Validation failed" on a
+ * real phone and had no way forward (2026-07-28). The server had in fact said
+ * exactly what was wrong — `detail` plus a field-level `errors[]` naming
+ * `/drawnSignature` — and this screen was reading only `title`, the one field
+ * guaranteed to be generic. An error that names the failing field is worth
+ * more than a polite sentence that names nothing.
+ *
+ * The signature case gets its own message because it has a specific cause
+ * that no amount of retrying fixes: the browser is running CACHED JavaScript
+ * from before the signature step existed, so it submits without one against a
+ * server that now requires it. Telling that user to "check every item has a
+ * result" sends them to look at a checklist that is already complete.
+ */
+export function explainSubmitRejection(problem: unknown): string {
+  const p = problem as
+    | { title?: string; detail?: string; errors?: { pointer?: string; message?: string }[] }
+    | undefined;
+  const fields = p?.errors ?? [];
+
+  if (fields.some((e) => (e.pointer ?? '').includes('drawnSignature'))) {
+    return (
+      'This app is running an out-of-date version and submitted without a signature. ' +
+      'Close it completely and reopen to update, then submit again — your entries are ' +
+      'safely held on this device.'
+    );
+  }
+
+  const named = fields
+    .map((e) => {
+      const field = (e.pointer ?? '').replace(/^\//, '');
+      return field ? `${field}: ${e.message ?? 'invalid'}` : e.message;
+    })
+    .filter(Boolean);
+  if (named.length > 0) {
+    return `The server rejected this submission — ${named.join('; ')}`;
+  }
+
+  if (p?.detail) return `The server rejected this submission: ${p.detail}`;
+  if (p?.title) return `The server rejected this submission: ${p.title}`;
+  return 'The server rejected this submission. Check that every mandatory item has a result.';
+}
 
 /** D-2a: the latest RETURNED step, but only while the job is back in a
  * capturable state — once resubmitted, the capture screen is no longer
@@ -332,12 +378,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
           'The server reports this job is no longer in a submittable state — it may already be submitted, returned or voided. Go back to your jobs and sync to see its current state.',
         );
       } else {
-        const title = (result.problem as { title?: string } | undefined)?.title;
-        setSubmitBanner(
-          title
-            ? `The server rejected this submission: ${title}`
-            : 'The server rejected this submission. Check that every mandatory item has a result.',
-        );
+        setSubmitBanner(explainSubmitRejection(result.problem));
       }
     } finally {
       setSubmitting(false);
