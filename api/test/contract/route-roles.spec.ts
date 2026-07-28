@@ -112,18 +112,54 @@ describe('test:route-coverage (C-07c) — every route has exactly its declared @
     });
   });
 
-  /** Proof the comparison is not vacuous — a synthetic drift in each direction. */
-  describe('proof: the inventory catches drift in both directions', () => {
-    it('a widened role set differs from its declaration', () => {
-      const declared = [...EXPECTED_ROUTE_ROLES['GET /api/v1/reports/compliance']].sort();
-      const widened = [...declared, 'PLANNER'].sort();
-      expect(JSON.stringify(widened)).not.toEqual(JSON.stringify(declared));
+  /**
+   * Proof the comparison is not vacuous.
+   *
+   * The first version of this block (fix-delta re-review, finding D-2) only
+   * asserted that adding an element to an array copy produced a different
+   * array — true of any array, and it would have passed with the real
+   * comparison above deleted entirely. A test that cannot fail is worse than
+   * no test: it reports safety it never checked.
+   *
+   * These run the SAME comparison the real assertions use, against the SAME
+   * discovered router metadata, with one synthetic drift injected. If the
+   * comparison logic is broken or removed, `driftAgainstRouter` stops
+   * detecting anything and these fail.
+   */
+  describe('proof: the real comparison catches drift in both directions', () => {
+    /** Exactly the check performed above, isolated so it can be exercised. */
+    function driftAgainstRouter(key: string, claimed: readonly string[]): string | null {
+      const route = byKey.get(key);
+      if (!route) return `${key}: not found in the router`;
+      const actual = [...(route.roles ?? [])].sort();
+      const wanted = [...claimed].sort();
+      return JSON.stringify(actual) === JSON.stringify(wanted)
+        ? null
+        : `${key}: expected [${wanted}] but the router says [${actual}]`;
+    }
+
+    const WIDENED = 'GET /api/v1/reports/compliance';
+    const NARROWED = 'POST /api/v1/jobs/{jobId}/assign';
+
+    it('the honest declarations agree with the router (control)', () => {
+      expect(driftAgainstRouter(WIDENED, EXPECTED_ROUTE_ROLES[WIDENED])).toBeNull();
+      expect(driftAgainstRouter(NARROWED, EXPECTED_ROUTE_ROLES[NARROWED])).toBeNull();
     });
 
-    it('a narrowed role set differs from its declaration', () => {
-      const declared = [...EXPECTED_ROUTE_ROLES['POST /api/v1/jobs/{jobId}/assign']].sort();
-      const narrowed = declared.filter((r) => r !== 'PLANNER');
-      expect(JSON.stringify(narrowed)).not.toEqual(JSON.stringify(declared));
+    it('a WIDENED claim is caught against the real router metadata', () => {
+      // PLANNER on a bulk reporting route is the exact X-1 regression.
+      const drift = driftAgainstRouter(WIDENED, [...EXPECTED_ROUTE_ROLES[WIDENED], 'PLANNER']);
+      expect(drift).toContain(WIDENED);
+      expect(drift).toContain('the router says');
+    });
+
+    it('a NARROWED claim is caught against the real router metadata', () => {
+      const drift = driftAgainstRouter(
+        NARROWED,
+        EXPECTED_ROUTE_ROLES[NARROWED].filter((r) => r !== 'PLANNER'),
+      );
+      expect(drift).toContain(NARROWED);
+      expect(drift).toContain('the router says');
     });
   });
 });

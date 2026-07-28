@@ -13,6 +13,35 @@
 --   migration closes — it is a weakening, and only worth doing to roll back
 --   to the exact prior schema.)
 --
+-- ============================================ IF THIS MIGRATION HALTS A DEPLOY
+--
+-- The `DO` blocks below deliberately RAISE and abort when pre-existing rows
+-- violate the constraints, naming the offending ids. That is the intended
+-- behaviour — it refuses to silently drop or mangle historical records. But
+-- the recovery is NOT obvious, so it is written out here (fix-delta re-review
+-- finding D-1; the sibling migration 20260728020010 documents the same
+-- Prisma behaviour and this one omitted it):
+--
+--   1. Prisma marks the migration failed and then REFUSES every later
+--      `migrate deploy` with P3009 until the failure is cleared:
+--        npx prisma migrate resolve --rolled-back \
+--          20260728030000_reason_and_scope_constraints_not_null
+--
+--   2. Fix the named rows, then re-run `migrate deploy`.
+--
+--   3. ⚠ The obvious remediation — `UPDATE` the offending row to add a
+--      reason — is REFUSED for voided/archived jobs by
+--      `prevent_archived_job_update()` (INV-09, slice 17). That trigger is
+--      doing its job: those rows are immutable by design. Repairing them
+--      therefore requires a deliberate, audited, superuser-level operation
+--      with the trigger disabled for the duration — treat it as an incident
+--      with a DBA present and a fresh backup, not a routine fix. Verified by
+--      the reviewer against a database with planted violators.
+--
+-- Production held 0 jobs and 0 approval_steps when this shipped (checked
+-- immediately before deploy), so no historical row could trigger the halt.
+-- Re-confirm that emptiness before applying to any other environment.
+--
 -- Slice 18-WORKFLOW fix pass — review findings X-6 and disclosed concern 5.
 --
 -- ============================================================ 1. THE NULL HOLE
