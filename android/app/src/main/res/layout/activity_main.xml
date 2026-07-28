@@ -12,6 +12,84 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- In-app update prompt (slice 21-SHELL). A quiet strip along the bottom
+         of the page, NOT a modal: an update must never stand between a
+         technician and the record they are filling in. Declared before the
+         offline card so the card, which is full-screen and opaque, always
+         covers it. Hidden unless there is genuinely something to say. -->
+    <LinearLayout
+        android:id="@+id/updateBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@drawable/panel_bg"
+        android:elevation="8dp"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/updateTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/ink"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            tools:text="BamForm 1.2.0 is available" />
+
+        <TextView
+            android:id="@+id/updateDetail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:lineSpacingExtra="2dp"
+            android:textColor="@color/ink_soft"
+            android:textSize="13sp"
+            tools:text="You are running 1.0.0." />
+
+        <ProgressBar
+            android:id="@+id/updateProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:max="100"
+            android:visibility="gone" />
+
+        <!-- ButtonStyle suppressed: the borderless button-bar style lint wants
+             belongs to dialogs. This is an in-page strip whose buttons must
+             read as the same filled/tinted controls as the offline card and
+             the PWA's own design tokens — a borderless pair here would look
+             like page content rather than app chrome. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="end"
+            android:orientation="horizontal"
+            tools:ignore="ButtonStyle">
+
+            <Button
+                android:id="@+id/updateSecondary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/panel_sunken"
+                android:textAllCaps="false"
+                android:textColor="@color/accent"
+                tools:text="Not now" />
+
+            <Button
+                android:id="@+id/updatePrimary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:backgroundTint="@color/accent"
+                android:textAllCaps="false"
+                android:textColor="@color/accent_ink"
+                tools:text="Download update" />
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- Native fallback, ERROR PATH ONLY: the sign-in page (which hosts the
          normal server control) is served by the server itself, so when the
          server is unreachable this card is the only way to retry or repoint.

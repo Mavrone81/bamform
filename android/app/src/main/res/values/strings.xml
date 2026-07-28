@@ -26,4 +26,48 @@
     <string name="offline_detail_crash">BamForm’s display stopped responding repeatedly on this device (usually low memory). Close other apps and retry — or point the app at a different server below.</string>
     <string name="offline_retry">Retry</string>
     <string name="chooser_title">Attach a file</string>
+
+    <!-- In-app update (slice 21-SHELL). The prompt is quiet and dismissible;
+         the REFUSAL messages are deliberately blunt, because a hash or signer
+         mismatch looks identical whether the cause is a corrupt download or a
+         substituted file, and only one of those is survivable by shrugging. -->
+    <string name="update_title">BamForm %1$s is available</string>
+    <string name="update_detail">You are running %1$s. Download the update when convenient — nothing is installed until you confirm.</string>
+    <string name="update_detail_note">You are running %1$s. %2$s</string>
+    <string name="update_download">Download update</string>
+    <string name="update_not_now">Not now</string>
+    <string name="update_cancel">Cancel</string>
+    <string name="update_dismiss">Dismiss</string>
+    <string name="update_install">Install</string>
+
+    <string name="update_downloading_title">Downloading BamForm %1$s</string>
+    <string name="update_downloading">Starting download…</string>
+    <string name="update_downloading_pct" tools:ignore="PluralsCandidate">Downloading… %1$d%%</string>
+
+    <string name="update_verified_title">BamForm %1$s is ready</string>
+    <string name="update_verified">Checksum verified (%1$s…) and the file is signed with this app’s own key. Tap Install and confirm in Android’s installer.</string>
+
+    <string name="update_problem_title">Update not completed</string>
+    <string name="update_refused_title">Update refused</string>
+
+    <!-- Quiet failures: the user asked for the download, so say what happened,
+         but nothing here suggests anything is wrong with the device. -->
+    <string name="update_failed_http" tools:ignore="PluralsCandidate">The update server answered HTTP %1$d. Nothing was installed. Try again later.</string>
+    <string name="update_failed_network">The download did not finish (%1$s). Nothing was installed. Try again when the connection is better.</string>
+    <string name="update_failed_too_big">The published file is larger than this app will accept. Nothing was installed. Tell IT.</string>
+    <string name="update_failed_storage">There was not enough room, or the file could not be prepared. Nothing was installed.</string>
+    <string name="update_failed_no_installer">This device has no package installer available, so the update cannot be installed here.</string>
+
+    <!-- LOUD refusals: verification failed and the file has been deleted. -->
+    <string name="update_refused_hash">The downloaded file does NOT match the checksum published for BamForm %1$s (expected %2$s…, got %3$s…). It has been deleted and nothing was installed. Retry later; if this happens again, tell IT — the download may have been altered in transit.</string>
+    <string name="update_refused_origin">The published update address is not on BamForm’s own update server. Nothing was downloaded or installed. Tell IT.</string>
+    <string name="update_refused_unreadable">The downloaded file could not be read as an Android app package. It has been deleted and nothing was installed.</string>
+    <string name="update_refused_unsigned">The downloaded file carries no signing certificate. It has been deleted and nothing was installed. Tell IT.</string>
+    <string name="update_refused_package">The downloaded file is a different app (%1$s, not %2$s). It has been deleted and nothing was installed. Tell IT.</string>
+    <string name="update_refused_versioncode" tools:ignore="PluralsCandidate">The downloaded file is not the version that was published (expected build %1$d, file says %2$d). It has been deleted and nothing was installed. Tell IT.</string>
+    <string name="update_refused_signer">The downloaded file is signed with a DIFFERENT key from this app (%1$s… vs %2$s…). It has been deleted and nothing was installed. Do not install BamForm from anywhere else — tell IT.</string>
+
+    <string name="update_permission_title">Android needs your permission</string>
+    <string name="update_permission_detail">Android blocks apps from installing other apps until you allow it. Open settings, allow BamForm to install unknown apps, then come back and tap Install.</string>
+    <string name="update_open_settings">Open settings</string>
 </resources>

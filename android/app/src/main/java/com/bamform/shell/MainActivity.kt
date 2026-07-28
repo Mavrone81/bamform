@@ -83,6 +83,16 @@ class MainActivity : AppCompatActivity() {
     private val shellBridge = ShellBridge(this)
     private var bridgeInstalled = false
 
+    /**
+     * Slice 21-SHELL: in-app APK update. Entirely native and entirely
+     * independent of [shellBridge] — the page cannot start a check, a
+     * download or an install, because no message type was added to the
+     * protocol. The update source is pinned at compile time
+     * ([UpdateManifest.UPDATE_ORIGIN]) and is deliberately NOT the
+     * runtime-configurable content origin.
+     */
+    private val updateController = UpdateController(this)
+
     /** A-3: Back must not walk back onto the server we just left. */
     private var clearHistoryOnNextLoad = false
 
@@ -132,8 +142,14 @@ class MainActivity : AppCompatActivity() {
         setUpWebView()
         wireOfflineCard()
         wireBack()
+        updateController.onCreate(findViewById(android.R.id.content))
 
         webView.loadUrl(configuredOrigin)
+
+        // AFTER loadUrl, and on its own executor: the update check must never
+        // be something the app waits for. A dead or slow update host is
+        // invisible to the technician.
+        updateController.scheduleCheck()
     }
 
     // JS is the entire point of a WebView shell for a JS application; the
@@ -573,6 +589,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        updateController.onDestroy()
         if (::executor.isInitialized) executor.shutdownNow()
         if (::webView.isInitialized && !webViewDead) {
             if (bridgeInstalled && ShellBridge.isSupported()) {

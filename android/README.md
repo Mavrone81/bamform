@@ -1,7 +1,7 @@
 # BamForm Android shell
 
 A minimal native wrapper around the BamForm PWA. The web app remains the
-product; this APK adds exactly two things:
+product; this APK adds exactly three things:
 
 1. **An admin-configurable server address.** The shell boots straight into
    the WebView at the configured origin (default `https://form.bevorasg.com`,
@@ -25,6 +25,14 @@ product; this APK adds exactly two things:
    5xx, e.g. a proxy mid-deploy — shows a native card (Retry + server field;
    the error path needs a native field because the sign-in page that hosts
    the normal control is served by the very server that is unreachable).
+3. **An in-app update check.** Every *web* change reaches devices on deploy;
+   only a change to this shell needs a new APK, and without this the only
+   route was walking to each tablet. The app polls
+   `https://form.bevorasg.com/app/version.json` (throttled, never blocking
+   startup), offers a dismissible prompt when a newer build exists, downloads
+   it, **verifies the published SHA-256 and the signing certificate before
+   the installer sees the file**, and lets the user confirm the install. See
+   "In-app updates" below.
 
 ## What the shell does NOT do
 
@@ -182,6 +190,14 @@ Two gates in `.github/workflows/ci.yml`, both blocking:
 - **Job 12 · Android shell (Gradle)** runs `./gradlew assembleDebug lint` on
   every PR. Debug only, so it needs no keystore and no secrets; it refuses to
   run at all if signing material is found in the checkout.
+- **Job 1** runs `scripts/ci/assert-shell-update-contract.mjs`, which pins the
+  in-app update path: the update origin stays a pinned `https://` constant and
+  is never derived from the configured content origin, `isTrustedUpdateUrl`
+  keeps its four rules, `download()` checks the URL before connecting and
+  verifies the SHA-256 *and* the signing certificate before it can return the
+  file, neither fetch follows redirects, exactly one install intent exists and
+  it is fed only from a verified download, the bridge exposes nothing, and the
+  download page hard-codes no APK filename or checksum.
 - **Job 1** runs `scripts/ci/assert-shell-protocol-contract.mjs`, which binds
   the Kotlin and TypeScript halves of the bridge (channel name, protocol
   version, message vocabulary in both directions) and pins the security
@@ -197,6 +213,111 @@ guards are *present*, not that they still *work*. Behavioural coverage of
 tracked follow-up; until it lands, the runtime evidence for the trust
 boundary is the manual emulator attack suite recorded in
 `.superpowers/sdd/android-shell-review.md`.
+
+## In-app updates
+
+### ⚠ AN UPDATE ONLY KEEPS THE DEVICE'S DATA IF IT IS SIGNED WITH THE SAME KEYSTORE
+
+Android will install a new APK **over** the installed one — keeping cookies,
+the login session, IndexedDB and **the offline outbox** — only when both are
+signed by the same key. A differently-signed APK cannot be installed over the
+old one at all: Android refuses with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and
+the only way to proceed is to **uninstall first**.
+
+**Uninstalling destroys the device's offline data, including records that have
+been captured but not yet synced.** They are in the WebView's per-origin
+IndexedDB, which goes with the app. There is no recovery and no warning from
+Android — the uninstall dialog says nothing about maintenance records.
+
+So, concretely:
+
+- Every release must be signed from `keystore/bamform-release.keystore`. If
+  that keystore is lost, there is no in-place upgrade path for **any** device
+  ever again (see "Release signing" below).
+- The app helps: it compares the downloaded APK's signing certificate to its
+  own **before** offering it to the installer, and refuses with an explanation
+  rather than letting a technician discover the problem as an opaque installer
+  error. But it can only refuse — it cannot rescue a device that has already
+  been uninstalled.
+- **If a re-signed build is ever unavoidable**, point every tablet at its
+  server and let the outbox drain to empty *before* uninstalling anything. The
+  sign-in screen shows the pending count.
+
+### How the check works
+
+| | |
+|---|---|
+| Source | `https://form.bevorasg.com/app/version.json` — a **compile-time constant** (`UpdateManifest.UPDATE_ORIGIN`) |
+| Frequency | once per 6 h, persisted in `bamform_update` prefs; wall-clock so a reboot does not re-arm it |
+| Timing | posted 4 s after the WebView is told to load, on its own executor — a slow or dead update host is invisible |
+| Prompt | a dismissible strip at the foot of the page, never a modal; "Not now" silences that version only |
+| Verify | SHA-256 of the downloaded bytes vs the manifest, **then** the archive's package name, versionCode and signing certificate vs the running app |
+| Install | `FileProvider` + `ACTION_VIEW`; the user confirms in Android's own installer. **No silent install** — `REQUEST_INSTALL_PACKAGES` grants only the right to ask |
+| On failure | offline / 404 / timeout / cancel → the app carries on, nothing installed. Hash or signer mismatch → the file is deleted and the refusal is stated plainly |
+
+### The update origin is NOT the configured server, deliberately
+
+The Server disclosure lets an admin point the shell at any host, including a
+cleartext plant IP. The update channel does **not** follow it: a shell pointed
+at `http://192.168.1.50:8080` still fetches its updates from
+`https://form.bevorasg.com`, and refuses any `apkUrl` that is not on that
+origin.
+
+That is a deliberate separation of privilege. *Serving BamForm's pages* is a
+much smaller thing than *shipping code to the tablets*, and on a cleartext LAN
+the shell already assumes an on-path attacker can rewrite every byte it loads.
+If the update source followed the configured origin, that same attacker would
+choose which APK the technician is invited to install. `form.bevorasg.com` is
+additionally pinned to HTTPS-only in `network_security_config.xml`, so nothing
+can downgrade it.
+
+**Consequence for a plant running its own instance:** its devices still need
+reachability to `form.bevorasg.com` for updates, or they get none — the check
+fails silently and the app keeps working. Changing the update origin means
+editing `UpdateManifest.UPDATE_ORIGIN` and rebuilding; it is not a runtime
+setting, and it should not become one without re-running the review's attack
+suite.
+
+### Publishing a release
+
+`assembleRelease` **generates** the manifest — it is not written by hand:
+
+```sh
+cd android
+./gradlew assembleRelease
+# → app/build/dist/
+#     bamform-<versionName>.apk
+#     version.json      generated FROM that APK (versionCode, versionName, sha256, size)
+#     index.html        the download page, copied from android/download-page/
+```
+
+Bump `versionCode` (and `versionName`) in `app/build.gradle.kts` first —
+`versionCode` is what installed devices compare against. Edit
+`android/release-note.txt` for the one human-written line in the manifest;
+everything else comes out of the binary.
+
+Then copy the whole of `app/build/dist/` to `/var/www/form.bevorasg.com/app/`
+on the host. The download page reads `version.json` at load time, so the page
+and the app can never disagree about the current release — and the page
+refuses to offer a download at all if the manifest is missing.
+
+Why this is mechanised: the previously published page linked to
+`bamform-1.1.apk` with a footer reading "v1.1", while that binary carried
+`versionName 1.0.0` / `versionCode 1`. Two hand-maintained descriptions of one
+artefact had already drifted. Once an installed app decides whether to
+download new code from that description, drift stops being cosmetic.
+`scripts/ci/assert-shell-update-contract.mjs` keeps it mechanised.
+
+### What the update path is not
+
+- **Not reachable from the web app.** No bridge message type was added; a page
+  cannot start a check, a download or an install. The bridge's origin
+  allow-list and its four `onPostMessage` guards are untouched by this feature,
+  and the contract gate still pins them.
+- **Not automatic.** Nothing installs without two taps and Android's own
+  confirmation.
+- **Not a substitute for the signature rule above.** Verification refuses a
+  wrongly-signed APK; it does not make one installable.
 
 ## Release signing — READ THIS BEFORE LOSING ANYTHING
 
@@ -224,5 +345,7 @@ local WebView state) before installing the new build. Treat
    The switch only happens after the shell has verified the new server's
    health endpoint.
 
-Updating: install the new APK over the old (same signing key) — data is
-kept. `adb install -r app-release.apk` also works.
+Updating: from 1.2.0 onward the app offers updates itself (see "In-app
+updates" above). Manually, install the new APK over the old — **same signing
+key, or the device's unsent records are destroyed** — or
+`adb install -r app-release.apk`.
