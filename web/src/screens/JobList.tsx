@@ -10,6 +10,7 @@ import {
   type ClockSkewRecord,
 } from '../offline/sync-engine';
 import { getStoragePersistence } from '../offline/persistence';
+import { pendingCountForUser } from '../offline/outbox';
 import { onSynced, notifySynced } from '../offline/sync-events';
 import { legacyHoldSummary, type LegacyHoldSummary } from '../offline/db';
 import type { CachedJob } from '../offline/db';
@@ -45,6 +46,7 @@ export function JobList() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [clockSkew, setClockSkew] = useState<ClockSkewRecord | null>(null);
   const [storageUnprotected, setStorageUnprotected] = useState(false);
+  const [unsentAtRisk, setUnsentAtRisk] = useState(0);
   const [legacyHold, setLegacyHold] = useState<LegacyHoldSummary | null>(null);
 
   const refresh = useCallback(async () => {
@@ -53,9 +55,19 @@ export function JobList() {
     if (!userId) return; // signed out mid-flight — nothing to show
     // SYS-15: re-read on every refresh — App's sign-in request may resolve
     // after this screen first mounted (it notifies via sync-events).
-    void getStoragePersistence(db).then((outcome) => {
-      setStorageUnprotected(Boolean(outcome && !outcome.persisted));
-    });
+    //
+    // Gated on ACTUAL RISK (owner feedback, real device, 2026-07-28): the
+    // warning used to fire on refused persistence alone, so a phone holding
+    // nothing announced that "records held on this device could be evicted"
+    // — warning about the loss of records that did not exist. Crying wolf on
+    // the first screen a technician sees is how real warnings get ignored.
+    // Eviction can only destroy work that is UNSENT, so that is the trigger.
+    void Promise.all([getStoragePersistence(db), pendingCountForUser(db, userId)]).then(
+      ([outcome, pending]) => {
+        setStorageUnprotected(Boolean(outcome && !outcome.persisted) && pending > 0);
+        setUnsentAtRisk(pending);
+      },
+    );
     // H-4: pre-upgrade work quarantined for OTHER users must be visible,
     // not silently parked in IndexedDB.
     void legacyHoldSummary(db).then((summary) => {
@@ -162,9 +174,10 @@ export function JobList() {
       )}
       {storageUnprotected && (
         <p className="banner" data-tone="attention">
-          <span aria-hidden="true">⚠</span> This browser has not protected BamForm's offline storage
-          — records held on this device could be evicted if it runs low on space or sits unused.
-          Installing the app (Add to Home Screen) protects them.
+          <span aria-hidden="true">⚠</span>{' '}
+          {unsentAtRisk === 1 ? '1 record is' : `${unsentAtRisk} records are`} waiting to send, and
+          this browser has not protected offline storage. Install BamForm (Add to Home Screen) to
+          keep {unsentAtRisk === 1 ? 'it' : 'them'} safe, or connect to send now.
         </p>
       )}
 
