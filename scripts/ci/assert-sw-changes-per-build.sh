@@ -72,7 +72,7 @@ build — silently, with every test still passing. This is the exact regression
 that stranded the owner mid-test (slice 22-SELFUPDATE, review S-1).
 
 The worker's version must derive from the BUILD OUTPUT (see
-web/build/asset-fingerprint.mjs), never from an environment variable alone:
+web/scripts/asset-fingerprint.mjs), never from an environment variable alone:
 production pins VITE_APP_VERSION to the constant \`local\`.
 EOF
   exit 1

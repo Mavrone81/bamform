@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import type { APIRequestContext } from '@playwright/test';
 // @ts-expect-error -- plain .mjs build helper, shared with vite.sw.config.ts so
 // the harness versions its second generation the way the real build does.
-import { fingerprintAssets } from '../../build/asset-fingerprint.mjs';
+import { fingerprintAssets } from '../../scripts/asset-fingerprint.mjs';
 
 /**
  * A real HTTP origin whose contents can be swapped mid-test — i.e. a deploy.
@@ -32,7 +32,7 @@ import { fingerprintAssets } from '../../build/asset-fingerprint.mjs';
  *    code executed, not merely that a new file was requested;
  *  - `sw.js` differs byte-wise, **because its version is recomputed from
  *    generation B's asset filenames using the same function the real build
- *    uses** (`web/build/asset-fingerprint.mjs`).
+ *    uses** (`web/scripts/asset-fingerprint.mjs`).
  *
  * ## Why that last point is written this way (review finding S-5)
  *

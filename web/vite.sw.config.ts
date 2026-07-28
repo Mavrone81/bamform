@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import path from 'node:path';
 // @ts-expect-error -- plain .mjs build helper, shared with e2e/support/deploy-server.ts
-import { fingerprintAssets, readEmittedAssets } from './build/asset-fingerprint.mjs';
+import { fingerprintAssets, readEmittedAssets } from './scripts/asset-fingerprint.mjs';
 
 // Separate, minimal build for the service worker (src/sw.ts). It must be a
 // single classic script with no import statements (broadest service-worker
@@ -16,7 +16,7 @@ import { fingerprintAssets, readEmittedAssets } from './build/asset-fingerprint.
 // mechanism — permanently inert on the only deployment that matters.
 // `__BAMFORM_BUILD_ID__` is derived from the asset filenames the app build
 // just emitted, which are content hashes: it changes if and only if the app
-// changed, whatever the environment says. See build/asset-fingerprint.mjs.
+// changed, whatever the environment says. See scripts/asset-fingerprint.mjs.
 export default defineConfig(() => {
   const assets = readEmittedAssets(path.resolve(__dirname, 'dist/assets')) as string[] | null;
   const envVersion = process.env.VITE_APP_VERSION ?? 'dev';
