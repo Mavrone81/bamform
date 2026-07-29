@@ -11,7 +11,7 @@
     "prisma:generate": "prisma generate --schema=prisma/schema.prisma",
     "prisma:migrate:dev": "prisma migrate dev --schema=prisma/schema.prisma",
     "prisma:migrate:deploy": "prisma migrate deploy --schema=prisma/schema.prisma",
-    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.js --runInBand",
+    "test:integration": "NODE_OPTIONS=\"--experimental-vm-modules --max-old-space-size=4096\" jest --config jest.integration.config.js --runInBand",
     "test:unit": "jest --config jest.unit.config.js",
     "test:contract": "jest --config jest.contract.config.js contract.spec.ts",
     "test:route-coverage": "jest --config jest.contract.config.js \"route-(coverage|roles)\\.spec\\.ts\"",

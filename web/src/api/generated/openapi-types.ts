@@ -570,6 +570,70 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/assets/{assetId}/documents': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    /**
+     * The preventive-maintenance documents this machine carries
+     * @description Slice 27-ASSETDOC. The owner's process step 4 — "he will go to his
+     *     assigned machine and select the form to start" — reads this. Open to
+     *     every authenticated user who can see the machine (role-gating it would
+     *     remove read access from MAINTAINER, the role that most needs it);
+     *     403 (`/errors/out-of-scope`), not a silent 404, when the machine exists
+     *     but is outside the caller's area scope.
+     *
+     *     DEACTIVATED documents are included: a machine's history has to stay
+     *     visible. It is the scheduler that stops raising work for them.
+     */
+    get: operations['getAssetDocuments'];
+    put?: never;
+    /**
+     * Tag a preventive-maintenance document to this machine
+     * @description ADMIN only — the owner's process step 2 ("Admin will log in to setup
+     *     the machine tagged with which preventive Maintenance document").
+     *
+     *     409 if this machine already carries that document; a machine may carry
+     *     any number of DIFFERENT documents, and any number of machines may carry
+     *     the same one.
+     */
+    post: operations['tagAssetDocument'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/asset-documents/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Change a tagged document's form number, or deactivate it
+     * @description ADMIN only. There is deliberately NO DELETE: INV-16 forbids DELETE on
+     *     record tables, and a document that has already generated jobs must stay
+     *     resolvable. `active: false` stops future job generation and leaves the
+     *     history intact.
+     */
+    patch: operations['updateAssetDocument'];
+    trace?: never;
+  };
   '/approval-routes': {
     parameters: {
       query?: never;
@@ -2079,7 +2143,17 @@ export interface components {
     ScheduleRule: {
       /** Format: uuid */
       id: string;
-      /** Format: uuid */
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. A rule hangs off a DOCUMENT, not a machine —
+       *     that is what lets one machine carry a monthly pH-meter check AND
+       *     its monthly preventive maintenance.
+       */
+      assetDocumentId: string;
+      /**
+       * Format: uuid
+       * @description Derived from the document. Kept so every existing reader still works.
+       */
       assetId: string;
       frequency: components['schemas']['Frequency'];
       /**
@@ -2099,6 +2173,15 @@ export interface components {
       active: boolean;
     };
     ScheduleAdjust: {
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. Optional only where there is nothing to choose —
+       *     a machine carrying one document. Where it carries several, this is
+       *     REQUIRED: `(assetId, frequency)` no longer identifies a rule, and
+       *     the server returns 422 rather than adjusting an arbitrary
+       *     document's schedule.
+       */
+      assetDocumentId?: string;
       frequency: components['schemas']['Frequency'];
       /** Format: date */
       nextDueOn: string;
@@ -2131,11 +2214,6 @@ export interface components {
       code: string;
       name: string;
       description?: string | null;
-      /**
-       * Format: uuid
-       * @description One form_template per asset type (1:1)
-       */
-      formTemplateId: string;
       /** Format: uuid */
       approvalRouteId: string;
       leadTimeDays: number;
@@ -2146,8 +2224,6 @@ export interface components {
       name: string;
       description?: string;
       /** Format: uuid */
-      formTemplateId: string;
-      /** Format: uuid */
       approvalRouteId: string;
       leadTimeDays?: number;
     };
@@ -2157,6 +2233,59 @@ export interface components {
       leadTimeDays?: number;
       active?: boolean;
     };
+    AssetDocument: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      assetId: string;
+      /** Format: uuid */
+      formTemplateId: string;
+      /** @example CE 95 020 00 03 */
+      documentNumber: string;
+      /**
+       * @description The template's stored title, blank and all.
+       * @example KNS Wire Bond Preventive Maintenance Record KW___
+       */
+      title: string;
+      /**
+       * @description The title with `machineNumber` substituted into its blank. With no
+       *     machineNumber the blank stays intact, exactly as the paper form
+       *     reads before someone writes on it.
+       * @example KNS Wire Bond Preventive Maintenance Record KW13
+       */
+      resolvedTitle: string;
+      /**
+       * @description Whether the title carries a run of two or more underscores. The
+       *     admin screen keys its form-number field off this, so an admin is
+       *     never offered a box that does nothing and can never believe they
+       *     have labelled a form when they have not. True for 8 of the 12 real
+       *     templates; false for the fixed EP01/PM01 titles and the two with no
+       *     machine designation at all.
+       */
+      titleHasFillableRun: boolean;
+      /**
+       * @description Fills the blank. NULL is always valid and never a validation error.
+       * @example 13
+       */
+      machineNumber: string | null;
+      active: boolean;
+    };
+    AssetDocumentCreate: {
+      /** Format: uuid */
+      formTemplateId: string;
+      /**
+       * @description Never required, whatever the title looks like. Supplied for a title
+       *     with no blank it is simply stored and has nothing to substitute
+       *     into (owner, 2026-07-29: "Is ok some forms are already pre updated
+       *     just allow user to choose").
+       */
+      machineNumber?: string | null;
+    };
+    AssetDocumentUpdate: {
+      machineNumber?: string | null;
+      /** @description `false` retires the document — the only removal there is (INV-16). */
+      active?: boolean;
+    };
     FormTemplate: {
       /** Format: uuid */
       id: string;
@@ -2164,8 +2293,6 @@ export interface components {
       documentNumber: string;
       title: string;
       active: boolean;
-      /** Format: uuid */
-      assetTypeId?: string | null;
       /**
        * Format: uuid
        * @description Resolves to null if no revision has ever been approved
@@ -2286,6 +2413,13 @@ export interface components {
       /** Format: uuid */
       assetId?: string;
       assetCode: string;
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. WHICH of the machine's documents this job
+       *     records. A machine may carry several, so `assetId` alone no longer
+       *     identifies the form the record belongs to.
+       */
+      assetDocumentId?: string;
       documentNumber?: string;
       revisionCode?: string;
       frequency: components['schemas']['Frequency'];
@@ -2446,6 +2580,15 @@ export interface components {
        * @description The machine the work is being raised against.
        */
       assetId: string;
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. WHICH of the machine's documents this off-plan
+       *     work is recorded on — the document decides which checklist is
+       *     frozen onto the job. Optional only where the machine carries
+       *     exactly one active document; where it carries several the server
+       *     returns 422 rather than picking one.
+       */
+      assetDocumentId?: string;
       /**
        * @description Which depth of the frozen checklist is being performed. Labels
        *     the record; it does NOT make the job count against the plan (the
@@ -3613,6 +3756,91 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ScheduleRule'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  getAssetDocuments: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The machine's tagged documents */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: components['schemas']['AssetDocument'][];
+          };
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  tagAssetDocument: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AssetDocumentCreate'];
+      };
+    };
+    responses: {
+      /** @description Tagged */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AssetDocument'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      409: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  updateAssetDocument: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AssetDocumentUpdate'];
+      };
+    };
+    responses: {
+      /** @description Updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AssetDocument'];
         };
       };
       403: components['responses']['Problem'];
