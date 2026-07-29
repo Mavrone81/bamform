@@ -41,6 +41,7 @@ export function toJobSummary(row: JobSummaryRow, today: Date = new Date()): JobS
     jobNumber: row.jobNumber,
     assetId: row.assetId,
     assetCode: row.asset.code,
+    assetDocumentId: row.assetDocumentId,
     documentNumber: row.templateRevision.formTemplate.documentNumber,
     revisionCode: row.templateRevision.revisionCode,
     frequency: row.frequency,

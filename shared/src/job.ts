@@ -38,6 +38,12 @@ export const jobSummarySchema = z.object({
   jobNumber: z.string(),
   assetId: z.string().uuid(),
   assetCode: z.string(),
+  /**
+   * Slice 27-ASSETDOC — WHICH of the machine's documents this job records.
+   * Without it a client cannot tell which document a record belongs to, and
+   * slice 28's form picker cannot map a job back to the form it came from.
+   */
+  assetDocumentId: z.string().uuid(),
   documentNumber: z.string().optional(),
   revisionCode: z.string().optional(),
   frequency: frequencySchema,

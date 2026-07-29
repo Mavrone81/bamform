@@ -3158,6 +3158,13 @@ components:
         jobNumber: { type: string, examples: [PM-2026-000431] }
         assetId: { type: string, format: uuid }
         assetCode: { type: string }
+        assetDocumentId:
+          type: string
+          format: uuid
+          description: |
+            Slice 27-ASSETDOC. WHICH of the machine's documents this job
+            records. A machine may carry several, so `assetId` alone no longer
+            identifies the form the record belongs to.
         documentNumber: { type: string }
         revisionCode: { type: string }
         frequency: { $ref: '#/components/schemas/Frequency' }
