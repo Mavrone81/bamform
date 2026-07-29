@@ -94,6 +94,16 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     expect(res.body.partNo).toBe('F-100');
   });
 
+  it('rejects a malformed (non-UUID) partId with 404, not a bare 500', async () => {
+    const { jobId, token } = await makeInProgressJobAssignedToMaintainer();
+    const res = await request(app!.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/parts/abc`)
+      .set(...authHeader(token))
+      .send({ description: 'Gasket', quantity: 1 })
+      .expect(404);
+    expect(res.body).toMatchObject({ type: '/errors/not-found' });
+  });
+
   it('PUT updates the same part id (one row, new values)', async () => {
     const { jobId, token } = await makeInProgressJobAssignedToMaintainer();
     const partId = randomUUID();
@@ -159,7 +169,36 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     expect(res.body).toMatchObject({ type: '/errors/invalid-transition' });
   });
 
-  it('is idempotent on replay with the same Idempotency-Key', async () => {
+  it('rejects a partId that belongs to a different job (404, other job untouched)', async () => {
+    const jobA = await makeInProgressJobAssignedToMaintainer();
+    const jobB = await makeInProgressJobAssignedToMaintainer();
+    const partIdOfB = randomUUID();
+
+    await request(app!.getHttpServer())
+      .put(`/api/v1/jobs/${jobB.jobId}/parts/${partIdOfB}`)
+      .set(...authHeader(jobB.token))
+      .send({ description: 'Belongs to job B', quantity: 1 })
+      .expect(200);
+
+    const res = await request(app!.getHttpServer())
+      .put(`/api/v1/jobs/${jobA.jobId}/parts/${partIdOfB}`)
+      .set(...authHeader(jobA.token))
+      .send({ description: 'Hijack attempt', quantity: 99, active: false })
+      .expect(404);
+    expect(res.body).toMatchObject({ type: '/errors/not-found' });
+
+    const { rows } = await adminPool.query(
+      `SELECT job_id, description, quantity, active FROM "part_used" WHERE id = $1`,
+      [partIdOfB],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].job_id).toBe(jobB.jobId);
+    expect(rows[0].description).toBe('Belongs to job B');
+    expect(Number(rows[0].quantity)).toBe(1);
+    expect(rows[0].active).toBe(true);
+  });
+
+  it('is idempotent on replay with the same Idempotency-Key (one row, ONE audit event — a re-applied PUT would write two)', async () => {
     const { jobId, token } = await makeInProgressJobAssignedToMaintainer();
     const partId = randomUUID();
     const key = randomUUID();
@@ -185,5 +224,40 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
       [partId],
     );
     expect(rows).toHaveLength(1);
+
+    // A genuine replay short-circuits in `checkReplay`, before the
+    // transaction (and its `audit.record` call) ever runs. A NON-replayed
+    // second PUT (e.g. the `if (idempotencyKey)` short-circuit deleted from
+    // `upsertPart`) would instead re-run the upsert as an `update` and write
+    // a second audit_event — this is the assertion that actually
+    // distinguishes "replayed" from "just happened to produce the same
+    // response" (mirrors approval-void-post-archive.spec.ts's "no second
+    // step, no second audit").
+    const audit = await adminPool.query(
+      `SELECT count(*)::int AS n FROM "audit_event" WHERE entity_type = 'part_used' AND entity_id = $1`,
+      [partId],
+    );
+    expect(audit.rows[0].n).toBe(1);
+  });
+
+  it('rejects the same Idempotency-Key reused with a different body (422 idempotency-mismatch)', async () => {
+    const { jobId, token } = await makeInProgressJobAssignedToMaintainer();
+    const partId = randomUUID();
+    const key = randomUUID();
+
+    await request(app!.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
+      .set(...authHeader(token))
+      .set('Idempotency-Key', key)
+      .send({ description: 'Gasket', quantity: 3 })
+      .expect(200);
+
+    const res = await request(app!.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
+      .set(...authHeader(token))
+      .set('Idempotency-Key', key)
+      .send({ description: 'Gasket', quantity: 4 })
+      .expect(422);
+    expect(res.body).toMatchObject({ type: '/errors/idempotency-mismatch' });
   });
 });

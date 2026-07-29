@@ -5,6 +5,7 @@ import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import { notFoundProblem } from '../common/domain-problems';
 import { IdempotencyService } from '../common/idempotency.service';
+import { isUuid } from '../common/uuid';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertJobWritable } from './job-status-guard';
 import { JobsService } from './jobs.service';
@@ -112,6 +113,17 @@ export class PartsService {
     actor: ActorMeta,
     roles: string[],
   ): Promise<PartUsed> {
+    // `part_used.id` is `@db.Uuid`; a non-UUID partId reaching Prisma raises
+    // P2023 and, with no global exception filter, surfaces as a bare 500 —
+    // not RFC 9457, and (per Task 4) a 5xx is retried indefinitely by the
+    // offline outbox where a 404 is terminal. This is the first PUT where
+    // the CLIENT mints the id (the sibling item/measurement PUTs resolve
+    // their path id via an in-memory `.find()` and never reach Prisma with
+    // it), so unlike those routes this one needs an explicit format guard.
+    if (!isUuid(partId)) {
+      throw notFoundProblem('Part', partId);
+    }
+
     let fingerprint: Buffer | undefined;
     if (idempotencyKey) {
       fingerprint = this.idempotency.fingerprint({ jobId, partId, ...dto });
@@ -157,6 +169,14 @@ export class PartsService {
         action: existing ? AuditActionT.update : AuditActionT.create,
         entityType: 'part_used',
         entityId: row.id,
+        // `existing` (loaded above) is the pre-image — this `before` is the
+        // only compensating record of a soft-remove (`active: true -> false`,
+        // non-negotiable #7's substitute for `DELETE`); without it an audit
+        // reader sees `action=update, after.active=false` with no evidence
+        // the part was ever active. Mirrors results.service.ts's recordItemResult.
+        before: existing
+          ? { quantity: existing.quantity.toNumber(), active: existing.active }
+          : null,
         after: {
           partNo: row.partNo,
           description: row.description,
