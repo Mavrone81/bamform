@@ -145,6 +145,7 @@ export class VerificationService {
         if (isFinalStage) {
           await this.completionCascade.apply(tx, {
             jobId,
+            assetDocumentId: job.assetDocumentId,
             assetId: job.assetId,
             frequencyScope: job.frequencyScope as Frequency[],
             verifiedOn: now,

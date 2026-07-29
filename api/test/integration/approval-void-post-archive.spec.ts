@@ -719,7 +719,7 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
 
     await completeJob(firstJobId, itemIds, users);
     const advanced = await adminPool.query(
-      `SELECT last_completed_on, next_due_on FROM "schedule_rule" WHERE asset_id = $1 AND frequency = 'M1'`,
+      `SELECT last_completed_on, next_due_on FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 AND r.frequency = 'M1'`,
       [assetId],
     );
     expect(advanced.rows[0].last_completed_on).not.toBeNull();
@@ -736,17 +736,21 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
       .expect(200);
 
     const recomputed = await adminPool.query(
-      `SELECT last_completed_on, next_due_on FROM "schedule_rule" WHERE asset_id = $1 AND frequency = 'M1'`,
+      `SELECT last_completed_on, next_due_on FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 AND r.frequency = 'M1'`,
       [assetId],
     );
     expect(recomputed.rows[0].last_completed_on).toBeNull();
     expect((recomputed.rows[0].next_due_on as Date).toISOString()).toBe(firstDueOn.toISOString());
 
     // The recompute is audited per rule, mirroring the forward cascade.
+    // Slice 27-ASSETDOC: `entity_id` is the asset_document, not the asset —
+    // with several documents per machine an asset-keyed row no longer says
+    // which schedule moved.
     const audit = await adminPool.query(
-      `SELECT after FROM "audit_event"
-       WHERE entity_type = 'schedule_rule' AND entity_id = $1 AND action = 'update'
-       ORDER BY sequence DESC LIMIT 1`,
+      `SELECT a.after FROM "audit_event" a
+       JOIN "asset_document" d ON d.id = a.entity_id
+       WHERE a.entity_type = 'schedule_rule' AND d.asset_id = $1 AND a.action = 'update'
+       ORDER BY a.sequence DESC LIMIT 1`,
       [assetId],
     );
     expect(audit.rows[0].after).toMatchObject({
@@ -781,7 +785,7 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
     const firstJobId = jobs1.rows[0].id as string;
     await completeJob(firstJobId, itemIds, users);
     const afterFirst = await adminPool.query(
-      `SELECT last_completed_on, next_due_on FROM "schedule_rule" WHERE asset_id = $1 AND frequency = 'M1'`,
+      `SELECT last_completed_on, next_due_on FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 AND r.frequency = 'M1'`,
       [assetId],
     );
     const firstCompletionOn = afterFirst.rows[0].last_completed_on as Date;
@@ -806,7 +810,7 @@ describe('POST /jobs/{id}/void from ARCHIVED — annotation, immutability, sched
       .expect(200);
 
     const recomputed = await adminPool.query(
-      `SELECT last_completed_on, next_due_on FROM "schedule_rule" WHERE asset_id = $1 AND frequency = 'M1'`,
+      `SELECT last_completed_on, next_due_on FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 AND r.frequency = 'M1'`,
       [assetId],
     );
     expect((recomputed.rows[0].last_completed_on as Date).toISOString()).toBe(

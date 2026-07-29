@@ -26,6 +26,14 @@ import { addCalendarMonthsClamped } from './completion-cascade';
  * just declared never happened. Audited per rule, in-txn, mirroring the
  * forward cascade's audit shape (`cause: 'post_archive_void_recompute'`).
  *
+ * Slice 27-ASSETDOC — every one of these lookups is scoped by
+ * `assetDocumentId`, never by `assetId`. Both halves matter: the rules being
+ * recomputed, AND the search for the "most recent still-valid completion" they
+ * are recomputed FROM. A sibling document's archived job is not a valid
+ * completion for this one — crediting it would leave the schedule claiming a PM
+ * happened that never did, which is the exact failure the forward cascade's
+ * document scoping exists to prevent, arriving by the back door.
+ *
  * Already-generated successor jobs are deliberately LEFT ALONE (slice-17
  * brief §2): the recompute affects future generation only; generation stays
  * idempotent per (asset, scope, due_on), so an existing successor for a
@@ -41,6 +49,8 @@ export class VoidScheduleRecomputeService {
     params: {
       /** The job being voided — already flipped to `voided` in this same transaction. */
       jobId: string;
+      /** The document the voided job satisfied — the ONLY schedule it reverses. */
+      assetDocumentId: string;
       assetId: string;
       frequencyScope: readonly Frequency[];
       /** The voided job's own original due date — the fallback `next_due_on`. */
@@ -57,7 +67,8 @@ export class VoidScheduleRecomputeService {
       // braces against reordering of the guarded update.
       const prior = await tx.job.findFirst({
         where: {
-          assetId: params.assetId,
+          // Slice 27: THIS document's history only.
+          assetDocumentId: params.assetDocumentId,
           id: { not: params.jobId },
           status: JobStatusT.archived,
           frequencyScope: { has: frequency },
@@ -73,7 +84,7 @@ export class VoidScheduleRecomputeService {
         : params.voidedJobDueOn;
 
       const row = await tx.scheduleRule.updateMany({
-        where: { assetId: params.assetId, frequency },
+        where: { assetDocumentId: params.assetDocumentId, frequency },
         data: { lastCompletedOn, nextDueOn },
       });
       if (row.count > 0) {
@@ -81,8 +92,9 @@ export class VoidScheduleRecomputeService {
           actorId: params.actorId,
           action: AuditActionT.update,
           entityType: 'schedule_rule',
-          entityId: params.assetId,
+          entityId: params.assetDocumentId,
           after: {
+            assetDocumentId: params.assetDocumentId,
             assetId: params.assetId,
             frequency,
             lastCompletedOn,
