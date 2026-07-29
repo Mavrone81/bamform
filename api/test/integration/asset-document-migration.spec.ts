@@ -6,10 +6,14 @@ import {
   createAssetType,
   createFormTemplate,
   createScheduleRule,
+  createTemplateRevision,
+  createUser,
+  getAssetDocumentId,
   getSeededApprovalRouteId,
 } from './helpers/fixtures';
 
 const UNIQUE_VIOLATION = '23505';
+const FOREIGN_KEY_VIOLATION = '23503';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -141,6 +145,36 @@ describe('asset_document migration (slice 27-ASSETDOC)', () => {
 
     await expect(createAssetDocument(assetOne, shared)).resolves.toEqual(expect.any(String));
     await expect(createAssetDocument(assetTwo, shared)).resolves.toEqual(expect.any(String));
+  });
+
+  it('REFUSES a job whose document belongs to a DIFFERENT machine (m-2, defence in depth)', async () => {
+    // Nothing in the application writes such a row, and the reviewer confirmed
+    // every current write path is safe. But if one ever existed, a completion on
+    // machine X would advance machine Y's schedule through the (correctly
+    // document-scoped) cascade — the cross-document defect of spec §4.3 arriving
+    // via a denormalisation mismatch instead. `job` carries BOTH `asset_id` and
+    // `asset_document_id`; a composite foreign key is what makes them agree.
+    const approvalRouteId = await getSeededApprovalRouteId();
+    const authorId = await createUser('author');
+    const templateId = await createFormTemplate(`DOC-${randomUUID()}`);
+    const assetTypeId = await createAssetType(templateId, approvalRouteId, `AT-${randomUUID()}`);
+    const machineX = await createAsset(assetTypeId, `X-${randomUUID()}`);
+    const machineY = await createAsset(assetTypeId, `Y-${randomUUID()}`);
+    const revisionId = await createTemplateRevision(templateId, authorId, {
+      sequenceOrdinal: 0,
+      status: 'current',
+    });
+    const documentOfY = await getAssetDocumentId(machineY);
+
+    await expect(
+      adminPool.query(
+        `INSERT INTO "job" ("job_number","asset_id","asset_document_id","template_revision_id",
+                            "approval_route_id","frequency","frequency_scope","due_on",
+                            "generated_at","status")
+         VALUES ($1,$2,$3,$4,$5,'M1',ARRAY['M1']::"frequency_t"[],CURRENT_DATE,now(),'scheduled')`,
+        [`PM-XDOC-${randomUUID()}`, machineX, documentOfY, revisionId, approvalRouteId],
+      ),
+    ).rejects.toMatchObject({ code: FOREIGN_KEY_VIOLATION });
   });
 
   it('leaves no orphaned schedule_rule or job rows once real rows exist', async () => {

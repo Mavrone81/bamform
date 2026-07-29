@@ -445,6 +445,14 @@ model AssetDocument {
   // (same reason INV-01's one-current-revision index and job's period key
   // live only in raw SQL), so it is deliberately absent here rather than
   // declared as a weaker full index that `migrate dev` would then try to add.
+  //
+  // Likewise absent: `UNIQUE (id, asset_id)` and the composite FK from
+  // `job(asset_document_id, asset_id)` that references it (migration
+  // 20260730000030, review m-2). It ties `job.asset_id` to the machine its
+  // document belongs to. Expressing it here would need `Job.assetId` to
+  // participate in two relations at once, which reshapes the generated client
+  // for no gain — the constraint is a database-level integrity guard, not
+  // something application code ever traverses.
   @@unique([assetId, formTemplateId])
   @@map("asset_document")
 }

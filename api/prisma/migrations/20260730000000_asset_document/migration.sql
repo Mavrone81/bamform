@@ -97,14 +97,27 @@ ALTER TABLE "job" ADD COLUMN "asset_document_id" uuid;
 -- one, and invisible against the test suite, which truncates between tests.)
 --
 -- Disabling the trigger for exactly this statement is safe and does NOT weaken
--- the invariant:
---   * The migration runs inside one transaction, so the trigger is re-enabled
---     before anything else can write, and a failure rolls the disable back too.
+-- the invariant. There are three independent reasons, and the first is the
+-- strongest:
+--
+--   * INV-09 is never BYPASSABLE, even on a live system. `ALTER TABLE ...
+--     DISABLE TRIGGER` takes an ACCESS EXCLUSIVE lock on `job` and holds it
+--     until this transaction commits, so for the entire window in which the
+--     trigger is off, no other session can read or write `job` at all — a
+--     concurrent `UPDATE job` blocks until commit (verified: a second session's
+--     UPDATE hit its lock_timeout rather than slipping through). There is no
+--     interval in which an application write could evade INV-09.
+--   * The window cannot be left open by a failure. Prisma sends this file as a
+--     single simple-query message, so PostgreSQL wraps it in one implicit
+--     transaction, and DDL here is transactional: any error between DISABLE and
+--     ENABLE rolls the DISABLE back with everything else. The trigger cannot be
+--     left off by a mid-migration crash.
 --   * The write is a STRUCTURAL backfill, not a content change. It records the
 --     document each job already implicitly pointed at through
 --     asset -> asset_type -> form_template. No column INV-09 exists to protect
 --     — no result, signature, approval step, reason or status — is touched.
---   * Nothing else in this migration updates `job`.
+--     Nothing else in this migration updates `job`.
+--
 -- This is the same category of act as adding the column itself; INV-09 governs
 -- application writes to record content, not schema evolution.
 ALTER TABLE "job" DISABLE TRIGGER "job_archived_immutable_trg";
