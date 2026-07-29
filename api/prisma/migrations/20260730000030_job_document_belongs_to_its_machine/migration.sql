@@ -1,5 +1,10 @@
 -- Slice 27-ASSETDOC, review m-2 — defence in depth, not a live bug fix.
 --
+-- Reversal: ALTER TABLE "job" DROP CONSTRAINT "job_asset_document_id_asset_id_fkey";
+--           ALTER TABLE "asset_document" DROP CONSTRAINT "asset_document_id_asset_id_key";
+-- Both are pure constraints — dropping them loses no data and re-adding them
+-- only succeeds while every job's document belongs to that job's machine.
+--
 -- `job` denormalises: it carries BOTH `asset_id` (a record is about a machine —
 -- every read path, report and area-scope filter keys off it) and, since slice
 -- 27, `asset_document_id` (WHICH document it satisfies). Nothing until now made

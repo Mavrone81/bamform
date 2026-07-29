@@ -1,5 +1,16 @@
 -- Slice 27-ASSETDOC. A machine carries MANY documents.
 --
+-- Reversal: NOT cleanly reversible once any machine carries more than one
+-- document — asset_type.form_template_id holds exactly one, so a second
+-- document's schedule rules and jobs have nowhere to go and would be lost.
+-- Restore from backup instead. While every machine still has exactly one
+-- document the mechanical inverse is: re-add asset_type.form_template_id and
+-- backfill from asset_document; re-add schedule_rule.asset_id, backfill via
+-- asset_document.asset_id, restore the (asset_id, frequency) unique index and
+-- drop the (asset_document_id, frequency) one; drop job.asset_document_id;
+-- drop table asset_document. The DISABLE/ENABLE TRIGGER pair needs no undo —
+-- it is scoped to one statement inside this migration's transaction.
+--
 -- Before: asset -> asset_type -> form_template_id (UNIQUE). One machine, one
 -- form; and because the FK was UNIQUE, one form could not even be shared by
 -- two machine types. The owner's 2026 schedule workbook needs 12 machines to
