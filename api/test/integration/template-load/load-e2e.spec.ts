@@ -71,7 +71,12 @@ describe('template load e2e — loader → schedules → scheduler → job check
       email: AUTHOR.email,
       password: AUTHOR.password,
       fullName: 'TLP Load Author',
-      roleCodes: ['DOC_CONTROLLER', 'ENGINEER'],
+      // Slice 27-ASSETDOC: ADMIN is now required. Tagging a controlled document
+      // to a machine (`POST /assets/{id}/documents`) is an ADMIN act — the
+      // owner's process step 2 names the admin explicitly — and the loader
+      // performs it for each sample machine it creates. Loading templates
+      // itself still needs only DOC_CONTROLLER + ENGINEER.
+      roleCodes: ['DOC_CONTROLLER', 'ENGINEER', 'ADMIN'],
     });
     await createLoginableUser({
       email: APPROVER.email,
@@ -113,6 +118,31 @@ describe('template load e2e — loader → schedules → scheduler → job check
     expect(
       secondSummary.documents.map((d) => d.sampleMachines.length).reduce((a, b) => a + b, 0),
     ).toBe(13); // 2 for ASM_WIRE_BOND + 1 × 11
+  });
+
+  it('I-TL-19b (slice 27): the 12 templates load, and no asset type carries a document', async () => {
+    const token = await login(AUTHOR.email, AUTHOR.password);
+    const templates = await fetchJson<{ data: unknown[] }>('/api/v1/templates?limit=100', token);
+    expect(templates.data).toHaveLength(12);
+
+    // Slice 27-ASSETDOC. The loader used to mint an asset type per document
+    // purely to have somewhere to hang `form_template_id` — which is how
+    // production ended up with 12 asset types for 1 real machine. Asset types
+    // are now a machine-family grouping, decoupled from documents entirely.
+    const types = await fetchJson<{ data: Record<string, unknown>[] }>(
+      '/api/v1/asset-types?limit=100',
+      token,
+    );
+    expect(types.data.length).toBeGreaterThan(0);
+    expect(types.data.every((t) => !('formTemplateId' in t))).toBe(true);
+
+    // The route from machine to form is `asset_document`, and the loader tags
+    // each sample machine it creates.
+    const documents = await adminPool.query(
+      `SELECT count(*)::int AS n FROM "asset_document"
+        WHERE active AND asset_id IN (SELECT id FROM "asset" WHERE code_provisional)`,
+    );
+    expect(documents.rows[0].n).toBe(13);
   });
 
   it('I-TL-20: every template exists with its full revision plan — doc 1 keeps the B-02 letter gap over contiguous ordinals; doc 4 ends CURRENT at client revision D', async () => {
