@@ -70,6 +70,28 @@ export async function createFormTemplate(documentNumber: string): Promise<string
   return result.rows[0].id as string;
 }
 
+/**
+ * Slice 27-ASSETDOC compatibility shim.
+ *
+ * `asset_type.form_template_id` is GONE — an asset type is a machine-family
+ * grouping (approval route + lead time), no longer the route to a form. But
+ * ~36 pre-slice-27 call sites say `createAssetType(formTemplateId, ...)` and
+ * then expect the assets built on it to schedule and generate jobs against
+ * that template, which is still exactly what they mean.
+ *
+ * So the template is remembered here and `createAsset` tags it as the asset's
+ * one document — precisely what migration 20260730000000 did to every
+ * pre-existing asset. Those call sites keep their original meaning without
+ * being rewritten, which is what makes them a usable regression net for this
+ * slice (spec §7: "their existing tests are the safety net and must all
+ * continue to pass unmodified except where the fixture shape genuinely
+ * changed").
+ *
+ * Tests that are ABOUT several documents on one machine should ignore this and
+ * call `createAssetDocument` explicitly.
+ */
+const assetTypeDefaultTemplate = new Map<string, string>();
+
 export async function createAssetType(
   formTemplateId: string,
   approvalRouteId: string,
@@ -77,12 +99,14 @@ export async function createAssetType(
   opts: { leadTimeDays?: number } = {},
 ): Promise<string> {
   const result = await adminPool.query(
-    `INSERT INTO "asset_type" ("code", "name", "form_template_id", "approval_route_id", "lead_time_days")
-     VALUES ($1, $2, $3, $4, COALESCE($5, 30))
+    `INSERT INTO "asset_type" ("code", "name", "approval_route_id", "lead_time_days")
+     VALUES ($1, $2, $3, COALESCE($4, 30))
      RETURNING id`,
-    [code, `Asset type ${code}`, formTemplateId, approvalRouteId, opts.leadTimeDays ?? null],
+    [code, `Asset type ${code}`, approvalRouteId, opts.leadTimeDays ?? null],
   );
-  return result.rows[0].id as string;
+  const assetTypeId = result.rows[0].id as string;
+  assetTypeDefaultTemplate.set(assetTypeId, formTemplateId);
+  return assetTypeId;
 }
 
 export interface AssetOpts {
@@ -90,6 +114,11 @@ export interface AssetOpts {
   status?: 'active' | 'under_repair' | 'decommissioned';
   active?: boolean;
   areaId?: string | null;
+  /**
+   * Slice 27 — skip the automatic one-document tag so the test can build the
+   * machine's documents itself.
+   */
+  skipDefaultDocument?: boolean;
 }
 
 export async function createAsset(
@@ -111,7 +140,15 @@ export async function createAsset(
       opts.areaId ?? null,
     ],
   );
-  return result.rows[0].id as string;
+  const assetId = result.rows[0].id as string;
+
+  // Slice 27 — tag the asset type's template as this machine's one document,
+  // mirroring migration 20260730000000. See `createAssetType`'s note.
+  const defaultTemplateId = assetTypeDefaultTemplate.get(assetTypeId);
+  if (!opts.skipDefaultDocument && defaultTemplateId) {
+    await createAssetDocument(assetId, defaultTemplateId);
+  }
+  return assetId;
 }
 
 export interface TemplateRevisionOpts {
@@ -188,6 +225,43 @@ export async function createTemplateItem(
   return result.rows[0].id as string;
 }
 
+/**
+ * Slice 27-ASSETDOC — tags one form template to one machine. A machine may
+ * carry several; the same template may be tagged to many machines.
+ */
+export async function createAssetDocument(
+  assetId: string,
+  formTemplateId: string,
+  opts: { machineNumber?: string | null; active?: boolean } = {},
+): Promise<string> {
+  const result = await adminPool.query(
+    `INSERT INTO "asset_document" ("asset_id", "form_template_id", "machine_number", "active")
+     VALUES ($1, $2, $3, COALESCE($4, true))
+     RETURNING id`,
+    [assetId, formTemplateId, opts.machineNumber ?? null, opts.active ?? null],
+  );
+  return result.rows[0].id as string;
+}
+
+/**
+ * The document a fixture-built asset carries when the test did not ask for a
+ * particular one. `createAsset` tags exactly one (mirroring what the slice-27
+ * migration did to every pre-existing asset), so this is unambiguous for the
+ * ~40 pre-slice-27 call sites that only ever knew about a machine.
+ */
+export async function getAssetDocumentId(assetId: string): Promise<string> {
+  const result = await adminPool.query(
+    `SELECT id FROM "asset_document" WHERE asset_id = $1 ORDER BY id LIMIT 1`,
+    [assetId],
+  );
+  if (result.rowCount === 0) {
+    throw new Error(
+      `asset ${assetId} carries no asset_document — create one with createAssetDocument()`,
+    );
+  }
+  return result.rows[0].id as string;
+}
+
 export interface ScheduleRuleOpts {
   frequency: FrequencyLetter;
   intervalMonths: number;
@@ -195,18 +269,21 @@ export interface ScheduleRuleOpts {
   nextDueOn?: string; // 'YYYY-MM-DD'; defaults to anchorDate
   lastCompletedOn?: string | null;
   active?: boolean;
+  /** Slice 27 — defaults to the asset's single fixture-created document. */
+  assetDocumentId?: string;
 }
 
 export async function createScheduleRule(assetId: string, opts: ScheduleRuleOpts): Promise<string> {
   const anchor = opts.anchorDate ?? '2026-01-01';
+  const assetDocumentId = opts.assetDocumentId ?? (await getAssetDocumentId(assetId));
   const result = await adminPool.query(
     `INSERT INTO "schedule_rule"
-       ("asset_id", "frequency", "interval_months", "anchor_date", "next_due_on",
+       ("asset_document_id", "frequency", "interval_months", "anchor_date", "next_due_on",
         "last_completed_on", "active")
      VALUES ($1, $2::"frequency_t", $3, $4::date, COALESCE($5::date, $4::date), $6::date, COALESCE($7, true))
      RETURNING id`,
     [
-      assetId,
+      assetDocumentId,
       opts.frequency,
       opts.intervalMonths,
       anchor,
@@ -253,17 +330,28 @@ export interface JobOpts {
    */
   isAdhoc?: boolean;
   adhocReason?: string | null;
+  /** Slice 27 — defaults to the asset's single fixture-created document. */
+  assetDocumentId?: string;
+  /**
+   * Slice 27 — overrides the fixture's default `ARRAY['M1']` (or `ARRAY[]` for
+   * an ad-hoc job). Needed by tests that exercise the 3M-satisfies-1M cascade.
+   */
+  frequency?: FrequencyLetter;
+  frequencyScope?: FrequencyLetter[];
 }
 
 export async function createJob(opts: JobOpts): Promise<string> {
+  const assetDocumentId = opts.assetDocumentId ?? (await getAssetDocumentId(opts.assetId));
+  const isAdhoc = opts.isAdhoc ?? false;
+  const frequencyScope = opts.frequencyScope ?? (isAdhoc ? [] : ['M1']);
   const result = await adminPool.query(
     `INSERT INTO "job"
-       ("job_number", "asset_id", "template_revision_id", "approval_route_id",
+       ("job_number", "asset_id", "asset_document_id", "template_revision_id", "approval_route_id",
         "frequency", "frequency_scope", "due_on", "generated_at", "status", "assigned_to",
         "submitted_by", "submitted_at", "current_stage_ordinal", "archived_at", "void_reason",
         "draft_version", "is_adhoc", "adhoc_reason")
-     VALUES ($1, $2, $3, $4, 'M1',
-             CASE WHEN COALESCE($14, false) THEN ARRAY[]::"frequency_t"[] ELSE ARRAY['M1']::"frequency_t"[] END,
+     VALUES ($1, $2, $16, $3, $4, COALESCE($17, 'M1')::"frequency_t",
+             $18::"frequency_t"[],
              COALESCE($13::date, CURRENT_DATE), now(), $5, $6,
              $7, $8, $9, $10, $11, COALESCE($12, 0),
              COALESCE($14, false),
@@ -285,6 +373,9 @@ export async function createJob(opts: JobOpts): Promise<string> {
       opts.dueOn ?? null,
       opts.isAdhoc ?? null,
       opts.adhocReason ?? null,
+      assetDocumentId,
+      opts.frequency ?? null,
+      frequencyScope,
     ],
   );
   return result.rows[0].id as string;

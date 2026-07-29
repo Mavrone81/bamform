@@ -1,0 +1,23 @@
+-- Reversal: CREATE UNIQUE INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_scheduled_key"
+--             ON "job"("asset_id", "frequency_scope", "due_on")
+--             WHERE "status" <> 'voided' AND "is_adhoc" = false;
+--           Run this BEFORE reversing 20260730000010, so the period key is
+--           never absent — the same reverse-in-pairs discipline
+--           20260728000020 and 20260728020020 document.
+--
+--           NOTE ON REVERSING AT ALL: re-creating the by-asset index will FAIL
+--           if any machine has by then generated jobs for two documents in the
+--           same period — which is the configuration this slice exists to
+--           allow. Reversal is only safe while no machine carries two
+--           documents at one frequency.
+--
+-- Slice 27-ASSETDOC. Drops the by-machine period key superseded by
+-- 20260730000010's by-document one. Kept as a separate migration because
+-- DROP INDEX CONCURRENTLY, like its CREATE counterpart, cannot run inside the
+-- transaction Prisma wraps a multi-statement migration in.
+--
+-- Leaving it in place would silently defeat the whole slice: it forbids a
+-- second document's job for the same machine, frequency_scope and due_on, and
+-- `job-generation.service.ts` reports that P2002 as an idempotent "already
+-- exists" no-op rather than an error.
+DROP INDEX CONCURRENTLY "job_asset_frequency_scope_due_on_scheduled_key";
