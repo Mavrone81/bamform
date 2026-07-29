@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { resolveTemplateTitle } from '@bamform/shared';
 import { decodeIdentityField } from '../auth/crypto/identity-codec';
 import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
 import type { FieldEncryptionService } from '../crypto/field-encryption';
@@ -68,7 +69,10 @@ export class PdfRecordAssemblyService {
       recordId: job.id,
       jobNumber: job.jobNumber,
       documentNumber: job.templateRevision.formTemplate.documentNumber,
-      documentTitle: job.templateRevision.formTemplate.title,
+      documentTitle: resolveTemplateTitle(
+        job.templateRevision.formTemplate.title,
+        job.assetDocument.machineNumber,
+      ),
       revisionCode: job.templateRevision.revisionCode,
       assetCode: job.asset.code,
       assetDescription: job.asset.description,
