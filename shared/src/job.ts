@@ -134,6 +134,22 @@ export const partUsedInputSchema = z.object({
 });
 export type PartUsedInput = z.infer<typeof partUsedInputSchema>;
 
+/**
+ * `PUT /jobs/{id}/parts/{partId}` request body — slice 30. Client-keyed
+ * create-or-update (the client mints `partId`, offline-friendly and
+ * idempotent-replay-friendly, unlike the `POST` above's server-assigned id).
+ * `active: false` is the soft-remove path (BUILD_HANDOFF non-negotiable #7 —
+ * no physical `DELETE`); `active` never enters the canonical signed record.
+ */
+export const partUpsertInputSchema = z.object({
+  partNo: z.string().trim().min(1).nullable().optional(),
+  description: z.string().trim().min(1),
+  quantity: z.number().positive(),
+  remarks: z.string().nullable().optional(),
+  active: z.boolean().optional().default(true),
+});
+export type PartUpsertInput = z.infer<typeof partUpsertInputSchema>;
+
 export const partUsedSchema = z.object({
   id: z.string().uuid(),
   partNo: z.string().nullable().optional(),
