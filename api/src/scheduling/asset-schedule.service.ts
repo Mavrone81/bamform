@@ -55,10 +55,13 @@ export class AssetScheduleService {
     // not have schedule_rule rows yet (see ScheduleRuleBootstrapService).
     await this.bootstrap.ensureForAsset(assetId);
 
-    // Slice 27: every rule across every document the machine carries. The
-    // caller sees one flat list, as before; each row now names its document.
+    // Slice 27: every rule across every ACTIVE document the machine carries.
+    // The caller sees one flat list, as before; each row now names its
+    // document. `active` matters (review m-6): a RETIRED document generates no
+    // jobs (`job-generation.service.ts` filters the same way), so listing its
+    // rules here would show a planner a schedule that will never produce work.
     const rows = await this.prisma.scheduleRule.findMany({
-      where: { assetDocument: { assetId } },
+      where: { assetDocument: { assetId, active: true } },
       include: { assetDocument: true },
       orderBy: [{ assetDocumentId: 'asc' }, { intervalMonths: 'asc' }],
     });
@@ -80,7 +83,11 @@ export class AssetScheduleService {
     // with an audit entry claiming it was intended. Refuse instead.
     const matches = await this.prisma.scheduleRule.findMany({
       where: {
-        assetDocument: { assetId },
+        // Same `active` filter as the list above — a retired document is not
+        // adjustable, and must not count toward the ambiguity below either,
+        // since retiring one of two documents genuinely restores the
+        // unambiguous case.
+        assetDocument: { assetId, active: true },
         frequency: dto.frequency,
         ...(dto.assetDocumentId ? { assetDocumentId: dto.assetDocumentId } : {}),
       },
