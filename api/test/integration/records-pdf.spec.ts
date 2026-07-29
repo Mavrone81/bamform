@@ -254,6 +254,41 @@ describe('GET /records/{recordId}/pdf (E-11, PR-116/117/118)', () => {
     expect(bytes.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   }, 30_000);
 
+  it('M-4: the signed record shows the admin-filled machine number in the document title, not the blank run', async () => {
+    const { jobId, maintainerId } = await makeArchivedRecord();
+
+    // The fixture's form_template title is `Template DOC-<uuid>` (no fillable
+    // run) and the asset_document has a NULL machine_number. Give the template
+    // a real fillable run and the document the admin-filled form number BEFORE
+    // rendering — substitution happens at RENDER (template-title.ts), and the
+    // PDF is rendered on demand at GET time, so setting them now is faithful.
+    await adminPool.query(
+      `UPDATE "form_template" SET "title" = 'Preventive Maintenance Record KW___'
+         FROM "template_revision" tr, "job" j
+        WHERE tr.id = j."template_revision_id"
+          AND "form_template".id = tr."form_template_id"
+          AND j.id = $1`,
+      [jobId],
+    );
+    await adminPool.query(
+      `UPDATE "asset_document" SET "machine_number" = '13'
+         FROM "job" j
+        WHERE "asset_document".id = j."asset_document_id"
+          AND j.id = $1`,
+      [jobId],
+    );
+
+    const token = await mintAccessToken(app, maintainerId, ['MAINTAINER']);
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/records/${jobId}/pdf`)
+      .set(...authHeader(token))
+      .expect(200);
+    const text = await extractPdfText(Buffer.from(res.body as Buffer));
+
+    expect(text).toContain('KW13');
+    expect(text).not.toContain('KW___');
+  }, 30_000);
+
   it('the footer digest matches GET /records/{recordId}/integrity for the SAME record (PR-118 — reused, not invented)', async () => {
     const { jobId, maintainerId } = await makeArchivedRecord();
     const token = await mintAccessToken(app, maintainerId, ['MAINTAINER']);

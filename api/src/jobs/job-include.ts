@@ -14,6 +14,11 @@ export const JOB_SUMMARY_INCLUDE = {
 
 export const JOB_FULL_INCLUDE = {
   asset: true,
+  // Slice 29 M-4 — the admin-filled machine number lives on the job's
+  // asset_document; the signed/archived PDF resolves the fillable run in the
+  // template title against it (`pdf-record-assembly.service.ts`). `Job.
+  // assetDocumentId` is a required FK, so `assetDocument` is always present.
+  assetDocument: true,
   templateRevision: {
     include: {
       formTemplate: true,
