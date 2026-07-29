@@ -23,6 +23,7 @@
 | Revision | Date | Details of revision | Revised by | Approved by |
 |---|---|---|---|---|
 | 0.1 | 24 Jul 2026 | Initial draft | Lead Engineer | _(pending)_ |
+| 0.2 | 29 Jul 2026 | Slice 27-ASSETDOC — a machine carries many PM documents: `/assets/{assetId}/documents` and `/asset-documents/{id}` added; `AssetType.formTemplateId` and `FormTemplate.assetTypeId` removed; `ScheduleRule` re-keyed to the document; `Job` gains `assetDocumentId` | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -186,6 +187,7 @@ human signing both verification stages.
 | Create/edit template revision | | | | ✓ | ✓ | | |
 | Approve template revision | | | | | ✓ | | |
 | Create/edit assets | | | | ✓ | | ✓ | |
+| Tag PM documents to a machine | | | | ✓ | | ✓ | |
 | Adjust schedules | | ✓ | ✓ | ✓ | | ✓ | |
 | Manage users and roles | | | | | | ✓ | |
 | Create delegation | | | ✓ | ✓ | | ✓ | |
@@ -402,7 +404,9 @@ Full schemas in `api/openapi.yaml`. Summarised here by resource group.
 | `GET` `POST` | `/assets` | UR-002. `POST` rejects duplicate `code` (INV-06) |
 | `GET` `PATCH` | `/assets/{id}` | `PATCH` cannot delete; deactivation via `status` (UR-006) |
 | `GET` | `/assets/{id}/history` | UR-007 — paginated record history |
-| `GET` `PUT` | `/assets/{id}/schedule` | UR-023, UR-025. `PUT` requires `adjustedReason` |
+| `GET` `PUT` | `/assets/{id}/schedule` | UR-023, UR-025. `PUT` requires `adjustedReason`. Slice 27: takes an optional `assetDocumentId`; **422 rather than a guess** when a machine carries several documents at that frequency |
+| `GET` `POST` | `/assets/{assetId}/documents` | **Slice 27-ASSETDOC.** The PM documents this machine carries. `GET` is the maintainer's form picker (owner's process step 4) and is open to any authenticated user who can see the machine; `POST` tags one and is ENGINEER/ADMIN — the same gate as `POST /assets`, which creates the machine. `409` if the machine already carries that document |
+| `PATCH` | `/asset-documents/{id}` | **Slice 27-ASSETDOC.** Change `machineNumber`, or retire with `active: false`. ENGINEER/ADMIN. **No `DELETE`** — INV-16 forbids it on record tables and a document that has generated jobs must stay resolvable |
 
 ## 10.4 Templates and revisions
 

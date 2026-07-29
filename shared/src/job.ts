@@ -38,6 +38,12 @@ export const jobSummarySchema = z.object({
   jobNumber: z.string(),
   assetId: z.string().uuid(),
   assetCode: z.string(),
+  /**
+   * Slice 27-ASSETDOC — WHICH of the machine's documents this job records.
+   * Without it a client cannot tell which document a record belongs to, and
+   * slice 28's form picker cannot map a job back to the form it came from.
+   */
+  assetDocumentId: z.string().uuid(),
   documentNumber: z.string().optional(),
   revisionCode: z.string().optional(),
   frequency: frequencySchema,
@@ -265,6 +271,15 @@ export type SubmitJobRequest = z.infer<typeof submitJobRequestSchema>;
  */
 export const createAdhocJobRequestSchema = z.object({
   assetId: z.string().uuid(),
+  /**
+   * Slice 27-ASSETDOC — WHICH of the machine's documents this off-plan work is
+   * recorded on. Optional only where there is nothing to choose: a machine
+   * carrying exactly one active document. Where it carries several, the planner
+   * must say, because the document decides which checklist gets frozen onto the
+   * job — picking one silently would put the pH-meter checklist on a
+   * preventive-maintenance call-out.
+   */
+  assetDocumentId: z.string().uuid().optional(),
   frequency: frequencySchema,
   reason: z
     .string()

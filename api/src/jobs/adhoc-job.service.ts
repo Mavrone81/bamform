@@ -92,12 +92,41 @@ export class AdhocJobService {
       );
     }
 
+    // Slice 27-ASSETDOC — the checklist comes from a DOCUMENT tagged to the
+    // machine, not from its asset type. Where the machine carries several, the
+    // planner must name one: freezing an arbitrary document's checklist onto
+    // off-plan work would put (say) the pH-meter checks on a PM call-out.
+    const documents = await this.prisma.assetDocument.findMany({
+      where: { assetId: asset.id, active: true },
+      orderBy: { id: 'asc' },
+    });
+    if (documents.length === 0) {
+      throw validationFailedProblem(
+        'This machine carries no active preventive-maintenance document — an admin must tag one before work can be raised against it (POST /assets/{assetId}/documents).',
+      );
+    }
+    let document;
+    if (dto.assetDocumentId) {
+      document = documents.find((row) => row.id === dto.assetDocumentId);
+      if (!document) {
+        throw validationFailedProblem(
+          `Document ${dto.assetDocumentId} is not an active document of this machine.`,
+        );
+      }
+    } else if (documents.length > 1) {
+      throw validationFailedProblem(
+        `This machine carries ${documents.length} documents — name the one this work is recorded on with \`assetDocumentId\`.`,
+      );
+    } else {
+      document = documents[0];
+    }
+
     const revision = await this.prisma.templateRevision.findFirst({
-      where: { formTemplateId: asset.assetType.formTemplateId, status: 'current' },
+      where: { formTemplateId: document.formTemplateId, status: 'current' },
     });
     if (!revision) {
       throw validationFailedProblem(
-        "This asset type's form template has no CURRENT revision — there is no checklist to freeze onto a job (DP-3/PR-049).",
+        'This document has no CURRENT revision — there is no checklist to freeze onto a job (DP-3/PR-049).',
       );
     }
 
@@ -110,6 +139,7 @@ export class AdhocJobService {
 
     const dtoOut = await this.createWithRetry(dto, {
       assetId: asset.id,
+      assetDocumentId: document.id,
       approvalRouteId: asset.assetType.approvalRouteId,
       templateRevisionId: revision.id,
       dueOn,
@@ -152,6 +182,7 @@ export class AdhocJobService {
     dto: CreateAdhocJobRequest,
     ctx: {
       assetId: string;
+      assetDocumentId: string;
       approvalRouteId: string;
       templateRevisionId: string;
       dueOn: Date;
@@ -183,6 +214,7 @@ export class AdhocJobService {
     dto: CreateAdhocJobRequest,
     ctx: {
       assetId: string;
+      assetDocumentId: string;
       approvalRouteId: string;
       templateRevisionId: string;
       dueOn: Date;
@@ -196,6 +228,7 @@ export class AdhocJobService {
         data: {
           jobNumber,
           assetId: ctx.assetId,
+          assetDocumentId: ctx.assetDocumentId,
           templateRevisionId: ctx.templateRevisionId,
           approvalRouteId: ctx.approvalRouteId,
           frequency: dto.frequency,

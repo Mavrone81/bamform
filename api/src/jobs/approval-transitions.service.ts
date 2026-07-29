@@ -207,6 +207,7 @@ export class ApprovalTransitionsService {
         ? (tx) =>
             this.voidScheduleRecompute.apply(tx, {
               jobId,
+              assetDocumentId: job.assetDocumentId,
               assetId: job.assetId,
               frequencyScope: job.frequencyScope as Frequency[],
               voidedJobDueOn: job.dueOn,

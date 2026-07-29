@@ -133,17 +133,10 @@ describe('test:contract — response-schema conformance', () => {
   const RESPONSE_SCHEMAS_WITH_KNOWN_KEYS = [
     { schemaName: 'Area', knownKeys: ['id', 'code', 'name', 'parentId', 'active'] },
     {
+      // Slice 27-ASSETDOC dropped `formTemplateId` — an asset type is the
+      // machine-family grouping, not the route to a form.
       schemaName: 'AssetType',
-      knownKeys: [
-        'id',
-        'code',
-        'name',
-        'description',
-        'formTemplateId',
-        'approvalRouteId',
-        'leadTimeDays',
-        'active',
-      ],
+      knownKeys: ['id', 'code', 'name', 'description', 'approvalRouteId', 'leadTimeDays', 'active'],
     },
     {
       schemaName: 'Asset',
@@ -192,6 +185,9 @@ describe('test:contract — response-schema conformance', () => {
       schemaName: 'ScheduleRule',
       knownKeys: [
         'id',
+        // Slice 27-ASSETDOC — a rule hangs off a DOCUMENT; `assetId` is
+        // retained as a derived convenience for existing readers.
+        'assetDocumentId',
         'assetId',
         'frequency',
         'intervalMonths',
@@ -199,6 +195,22 @@ describe('test:contract — response-schema conformance', () => {
         'lastCompletedOn',
         'nextDueOn',
         'adjustedReason',
+        'active',
+      ],
+    },
+    {
+      // Slice 27-ASSETDOC §4.6. `title`/`resolvedTitle`/`titleHasFillableRun`
+      // are derived per response, never stored.
+      schemaName: 'AssetDocument',
+      knownKeys: [
+        'id',
+        'assetId',
+        'formTemplateId',
+        'documentNumber',
+        'title',
+        'resolvedTitle',
+        'titleHasFillableRun',
+        'machineNumber',
         'active',
       ],
     },

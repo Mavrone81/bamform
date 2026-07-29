@@ -58,6 +58,18 @@ export const EXPECTED_ROUTE_ROLES: Readonly<Record<string, readonly string[]>> =
   'POST /api/v1/jobs/{jobId}/assign': ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'],
   'PUT /api/v1/assets/{assetId}/schedule': ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'],
 
+  // ---- document tagging (slice 27-ASSETDOC). Deliberately the SAME gate as
+  // `POST /api/v1/assets` above: an ENGINEER who can create a machine can
+  // finish it. Gating on ADMIN alone would let an engineer create a machine
+  // that is permanently inert (no schedule, no jobs, /jobs/adhoc 422) until an
+  // admin tags a document — and ADMIN here also administers users and roles,
+  // so requiring it for a routine act expands privilege without buying safety.
+  // There is no DELETE: INV-16 forbids it on record tables, and a document that
+  // has generated jobs must stay resolvable, so `PATCH { active: false }` is
+  // the removal.
+  'POST /api/v1/assets/{assetId}/documents': ['ENGINEER', 'ADMIN'],
+  'PATCH /api/v1/asset-documents/{id}': ['ENGINEER', 'ADMIN'],
+
   // ---- organisation-wide bulk surfaces (ORG_REPORTING_ROLES). PLANNER is
   // deliberately ABSENT — review finding X-1. `POST /records/export` produces
   // a ZIP of PDFs carrying decrypted signatory names and signature images;
@@ -165,6 +177,11 @@ export const ROUTES_WITHOUT_ROLE_GATES: readonly string[] = [
   'GET /api/v1/assets/{assetId}',
   'GET /api/v1/assets/{assetId}/history',
   'GET /api/v1/assets/{assetId}/schedule',
+  // Slice 27-ASSETDOC — the maintainer's form picker (the owner's process
+  // step 4, "select the form to start"). Role-gating it would REMOVE read
+  // access from MAINTAINER, which is the one role that most needs it; it is
+  // area-scoped in the service exactly as the schedule read above is.
+  'GET /api/v1/assets/{assetId}/documents',
   'GET /api/v1/templates',
   'GET /api/v1/templates/{templateId}',
   'GET /api/v1/templates/{templateId}/revisions',

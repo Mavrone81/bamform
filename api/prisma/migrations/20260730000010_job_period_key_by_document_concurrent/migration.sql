@@ -1,0 +1,61 @@
+-- Reversal: DROP INDEX CONCURRENTLY "job_asset_document_frequency_scope_due_on_scheduled_key";
+--           (only after re-creating the previous partial index — see the
+--           companion 20260730000020 migration's reversal note; the two
+--           migrations reverse as a pair, in reverse order. Same
+--           create-before-drop pairing as 20260728000010/20260728000020 and
+--           20260728020010/20260728020020.)
+--
+-- MID-FAILURE RECOVERY (identical shape to those two pairs — read this if
+-- `migrate deploy` is failing on THIS migration with:
+--   relation "job_asset_document_frequency_scope_due_on_scheduled_key" already exists
+-- ): an interrupted `CREATE INDEX CONCURRENTLY` leaves an INVALID index that
+-- still holds the name. Recovery, verbatim:
+--
+--   1. psql:  DROP INDEX CONCURRENTLY IF EXISTS
+--               "job_asset_document_frequency_scope_due_on_scheduled_key";
+--   2. npx prisma migrate resolve --rolled-back
+--        20260730000010_job_period_key_by_document_concurrent
+--   3. npx prisma migrate deploy
+--
+-- SAFETY DURING ANY OF THIS: deploy halts before 20260730000020, so the
+-- previous "job_asset_frequency_scope_due_on_scheduled_key" is still in place
+-- — enforcement is never weaker than intended while this migration is broken,
+-- only (harmlessly) stricter.
+--
+-- Slice 27-ASSETDOC — NOT in the slice plan; found while reading the schema.
+--
+-- PR-052's generation-idempotency key (I-INV-14) stops the scheduler
+-- generating the same PLANNED job twice for a period. Its period was
+-- (asset_id, frequency_scope, due_on) — correct only while a machine carried
+-- exactly ONE document. The whole point of this slice is that TE7 carries a
+-- monthly pH-meter check AND a monthly preventive maintenance: two documents,
+-- same machine, same frequency, therefore the same `frequency_scope` and the
+-- same `due_on`. Under the outgoing index the second document's job raised
+-- P2002 and `job-generation.service.ts` swallowed it as an idempotent no-op —
+-- the pH check would simply never be raised, and the counters would report it
+-- as "already exists". Silent, and exactly the class of defect this slice is
+-- about.
+--
+-- The period is therefore per DOCUMENT, not per machine. `asset_document_id`
+-- functionally determines `asset_id` (a document belongs to exactly one
+-- machine), so the new key is strictly finer than the old one: everything the
+-- old index forbade that SHOULD still be forbidden, it still forbids.
+--
+-- The two predicate exclusions are unchanged and carry their original
+-- meanings: a VOIDED job never occupies its schedule period (SYS-19, owner
+-- decision 2026-07-27), and an AD-HOC job (UR-028) never occupies one at all.
+--
+-- Existing-row safety: `asset_document_id` is NOT NULL as of 20260730000000
+-- and was backfilled one-per-asset, so the new index covers exactly the same
+-- rows the outgoing one does and cannot fail on existing data.
+--
+-- NOT a Prisma `@@unique`: Prisma's DSL cannot express partial unique indexes
+-- (same reason as INV-01's one-current-revision index and this index's own
+-- predecessors). Prisma still maps its violation to P2002, which
+-- `job-generation.service.ts` already handles.
+--
+-- CONCURRENTLY per M-06 (job is a large table); single statement so Prisma
+-- runs it outside a transaction.
+CREATE UNIQUE INDEX CONCURRENTLY "job_asset_document_frequency_scope_due_on_scheduled_key"
+  ON "job"("asset_document_id", "frequency_scope", "due_on")
+  WHERE "status" <> 'voided' AND "is_adhoc" = false;

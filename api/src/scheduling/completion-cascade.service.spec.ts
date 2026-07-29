@@ -4,7 +4,7 @@ import { addCalendarMonthsClamped } from './completion-cascade';
 import type { RecordAuditEventParams } from '../audit/audit-event.service';
 
 interface UpdateManyArgs {
-  where: { assetId: string; frequency: string };
+  where: { assetDocumentId: string; frequency: string };
   data: { lastCompletedOn: Date; nextDueOn: Date };
 }
 
@@ -37,6 +37,7 @@ describe('CompletionCascadeService.apply (PR-055/PR-056 — the DB-write seam sl
 
     await service.apply(tx as never, {
       jobId: 'job-1',
+      assetDocumentId: 'doc-1',
       assetId: 'asset-1',
       frequencyScope: ['M1', 'M3', 'M6', 'Y'],
       verifiedOn,
@@ -45,14 +46,14 @@ describe('CompletionCascadeService.apply (PR-055/PR-056 — the DB-write seam sl
 
     expect(tx.scheduleRule.updateMany).toHaveBeenCalledTimes(4);
     expect(tx.scheduleRule.updateMany).toHaveBeenNthCalledWith(1, {
-      where: { assetId: 'asset-1', frequency: 'M1' },
+      where: { assetDocumentId: 'doc-1', frequency: 'M1' },
       data: {
         lastCompletedOn: verifiedOn,
         nextDueOn: addCalendarMonthsClamped(verifiedOn, 1),
       },
     });
     expect(tx.scheduleRule.updateMany).toHaveBeenNthCalledWith(4, {
-      where: { assetId: 'asset-1', frequency: 'Y' },
+      where: { assetDocumentId: 'doc-1', frequency: 'Y' },
       data: {
         lastCompletedOn: verifiedOn,
         nextDueOn: addCalendarMonthsClamped(verifiedOn, 12),
@@ -68,7 +69,7 @@ describe('CompletionCascadeService.apply (PR-055/PR-056 — the DB-write seam sl
         actorId: 'user-1',
         action: AuditActionT.update,
         entityType: 'schedule_rule',
-        entityId: 'asset-1',
+        entityId: 'doc-1',
       });
       expect((params.after as { causedByJobId: string }).causedByJobId).toBe('job-1');
     }
@@ -81,6 +82,7 @@ describe('CompletionCascadeService.apply (PR-055/PR-056 — the DB-write seam sl
 
     await service.apply(tx as never, {
       jobId: 'job-2',
+      assetDocumentId: 'doc-2',
       assetId: 'asset-2',
       frequencyScope: ['M1', 'M3'],
       verifiedOn: new Date('2026-07-24T00:00:00Z'),
@@ -104,6 +106,7 @@ describe('CompletionCascadeService.apply (PR-055/PR-056 — the DB-write seam sl
 
     await service.apply(tx as never, {
       jobId: 'job-3',
+      assetDocumentId: 'doc-3',
       assetId: 'asset-3',
       frequencyScope: ['M1', 'M6'],
       verifiedOn: new Date('2026-07-24T00:00:00Z'),
@@ -112,7 +115,7 @@ describe('CompletionCascadeService.apply (PR-055/PR-056 — the DB-write seam sl
 
     expect(tx.scheduleRule.updateMany).toHaveBeenCalledTimes(2);
     expect(audit.record).toHaveBeenCalledTimes(1);
-    expect(audit.record.mock.calls[0][1]).toMatchObject({ entityId: 'asset-3' });
+    expect(audit.record.mock.calls[0][1]).toMatchObject({ entityId: 'doc-3' });
     const [, onlyCallParams] = audit.record.mock.calls[0];
     expect((onlyCallParams.after as { frequency: string }).frequency).toBe('M6');
   });
@@ -124,6 +127,7 @@ describe('CompletionCascadeService.apply (PR-055/PR-056 — the DB-write seam sl
 
     await service.apply(tx as never, {
       jobId: 'job-4',
+      assetDocumentId: 'doc-4',
       assetId: 'asset-4',
       frequencyScope: [],
       verifiedOn: new Date('2026-07-24T00:00:00Z'),

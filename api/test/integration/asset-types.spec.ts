@@ -40,36 +40,37 @@ describe('Asset types — GET/POST /asset-types, GET/PATCH /asset-types/{id}', (
     await request(app.getHttpServer()).get('/api/v1/asset-types').expect(401);
   });
 
-  it('ENGINEER creates an asset type against a real form_template + approval_route (PR-019)', async () => {
+  it('ENGINEER creates an asset type against a real approval_route (PR-019)', async () => {
     const token = await engineerToken();
     const approvalRouteId = await getSeededApprovalRouteId();
-    const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
     const code = `AT-${randomUUID()}`;
 
     const res = await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code, name: 'ASM Wire Bond', formTemplateId, approvalRouteId })
+      .send({ code, name: 'ASM Wire Bond', approvalRouteId })
       .expect(201);
 
     expect(res.body).toMatchObject({
       code,
-      formTemplateId,
       approvalRouteId,
       leadTimeDays: 30,
       active: true,
     });
+    // Slice 27-ASSETDOC: an asset type is the machine-family grouping and no
+    // longer names a form. Which documents a MACHINE carries is
+    // `GET /assets/{id}/documents`.
+    expect(res.body).not.toHaveProperty('formTemplateId');
   });
 
   it('writes an audit_event in the same transaction as creation (PR-098)', async () => {
     const token = await engineerToken();
     const approvalRouteId = await getSeededApprovalRouteId();
-    const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
 
     const res = await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code: `AT-${randomUUID()}`, name: 'X', formTemplateId, approvalRouteId })
+      .send({ code: `AT-${randomUUID()}`, name: 'X', approvalRouteId })
       .expect(201);
 
     const audit = await adminPool.query(
@@ -84,12 +85,11 @@ describe('Asset types — GET/POST /asset-types, GET/PATCH /asset-types/{id}', (
     await grantRole(userId, 'MAINTAINER');
     const token = await mintAccessToken(app, userId, ['MAINTAINER']);
     const approvalRouteId = await getSeededApprovalRouteId();
-    const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
 
     await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code: `AT-${randomUUID()}`, name: 'X', formTemplateId, approvalRouteId })
+      .send({ code: `AT-${randomUUID()}`, name: 'X', approvalRouteId })
       .expect(403);
   });
 
@@ -97,48 +97,61 @@ describe('Asset types — GET/POST /asset-types, GET/PATCH /asset-types/{id}', (
     const token = await engineerToken();
     const approvalRouteId = await getSeededApprovalRouteId();
     const code = `AT-${randomUUID()}`;
-    const formTemplateId1 = await createFormTemplate(`DOC-${randomUUID()}`);
-    const formTemplateId2 = await createFormTemplate(`DOC-${randomUUID()}`);
 
     await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code, name: 'First', formTemplateId: formTemplateId1, approvalRouteId })
+      .send({ code, name: 'First', approvalRouteId })
       .expect(201);
 
     await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code, name: 'Second', formTemplateId: formTemplateId2, approvalRouteId })
+      .send({ code, name: 'Second', approvalRouteId })
       .expect(409);
   });
 
-  it('rejects a second asset type reusing the same form_template_id (1:1, slice-1 fix)', async () => {
+  it('slice 27: two asset types may now exist for the same document — the 1:1 rule is GONE', async () => {
+    // This test is the INVERSE of the slice-1 one it replaces. `asset_type`
+    // used to carry `form_template_id UNIQUE`, so a second machine family
+    // referencing the same document was a 409. That is precisely the rule the
+    // owner's schedule contradicts: CM02 and CM03 both use CE 95 030 00 01,
+    // and T8, T69 and ST01 all use CE 95 050 00 01. Asset types no longer
+    // reference a document at all, so there is nothing left to collide.
     const token = await engineerToken();
     const approvalRouteId = await getSeededApprovalRouteId();
     const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
 
-    await request(app.getHttpServer())
+    const first = await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code: `AT-${randomUUID()}`, name: 'First', formTemplateId, approvalRouteId })
+      .send({ code: `AT-${randomUUID()}`, name: 'First', approvalRouteId })
       .expect(201);
 
     await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code: `AT-${randomUUID()}`, name: 'Second', formTemplateId, approvalRouteId })
-      .expect(409);
+      .send({ code: `AT-${randomUUID()}`, name: 'Second', approvalRouteId })
+      .expect(201);
+
+    // A stray `formTemplateId` in the body is ignored, not an error — it is
+    // simply not part of the contract any more.
+    await request(app.getHttpServer())
+      .post('/api/v1/asset-types')
+      .set(...authHeader(token))
+      .send({ code: `AT-${randomUUID()}`, name: 'Third', formTemplateId, approvalRouteId })
+      .expect(201);
+
+    expect(first.body).not.toHaveProperty('formTemplateId');
   });
 
   it('GET /asset-types/{id} 404s for an unknown id, 200s for a known one', async () => {
     const token = await engineerToken();
     const approvalRouteId = await getSeededApprovalRouteId();
-    const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
     const createRes = await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(token))
-      .send({ code: `AT-${randomUUID()}`, name: 'X', formTemplateId, approvalRouteId })
+      .send({ code: `AT-${randomUUID()}`, name: 'X', approvalRouteId })
       .expect(201);
 
     await request(app.getHttpServer())
@@ -155,11 +168,10 @@ describe('Asset types — GET/POST /asset-types, GET/PATCH /asset-types/{id}', (
   it('ADMIN can PATCH leadTimeDays and deactivate (PR-039)', async () => {
     const engineer = await engineerToken();
     const approvalRouteId = await getSeededApprovalRouteId();
-    const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
     const createRes = await request(app.getHttpServer())
       .post('/api/v1/asset-types')
       .set(...authHeader(engineer))
-      .send({ code: `AT-${randomUUID()}`, name: 'X', formTemplateId, approvalRouteId })
+      .send({ code: `AT-${randomUUID()}`, name: 'X', approvalRouteId })
       .expect(201);
 
     const adminId = await createUser('admin');

@@ -10,15 +10,16 @@ import type { RecordAuditEventParams } from '../audit/audit-event.service';
  * integration suite (which already covers the happy path end-to-end).
  */
 function fakePrisma(overrides: {
-  asset?: unknown;
+  /** Slice 27: bootstrap iterates a machine's DOCUMENTS, not the machine. */
+  documents?: unknown[];
   revision?: unknown;
   activeItems?: Array<{ frequency: string }>;
   existingRules?: Array<{ frequency: string }>;
   createManyCount?: number;
 }) {
   return {
-    asset: {
-      findUnique: jest.fn(async () => overrides.asset ?? null),
+    assetDocument: {
+      findMany: jest.fn(async () => overrides.documents ?? []),
     },
     templateRevision: {
       findFirst: jest.fn(async () => overrides.revision ?? null),
@@ -40,6 +41,26 @@ function fakePrisma(overrides: {
   };
 }
 
+/**
+ * One tagged document, with the machine it hangs off included the way
+ * `ScheduleRuleBootstrapService` reads it.
+ */
+function oneDocument(id = 'doc-1', formTemplateId = 'ft-1') {
+  return {
+    id,
+    formTemplateId,
+    active: true,
+    asset: {
+      id: 'asset-1',
+      active: true,
+      status: 'active',
+      // The anchor is a property of the MACHINE — several documents on one
+      // machine share it.
+      scheduleAnchorDate: new Date('2026-01-01T00:00:00Z'),
+    },
+  };
+}
+
 function fakeAudit() {
   return {
     record: jest.fn(async (_tx: unknown, _params: RecordAuditEventParams): Promise<void> => {
@@ -49,8 +70,8 @@ function fakeAudit() {
 }
 
 describe('ScheduleRuleBootstrapService (self-heal edge cases not covered end-to-end)', () => {
-  it('ensureForAsset is a no-op when the asset does not exist', async () => {
-    const prisma = fakePrisma({ asset: null });
+  it('ensureForAsset is a no-op when the asset carries no active documents', async () => {
+    const prisma = fakePrisma({ documents: [] });
     const audit = fakeAudit();
     const service = new ScheduleRuleBootstrapService(prisma as never, audit as never);
 
@@ -60,9 +81,9 @@ describe('ScheduleRuleBootstrapService (self-heal edge cases not covered end-to-
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('ensureForAsset is a no-op when the asset type has no CURRENT template revision', async () => {
+  it('ensureForAsset is a no-op when the DOCUMENT has no CURRENT template revision', async () => {
     const prisma = fakePrisma({
-      asset: { id: 'asset-1', assetType: { formTemplateId: 'ft-1' } },
+      documents: [oneDocument()],
       revision: null,
     });
     const audit = fakeAudit();
@@ -76,7 +97,7 @@ describe('ScheduleRuleBootstrapService (self-heal edge cases not covered end-to-
 
   it('ensureForAsset is a no-op when the current revision has zero active items', async () => {
     const prisma = fakePrisma({
-      asset: { id: 'asset-1', assetType: { formTemplateId: 'ft-1' } },
+      documents: [oneDocument()],
       revision: { id: 'rev-1' },
       activeItems: [],
     });
@@ -89,9 +110,9 @@ describe('ScheduleRuleBootstrapService (self-heal edge cases not covered end-to-
     expect(audit.record).not.toHaveBeenCalled();
   });
 
-  it('ensureForAsset is a no-op when every candidate frequency already has a schedule_rule row', async () => {
+  it('ensureForAsset is a no-op when every candidate frequency already has a schedule_rule row for that document', async () => {
     const prisma = fakePrisma({
-      asset: { id: 'asset-1', assetType: { formTemplateId: 'ft-1' } },
+      documents: [oneDocument()],
       revision: { id: 'rev-1' },
       activeItems: [{ frequency: 'M1' }],
       existingRules: [{ frequency: 'M1' }],
@@ -107,7 +128,7 @@ describe('ScheduleRuleBootstrapService (self-heal edge cases not covered end-to-
 
   it('does not record an audit event when createMany inserts zero rows (all skipped as duplicates)', async () => {
     const prisma = fakePrisma({
-      asset: { id: 'asset-1', assetType: { formTemplateId: 'ft-1' } },
+      documents: [oneDocument()],
       revision: { id: 'rev-1' },
       activeItems: [{ frequency: 'M1' }],
       existingRules: [], // missing.length > 0 so $transaction runs...
@@ -124,7 +145,7 @@ describe('ScheduleRuleBootstrapService (self-heal edge cases not covered end-to-
 
   it('records an audit event when createMany actually inserts rows', async () => {
     const prisma = fakePrisma({
-      asset: { id: 'asset-1', assetType: { formTemplateId: 'ft-1' } },
+      documents: [oneDocument()],
       revision: { id: 'rev-1' },
       activeItems: [{ frequency: 'M1' }],
       existingRules: [],
@@ -139,7 +160,79 @@ describe('ScheduleRuleBootstrapService (self-heal edge cases not covered end-to-
     expect(audit.record.mock.calls[0][1]).toMatchObject({
       action: AuditActionT.create,
       entityType: 'schedule_rule',
-      entityId: 'asset-1',
+      // Slice 27: keyed on the DOCUMENT — an asset-keyed audit row no longer
+      // says WHICH of the machine's schedules was created.
+      entityId: 'doc-1',
+    });
+  });
+
+  /**
+   * Slice 27-ASSETDOC. The per-document behaviour proper — the real-Postgres
+   * version of these lives in `test/integration/cross-document-schedule.spec.ts`
+   * (where the `(asset_document_id, frequency)` unique index actually exists);
+   * these pin the service's own query shape, which a fake can see and a real DB
+   * cannot distinguish from a lucky asset-scoped one.
+   */
+  describe('rules are created per DOCUMENT, not per machine', () => {
+    it('creates a rule for EACH document on one machine at the same frequency', async () => {
+      const prisma = fakePrisma({
+        documents: [oneDocument('doc-A', 'ft-A'), oneDocument('doc-B', 'ft-B')],
+        revision: { id: 'rev-1' },
+        activeItems: [{ frequency: 'M1' }],
+        existingRules: [],
+        createManyCount: 1,
+      });
+      const service = new ScheduleRuleBootstrapService(prisma as never, fakeAudit() as never);
+
+      await service.ensureForAsset('asset-1');
+
+      // Two documents -> two independent createMany batches, each naming its
+      // own document. Under the old (asset, frequency) key the second was a
+      // duplicate and TE7's pH check could not be scheduled at all.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+      // Each document resolves its OWN current revision, from its own template.
+      expect(prisma.templateRevision.findFirst).toHaveBeenNthCalledWith(1, {
+        where: { formTemplateId: 'ft-A', status: 'current' },
+      });
+      expect(prisma.templateRevision.findFirst).toHaveBeenNthCalledWith(2, {
+        where: { formTemplateId: 'ft-B', status: 'current' },
+      });
+      // Existing-rule lookups are document-scoped, so a sibling document's
+      // 1M rule never masks this one as "already bootstrapped".
+      expect(prisma.scheduleRule.findMany).toHaveBeenNthCalledWith(1, {
+        where: { assetDocumentId: 'doc-A' },
+        select: { frequency: true },
+      });
+      expect(prisma.scheduleRule.findMany).toHaveBeenNthCalledWith(2, {
+        where: { assetDocumentId: 'doc-B' },
+        select: { frequency: true },
+      });
+    });
+
+    it('skips INACTIVE documents — the query never asks for them', async () => {
+      const prisma = fakePrisma({ documents: [] });
+      const service = new ScheduleRuleBootstrapService(prisma as never, fakeAudit() as never);
+
+      await service.ensureForAsset('asset-1');
+
+      // Deactivation (never deletion, INV-16) is how an admin retires a
+      // document; a retired document must stop being scheduled.
+      expect(prisma.assetDocument.findMany).toHaveBeenCalledWith({
+        where: { assetId: 'asset-1', active: true },
+        include: { asset: true },
+      });
+    });
+
+    it('the plant-wide sweep skips inactive documents AND inactive machines', async () => {
+      const prisma = fakePrisma({ documents: [] });
+      const service = new ScheduleRuleBootstrapService(prisma as never, fakeAudit() as never);
+
+      await service.ensureForAllActiveAssets();
+
+      expect(prisma.assetDocument.findMany).toHaveBeenCalledWith({
+        where: { active: true, asset: { active: true, status: 'active' } },
+        include: { asset: true },
+      });
     });
   });
 });

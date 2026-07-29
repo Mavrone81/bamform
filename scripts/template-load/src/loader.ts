@@ -71,6 +71,11 @@ interface TemplateRevision {
 interface AssetType {
   id: string;
   code: string;
+}
+/** Slice 27-ASSETDOC — the tag that routes a machine to a form. */
+interface AssetDocument {
+  id: string;
+  assetId: string;
   formTemplateId: string;
 }
 interface Asset {
@@ -500,7 +505,15 @@ async function finishDocument(
   options: LoadOptions,
   log: (line: string) => void,
 ): Promise<DocumentLoadResult> {
-  // Asset type (1:1 with template — UR-018/DBD §6.7).
+  // Machine family (approval route + lead time).
+  //
+  // Slice 27-ASSETDOC: this is NO LONGER 1:1 with the template. `asset_type`
+  // used to carry `form_template_id UNIQUE`, so the loader had to mint an
+  // asset type per document purely to have somewhere to hang the template —
+  // which is why production ended up with 12 asset types for 12 documents and
+  // 1 real machine. An asset type is now only the machine-family grouping, and
+  // the document is tagged to each MACHINE below. The
+  // "governs a different template" guard is gone with the column it checked.
   const assetTypes = await listAll<AssetType>(author, '/api/v1/asset-types');
   // `assetTypeCreateSchema.code` is contract-trimmed too (T-1's class).
   let assetType = assetTypes.find((t) => sameUnderContract(t.code, doc.assetTypeCode));
@@ -512,15 +525,9 @@ async function finishDocument(
       code: doc.assetTypeCode,
       name: doc.assetTypeName,
       description: `Loaded by BAMFORM-TLP-001 tooling for ${doc.documentNumber}.`,
-      formTemplateId: template.id,
       approvalRouteId: route.id,
     });
     log(`  POST /asset-types ${doc.assetTypeCode} -> ${assetType.id}`);
-  } else if (assetType.formTemplateId !== template.id) {
-    throw new Error(
-      `asset type ${doc.assetTypeCode} exists but governs template ${assetType.formTemplateId}, ` +
-        `not ${template.id} — refusing to continue.`,
-    );
   }
 
   // Sample machines (decision 2026-07-27: clearly-sample set, left
@@ -550,6 +557,22 @@ async function finishDocument(
       });
       sampleMachines.push({ id: created.id, code: created.code });
       log(`  POST /assets (sample) -> ${created.code}`);
+    }
+    // Slice 27-ASSETDOC — tag the document to each sample machine. This is
+    // what the schedule bootstrap now reads (it iterates asset_document rows,
+    // not assets), so it MUST happen before the schedule GET below.
+    // Idempotent by re-check rather than by swallowing the 409, so a real
+    // conflict still surfaces.
+    for (const machine of sampleMachines) {
+      const tagged = await author.get<{ data: AssetDocument[] }>(
+        `/api/v1/assets/${machine.id}/documents`,
+      );
+      if (!tagged.data.some((d) => d.formTemplateId === template.id)) {
+        await author.post<AssetDocument>(`/api/v1/assets/${machine.id}/documents`, {
+          formTemplateId: template.id,
+        });
+        log(`  POST /assets/${machine.code}/documents -> ${doc.documentNumber}`);
+      }
     }
     // Materialise schedule rules for every sample machine — the lazy
     // bootstrap runs on first read (schedule-rule-bootstrap.service.ts).

@@ -61,6 +61,9 @@ const RESETTABLE_TABLES = [
   'item_result',
   'job',
   'schedule_rule',
+  // Slice 27-ASSETDOC — parent of `schedule_rule`/`job`, child of
+  // `asset`/`form_template`, so it sits between them in this child-first list.
+  'asset_document',
   'template_measurement',
   'template_item',
   'template_revision',
