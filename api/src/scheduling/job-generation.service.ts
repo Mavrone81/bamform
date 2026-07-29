@@ -4,6 +4,7 @@ import {
   JobStatusT,
   Prisma,
   type Asset,
+  type AssetDocument,
   type AssetType,
   type ScheduleRule,
 } from '@prisma/client';
@@ -24,7 +25,15 @@ export interface GenerateDueJobsResult {
   skippedNoItems: number;
 }
 
-type RuleWithAsset = ScheduleRule & { asset: Asset & { assetType: AssetType } };
+/**
+ * Slice 27-ASSETDOC: a rule reaches its machine THROUGH its document. The
+ * template comes from the document; the approval route and lead time still come
+ * from the machine's asset type (both are family-wide properties — the approval
+ * chain is a property of the machine family, not of the document).
+ */
+type RuleWithDocument = ScheduleRule & {
+  assetDocument: AssetDocument & { asset: Asset & { assetType: AssetType } };
+};
 
 function addDays(date: Date, days: number): Date {
   const result = new Date(date);
@@ -44,7 +53,7 @@ function dateOnly(date: Date): Date {
  * scheduler tick simply runs twice, or a worker crashed after insert but
  * before its surrounding bookkeeping committed) creates no duplicate
  * (I-INV-14) — enforced by the database (`job`'s
- * `(asset_id, frequency_scope, due_on)` unique index, not merely an
+ * `(asset_document_id, frequency_scope, due_on)` partial unique index, not merely an
  * application-level check-then-insert, which would leave a TOCTOU race
  * inside a single process's own run).
  *
@@ -63,9 +72,13 @@ export class JobGenerationService {
 
   async generateDueJobs(today: Date, defaultLeadTimeDays: number): Promise<GenerateDueJobsResult> {
     const rules = (await this.prisma.scheduleRule.findMany({
-      where: { active: true },
-      include: { asset: { include: { assetType: true } } },
-    })) as RuleWithAsset[];
+      // U-SCH-05 extended by slice 27: a DEACTIVATED document generates no
+      // further jobs, exactly as a deactivated asset does not. Deactivation
+      // (never deletion, INV-16) is how an admin retires a document while its
+      // history stays resolvable.
+      where: { active: true, assetDocument: { active: true } },
+      include: { assetDocument: { include: { asset: { include: { assetType: true } } } } },
+    })) as RuleWithDocument[];
 
     const result: GenerateDueJobsResult = {
       evaluated: 0,
@@ -75,7 +88,7 @@ export class JobGenerationService {
     };
 
     for (const rule of rules) {
-      const asset = rule.asset;
+      const asset = rule.assetDocument.asset;
       // U-SCH-05: a deactivated asset generates no further jobs.
       if (!asset.active || asset.status !== 'active') {
         continue;
@@ -98,11 +111,15 @@ export class JobGenerationService {
   }
 
   private async generateForRule(
-    rule: RuleWithAsset,
+    rule: RuleWithDocument,
     asset: Asset & { assetType: AssetType },
   ): Promise<'generated' | 'exists' | 'skipped'> {
+    // Slice 27: the form comes from the DOCUMENT. Two documents on one machine
+    // therefore raise jobs against two DIFFERENT template revisions — which is
+    // the whole point, and was impossible while the template was reached
+    // through `asset.assetType.formTemplateId`.
     const revision = await this.prisma.templateRevision.findFirst({
-      where: { formTemplateId: asset.assetType.formTemplateId, status: 'current' },
+      where: { formTemplateId: rule.assetDocument.formTemplateId, status: 'current' },
     });
     if (!revision) {
       return 'skipped';
@@ -135,7 +152,10 @@ export class JobGenerationService {
           data: {
             jobNumber,
             assetId: asset.id,
+            assetDocumentId: rule.assetDocument.id,
             templateRevisionId: revision.id,
+            // Unchanged, deliberately: the approval chain is a property of the
+            // machine family, not of the document. Only the FORM moved.
             approvalRouteId: asset.assetType.approvalRouteId,
             frequency: rule.frequency,
             frequencyScope,
@@ -153,6 +173,7 @@ export class JobGenerationService {
           after: {
             jobNumber: job.jobNumber,
             assetId: asset.id,
+            assetDocumentId: rule.assetDocument.id,
             frequency: rule.frequency,
             frequencyScope,
             dueOn: job.dueOn,
@@ -162,9 +183,12 @@ export class JobGenerationService {
       return 'generated';
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        // I-INV-14: (asset_id, frequency_scope, due_on) already has a job — idempotent no-op.
+        // I-INV-14: (asset_document_id, frequency_scope, due_on) already has a
+        // job — idempotent no-op. Keyed by DOCUMENT since slice 27: under the
+        // old asset-keyed index a second document due the same day at the same
+        // frequency landed here and was silently never raised.
         this.logger.debug(
-          `job already generated for asset=${asset.id} scope=${frequencyScope.join(',')} due=${rule.nextDueOn.toISOString()}`,
+          `job already generated for document=${rule.assetDocument.id} scope=${frequencyScope.join(',')} due=${rule.nextDueOn.toISOString()}`,
         );
         return 'exists';
       }
