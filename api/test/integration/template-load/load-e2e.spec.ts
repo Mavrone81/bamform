@@ -71,12 +71,11 @@ describe('template load e2e — loader → schedules → scheduler → job check
       email: AUTHOR.email,
       password: AUTHOR.password,
       fullName: 'TLP Load Author',
-      // Slice 27-ASSETDOC: ADMIN is now required. Tagging a controlled document
-      // to a machine (`POST /assets/{id}/documents`) is an ADMIN act — the
-      // owner's process step 2 names the admin explicitly — and the loader
-      // performs it for each sample machine it creates. Loading templates
-      // itself still needs only DOC_CONTROLLER + ENGINEER.
-      roleCodes: ['DOC_CONTROLLER', 'ENGINEER', 'ADMIN'],
+      // Slice 27-ASSETDOC: UNCHANGED from before the slice. The loader now also
+      // tags its sample machines' documents, and that route is gated
+      // ENGINEER-or-ADMIN — the same gate as `POST /assets`, which the loader
+      // already used — so the load needs no new privilege (review m-1).
+      roleCodes: ['DOC_CONTROLLER', 'ENGINEER'],
     });
     await createLoginableUser({
       email: APPROVER.email,

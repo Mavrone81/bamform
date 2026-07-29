@@ -53,9 +53,21 @@ export class AssetDocumentsController {
     return this.documents.list(user.sub, assetId);
   }
 
-  /** Tagging a document to a machine is an ADMIN act (owner's process step 2). */
+  /**
+   * The owner's process step 2 names the admin ("Admin will log in to setup the
+   * machine tagged with which preventive Maintenance document"), but the gate is
+   * ENGINEER-or-ADMIN, matching `POST /assets` exactly (review m-1).
+   *
+   * ENGINEER can already CREATE a machine. Gating tagging on ADMIN alone would
+   * mean an engineer can create a machine that is permanently inert — no
+   * schedule, no jobs, `POST /jobs/adhoc` 422 — until an admin finishes the job.
+   * ADMIN in this system also administers users and roles, so requiring it for a
+   * routine maintenance-engineering act is a privilege expansion with no
+   * corresponding safety gain. Symmetry with machine creation is the rule that
+   * actually holds.
+   */
   @Post()
-  @Roles('ADMIN')
+  @Roles('ENGINEER', 'ADMIN')
   @HttpCode(HttpStatus.CREATED)
   tag(
     @Param('assetId') assetId: string,
@@ -77,7 +89,7 @@ export class AssetDocumentPatchController {
   constructor(private readonly documents: AssetDocumentsService) {}
 
   @Patch(':id')
-  @Roles('ADMIN')
+  @Roles('ENGINEER', 'ADMIN')
   update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(assetDocumentUpdateSchema)) dto: AssetDocumentUpdate,

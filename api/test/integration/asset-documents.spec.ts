@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { adminPool, closeAll, resetDatabase } from './helpers/db';
 import {
+  createArea,
   createAsset,
   createAssetDocument,
   createAssetType,
   createUser,
   getSeededApprovalRouteId,
   grantRole,
+  scopeUserToArea,
 } from './helpers/fixtures';
 import { authHeader, mintAccessToken } from './helpers/test-auth';
 import { createTestApp } from './helpers/app';
@@ -63,9 +65,12 @@ describe('Asset documents — GET/POST /assets/{assetId}/documents, PATCH /asset
     await grantRole(adminId, 'ADMIN');
     const maintainerId = await createUser('maintainer');
     await grantRole(maintainerId, 'MAINTAINER');
+    const engineerId = await createUser('engineer');
+    await grantRole(engineerId, 'ENGINEER');
     return {
       admin: await mintAccessToken(app, adminId, ['ADMIN']),
       maintainer: await mintAccessToken(app, maintainerId, ['MAINTAINER']),
+      engineer: await mintAccessToken(app, engineerId, ['ENGINEER']),
     };
   }
 
@@ -212,7 +217,27 @@ describe('Asset documents — GET/POST /assets/{assetId}/documents, PATCH /asset
       .expect(404);
   });
 
-  it('is ADMIN-only for write', async () => {
+  it('an ENGINEER may tag — the same gate as POST /assets, which creates the machine (m-1)', async () => {
+    // An engineer who can create a machine can finish it. Otherwise they can
+    // create one that is permanently inert until an admin tags a document.
+    const assetId = await makeMachine();
+    const templateId = await createTitledTemplate('Preventive Maintenance Record PM01');
+    const t = await tokens();
+
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/assets/${assetId}/documents`)
+      .set(...authHeader(t.engineer))
+      .send({ formTemplateId: templateId })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/api/v1/asset-documents/${res.body.id}`)
+      .set(...authHeader(t.engineer))
+      .send({ machineNumber: '4' })
+      .expect(200);
+  });
+
+  it('a MAINTAINER may not write', async () => {
     const assetId = await makeMachine();
     const templateId = await createTitledTemplate('Preventive Maintenance Record PM01');
     const t = await tokens();
@@ -275,6 +300,77 @@ describe('Asset documents — GET/POST /assets/{assetId}/documents, PATCH /asset
       .expect(200);
     expect(listed.body.data).toHaveLength(1);
     expect(listed.body.data[0].active).toBe(false);
+  });
+
+  /**
+   * Review m-4. Mirrors `scheduling.spec.ts`'s "outside area scope is 403, not
+   * 404" test for the sibling `/assets/{id}/schedule` endpoint, so deleting
+   * `getAssetInScopeOrThrow` from `AssetDocumentsService` is caught on all three
+   * routes rather than on none.
+   */
+  describe('area scoping — 403 out-of-scope, never a silent 404 (m-4)', () => {
+    async function machineInAnotherArea() {
+      const areaMine = await createArea(`A-${randomUUID()}`);
+      const areaTheirs = await createArea(`B-${randomUUID()}`);
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const assetTypeId = await createAssetType(
+        await createTitledTemplate('Unused family template'),
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+      );
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`, {
+        areaId: areaTheirs,
+        skipDefaultDocument: true,
+      });
+      const templateId = await createTitledTemplate('Preventive Maintenance Record PM01');
+      const docId = await createAssetDocument(assetId, templateId);
+
+      // An ADMIN scoped to a DIFFERENT area — the role gate passes, so only the
+      // area check can refuse. Scoping an admin is what makes this test about
+      // scoping rather than about roles.
+      const userId = await createUser('scoped-admin');
+      await grantRole(userId, 'ADMIN');
+      await scopeUserToArea(userId, areaMine);
+      const token = await mintAccessToken(app, userId, ['ADMIN']);
+      return { assetId, templateId, docId, token };
+    }
+
+    it('GET is 403 for a machine outside the caller’s area', async () => {
+      const { assetId, token } = await machineInAnotherArea();
+      await request(app.getHttpServer())
+        .get(`/api/v1/assets/${assetId}/documents`)
+        .set(...authHeader(token))
+        .expect(403);
+    });
+
+    it('POST is 403 for a machine outside the caller’s area, and tags nothing', async () => {
+      const { assetId, templateId, token } = await machineInAnotherArea();
+      await request(app.getHttpServer())
+        .post(`/api/v1/assets/${assetId}/documents`)
+        .set(...authHeader(token))
+        .send({ formTemplateId: templateId })
+        .expect(403);
+
+      const rows = await adminPool.query(
+        `SELECT count(*)::int AS n FROM "asset_document" WHERE asset_id = $1`,
+        [assetId],
+      );
+      expect(rows.rows[0].n).toBe(1); // only the one seeded above
+    });
+
+    it('PATCH is 403 for a document on a machine outside the caller’s area, and changes nothing', async () => {
+      const { docId, token } = await machineInAnotherArea();
+      await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(token))
+        .send({ active: false })
+        .expect(403);
+
+      const row = await adminPool.query(`SELECT active FROM "asset_document" WHERE id = $1`, [
+        docId,
+      ]);
+      expect(row.rows[0].active).toBe(true);
+    });
   });
 
   it('writes an audit_event in the same transaction as the tag (PR-098)', async () => {
