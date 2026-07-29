@@ -1,17 +1,28 @@
 import { Injectable } from '@nestjs/common';
-import { AuditActionT, type ScheduleRule as ScheduleRuleRow } from '@prisma/client';
+import {
+  AuditActionT,
+  type AssetDocument,
+  type ScheduleRule as ScheduleRuleRow,
+} from '@prisma/client';
 import type { ScheduleAdjustRequest, ScheduleRule } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import { AreaScopeService } from '../common/area-scope';
-import { notFoundProblem, outOfScopeProblem } from '../common/domain-problems';
+import {
+  notFoundProblem,
+  outOfScopeProblem,
+  validationFailedProblem,
+} from '../common/domain-problems';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScheduleRuleBootstrapService } from './schedule-rule-bootstrap.service';
 
-function toDto(row: ScheduleRuleRow): ScheduleRule {
+type RuleWithDocument = ScheduleRuleRow & { assetDocument: AssetDocument };
+
+function toDto(row: RuleWithDocument): ScheduleRule {
   return {
     id: row.id,
-    assetId: row.assetId,
+    assetDocumentId: row.assetDocumentId,
+    assetId: row.assetDocument.assetId,
     frequency: row.frequency as unknown as ScheduleRule['frequency'],
     intervalMonths: row.intervalMonths,
     anchorDate: row.anchorDate.toISOString().slice(0, 10),
@@ -44,9 +55,12 @@ export class AssetScheduleService {
     // not have schedule_rule rows yet (see ScheduleRuleBootstrapService).
     await this.bootstrap.ensureForAsset(assetId);
 
+    // Slice 27: every rule across every document the machine carries. The
+    // caller sees one flat list, as before; each row now names its document.
     const rows = await this.prisma.scheduleRule.findMany({
-      where: { assetId },
-      orderBy: { intervalMonths: 'asc' },
+      where: { assetDocument: { assetId } },
+      include: { assetDocument: true },
+      orderBy: [{ assetDocumentId: 'asc' }, { intervalMonths: 'asc' }],
     });
     return rows.map(toDto);
   }
@@ -60,12 +74,33 @@ export class AssetScheduleService {
     const asset = await this.getAssetOrThrow(assetId);
     await this.assertInScope(userId, asset.areaId);
 
-    const existing = await this.prisma.scheduleRule.findUnique({
-      where: { assetId_frequency: { assetId, frequency: dto.frequency } },
+    // Slice 27 — `(assetId, frequency)` no longer identifies a rule once a
+    // machine carries several documents. Adjusting whichever one happened to
+    // come first would move the WRONG document's next-due date, silently, and
+    // with an audit entry claiming it was intended. Refuse instead.
+    const matches = await this.prisma.scheduleRule.findMany({
+      where: {
+        assetDocument: { assetId },
+        frequency: dto.frequency,
+        ...(dto.assetDocumentId ? { assetDocumentId: dto.assetDocumentId } : {}),
+      },
+      include: { assetDocument: true },
     });
-    if (!existing) {
-      throw notFoundProblem('ScheduleRule', `${assetId}/${dto.frequency}`);
+
+    if (matches.length === 0) {
+      throw notFoundProblem(
+        'ScheduleRule',
+        `${assetId}/${dto.assetDocumentId ? `${dto.assetDocumentId}/` : ''}${dto.frequency}`,
+      );
     }
+    if (matches.length > 1) {
+      throw validationFailedProblem(
+        `This machine carries ${matches.length} documents scheduled at ${dto.frequency}. ` +
+          'Name the one to adjust with `assetDocumentId` — adjusting the wrong document’s ' +
+          'schedule would silently stop its PM coming due.',
+      );
+    }
+    const existing = matches[0];
 
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.scheduleRule.update({
@@ -74,6 +109,7 @@ export class AssetScheduleService {
           nextDueOn: new Date(dto.nextDueOn),
           adjustedReason: dto.adjustedReason,
         },
+        include: { assetDocument: true },
       });
 
       await this.audit.record(tx, {

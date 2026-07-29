@@ -1,9 +1,17 @@
 import { z } from 'zod';
 
 /**
- * DBD §6.7 `asset_type` — PR-019. One `form_template` per type (1:1, see
- * `asset_type_form_template_id_key` in
- * `20260724010000_asset_type_form_template_unique_and_audit_chain_lock`).
+ * DBD §6.7 `asset_type` — PR-019.
+ *
+ * Slice 27-ASSETDOC removed `formTemplateId`. It was UNIQUE, which made the
+ * machine->form relation one-to-one in BOTH directions: a machine family could
+ * hold one document, and a document could serve one machine family. The
+ * owner's 2026 schedule workbook contradicts both (TE7 carries a monthly
+ * pH-meter check AND its monthly PM; CM02 and CM03 share CE 95 030 00 01).
+ *
+ * An asset type is now purely the machine-family grouping: the approval route
+ * and the lead time, both genuinely family-wide properties. The route from a
+ * machine to a form is `asset_document` — see `assetDocumentSchema`.
  */
 
 export const assetTypeSchema = z.object({
@@ -11,7 +19,6 @@ export const assetTypeSchema = z.object({
   code: z.string(),
   name: z.string(),
   description: z.string().nullable(),
-  formTemplateId: z.string().uuid(),
   approvalRouteId: z.string().uuid(),
   leadTimeDays: z.number().int(),
   active: z.boolean(),
@@ -22,7 +29,6 @@ export const assetTypeCreateSchema = z.object({
   code: z.string().trim().min(1).max(50),
   name: z.string().trim().min(1),
   description: z.string().optional(),
-  formTemplateId: z.string().uuid(),
   approvalRouteId: z.string().uuid(),
   leadTimeDays: z.number().int().positive().optional(),
 });

@@ -13,6 +13,7 @@ import {
   createTemplateItem,
   createTemplateRevision,
   createUser,
+  getAssetDocumentId,
   getSeededApprovalRouteId,
   grantRole,
   scopeUserToArea,
@@ -137,12 +138,23 @@ describe('Jobs — POST /jobs/adhoc (UR-028/PR-058, slice 18-WORKFLOW §2)', () 
       reason: string | null,
       scope = 'ARRAY[]::"frequency_t"[]',
     ) {
+      // Slice 27-ASSETDOC: `job.asset_document_id` is NOT NULL, so a direct
+      // insert must supply it or it fails on THAT constraint instead of the
+      // ad-hoc one under test.
+      const assetDocumentId = await getAssetDocumentId(ctx.assetId);
       return adminPool.query(
-        `INSERT INTO "job" ("job_number","asset_id","template_revision_id","approval_route_id",
+        `INSERT INTO "job" ("job_number","asset_id","asset_document_id","template_revision_id","approval_route_id",
                             "frequency","frequency_scope","due_on","generated_at","status",
                             "is_adhoc","adhoc_reason")
-         VALUES ($1,$2,$3,$4,'M1',${scope},CURRENT_DATE,now(),'scheduled',true,$5)`,
-        [`PM-DIRECT-${randomUUID()}`, ctx.assetId, ctx.revisionId, ctx.approvalRouteId, reason],
+         VALUES ($1,$2,$6,$3,$4,'M1',${scope},CURRENT_DATE,now(),'scheduled',true,$5)`,
+        [
+          `PM-DIRECT-${randomUUID()}`,
+          ctx.assetId,
+          ctx.revisionId,
+          ctx.approvalRouteId,
+          reason,
+          assetDocumentId,
+        ],
       );
     }
 
@@ -168,10 +180,16 @@ describe('Jobs — POST /jobs/adhoc (UR-028/PR-058, slice 18-WORKFLOW §2)', () 
       const ctx = await makeAsset();
       await expect(
         adminPool.query(
-          `INSERT INTO "job" ("job_number","asset_id","template_revision_id","approval_route_id",
+          `INSERT INTO "job" ("job_number","asset_id","asset_document_id","template_revision_id","approval_route_id",
                               "frequency","frequency_scope","due_on","generated_at","status","void_reason")
-           VALUES ($1,$2,$3,$4,'M1',ARRAY['M1']::"frequency_t"[],CURRENT_DATE,now(),'voided',NULL)`,
-          [`PM-VOIDNULL-${randomUUID()}`, ctx.assetId, ctx.revisionId, ctx.approvalRouteId],
+           VALUES ($1,$2,$5,$3,$4,'M1',ARRAY['M1']::"frequency_t"[],CURRENT_DATE,now(),'voided',NULL)`,
+          [
+            `PM-VOIDNULL-${randomUUID()}`,
+            ctx.assetId,
+            ctx.revisionId,
+            ctx.approvalRouteId,
+            await getAssetDocumentId(ctx.assetId),
+          ],
         ),
       ).rejects.toThrow(/job_void_reason_length_chk/);
 
@@ -338,7 +356,7 @@ describe('Jobs — POST /jobs/adhoc (UR-028/PR-058, slice 18-WORKFLOW §2)', () 
       nextDueOn: '2026-09-01',
     });
     const before = await adminPool.query(
-      `SELECT "next_due_on", "last_completed_on" FROM "schedule_rule" WHERE asset_id = $1`,
+      `SELECT "next_due_on", "last_completed_on" FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1`,
       [assetId],
     );
 
@@ -391,7 +409,7 @@ describe('Jobs — POST /jobs/adhoc (UR-028/PR-058, slice 18-WORKFLOW §2)', () 
     expect(final.body.status).toBe('ARCHIVED');
 
     const after = await adminPool.query(
-      `SELECT "next_due_on", "last_completed_on" FROM "schedule_rule" WHERE asset_id = $1`,
+      `SELECT "next_due_on", "last_completed_on" FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1`,
       [assetId],
     );
     expect(after.rows[0].next_due_on).toEqual(before.rows[0].next_due_on);

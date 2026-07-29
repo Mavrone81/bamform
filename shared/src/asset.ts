@@ -82,3 +82,60 @@ export const assetUpdateSchema = z.object({
   active: z.boolean().optional(),
 });
 export type AssetUpdate = z.infer<typeof assetUpdateSchema>;
+
+// ------------------------------------------------- slice 27 asset_document
+
+/**
+ * `GET /assets/{assetId}/documents` — the machine's tagged PM documents.
+ *
+ * `title`, `resolvedTitle` and `titleHasFillableRun` are DERIVED per response
+ * from the template's current title (see `resolveTemplateTitle`), never stored.
+ * A revision that changes the title therefore stays correct, and slice 23-PDFA
+ * freezes the rendered result at archive so a signed record keeps the title it
+ * was signed under.
+ */
+export const assetDocumentSchema = z.object({
+  id: z.string().uuid(),
+  assetId: z.string().uuid(),
+  formTemplateId: z.string().uuid(),
+  documentNumber: z.string(),
+  /** The template's stored title, blank and all. */
+  title: z.string(),
+  /** The title with `machineNumber` substituted into its blank, if there is one. */
+  resolvedTitle: z.string(),
+  /**
+   * Whether the title carries a fillable run of underscores. This is what the
+   * admin screen keys the form-number field off: an admin is never offered a
+   * box that does nothing, so they can never believe they have labelled a form
+   * when they have not. 8 of the 12 real templates carry one.
+   */
+  titleHasFillableRun: z.boolean(),
+  machineNumber: z.string().nullable(),
+  active: z.boolean(),
+});
+export type AssetDocument = z.infer<typeof assetDocumentSchema>;
+
+/** `POST /assets/{assetId}/documents` — ADMIN only. */
+export const assetDocumentCreateSchema = z.object({
+  formTemplateId: z.string().uuid(),
+  /**
+   * Never required and never a validation error, whatever the title looks like
+   * (owner, 2026-07-29: "Is ok some forms are already pre updated just allow
+   * user to choose"). Supplied for a title with no blank, it is simply stored
+   * and has nothing to substitute into.
+   */
+  machineNumber: z.string().trim().min(1).max(50).nullable().optional(),
+});
+export type AssetDocumentCreate = z.infer<typeof assetDocumentCreateSchema>;
+
+/**
+ * `PATCH /asset-documents/{id}` — ADMIN only. There is no DELETE: INV-16
+ * forbids it on record tables, and a document that has generated jobs must stay
+ * resolvable. `active: false` stops future job generation and leaves history
+ * intact.
+ */
+export const assetDocumentUpdateSchema = z.object({
+  machineNumber: z.string().trim().min(1).max(50).nullable().optional(),
+  active: z.boolean().optional(),
+});
+export type AssetDocumentUpdate = z.infer<typeof assetDocumentUpdateSchema>;
