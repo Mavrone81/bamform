@@ -254,6 +254,91 @@ describe('GET /records/{recordId}/pdf (E-11, PR-116/117/118)', () => {
     expect(bytes.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   }, 30_000);
 
+  /**
+   * Slice 30 Task 3 — `job-include.ts#JOB_FULL_INCLUDE.partsUsed` filters to
+   * `active: true`, and that ONE filter is relied on to cover the PDF
+   * assembly path too (`pdf-record-assembly.service.ts` reads `job.partsUsed`
+   * from the same `JobFullRow`). The parts writes happen during `in_progress`
+   * — a soft-removed part must never reach the printed record, even though
+   * it was legitimately present earlier in the job's life.
+   */
+  it('excludes a soft-removed part from the printed record while keeping an active one', async () => {
+    const { userId: performerId } = await createLoginableUser({
+      email: `perf-parts-${randomUUID()}@example.test`,
+      password: 'correct horse battery staple 4',
+      fullName: 'Pat Parts',
+      roleCodes: ['MAINTAINER'],
+    });
+    const { jobId, revisionId } = await createJobFixture(
+      `PM-PDF-PARTS-${randomUUID()}`,
+      'in_progress',
+      { assignedTo: performerId },
+    );
+    const templateItemId = await createTemplateItem(revisionId, 'M1', { itemNo: 1 });
+    const performerToken = await mintAccessToken(app, performerId, ['MAINTAINER']);
+
+    const keptPartId = randomUUID();
+    await request(app.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/parts/${keptPartId}`)
+      .set(...authHeader(performerToken))
+      .send({ description: 'Kept Compressor Belt', quantity: 1 })
+      .expect(200);
+
+    const removedPartId = randomUUID();
+    await request(app.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/parts/${removedPartId}`)
+      .set(...authHeader(performerToken))
+      .send({ description: 'Removed Air Filter', quantity: 2 })
+      .expect(200);
+    await request(app.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/parts/${removedPartId}`)
+      .set(...authHeader(performerToken))
+      .send({ description: 'Removed Air Filter', quantity: 2, active: false })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/items/${templateItemId}`)
+      .set(...authHeader(performerToken))
+      .set('Idempotency-Key', randomUUID())
+      .send({ status: 'DONE' })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/api/v1/jobs/${jobId}/submit`)
+      .set(...authHeader(performerToken))
+      .send({ drawnSignature: realPngDataUrl() })
+      .expect(200);
+
+    for (const [role, name, pw] of [
+      ['TEAM_LEADER', 'Terri Leader', 'correct horse battery staple 5'],
+      ['ENGINEER', 'Eugene Engineer', 'correct horse battery staple 6'],
+    ] as const) {
+      const { userId } = await createLoginableUser({
+        email: `${role.toLowerCase()}-parts-${randomUUID()}@example.test`,
+        password: pw,
+        fullName: name,
+        roleCodes: [role],
+      });
+      await adminPool.query(`UPDATE "app_user" SET "last_authenticated_at" = now() WHERE id = $1`, [
+        userId,
+      ]);
+      const token = await mintAccessToken(app, userId, [role]);
+      await request(app.getHttpServer())
+        .post(`/api/v1/jobs/${jobId}/verify`)
+        .set(...authHeader(token))
+        .send({ drawnSignature: realPngDataUrl() })
+        .expect(200);
+    }
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/records/${jobId}/pdf`)
+      .set(...authHeader(performerToken))
+      .expect(200);
+    const text = await extractPdfText(Buffer.from(res.body as Buffer));
+
+    expect(text).toContain('Kept Compressor Belt');
+    expect(text).not.toContain('Removed Air Filter');
+  }, 60_000);
+
   it('M-4: the signed record shows the admin-filled machine number in the document title, not the blank run', async () => {
     const { jobId, maintainerId } = await makeArchivedRecord();
 
