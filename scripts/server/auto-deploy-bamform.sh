@@ -28,21 +28,99 @@ log()  { printf '%s  %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 fail() { log "ERROR: $*"; exit 1; }
 trap 'log "ERROR: line $LINENO failed"' ERR
 
+# ------------------------------------------------------------------ self-heal
+#
+# A deploy that dies at the restart step leaves ZERO containers running:
+# `docker compose up -d` stops the old ones before it starts the new ones, so
+# a failure between the two is a total outage, and ADR-012's "no automatic
+# rollback, the previous version keeps serving" does not apply — there is no
+# previous version serving.
+#
+# Worse, `git reset --hard` has ALREADY advanced HEAD by that point. The next
+# tick sees LOCAL = REMOTE, decides there is nothing to deploy, and exits. No
+# later tick has any reason to act, so production stays down indefinitely with
+# the cron running happily every minute.
+#
+# That is not hypothetical: 2026-07-29, `ERROR: restart failed` at 04:02, and
+# form.bevorasg.com served 502 for four hours because every subsequent tick
+# took the up-to-date early exit. Recovery was one `docker compose start`.
+#
+# So availability is checked INDEPENDENTLY of whether there is anything new to
+# deploy. This is the difference between a one-minute blip and a four-hour
+# outage.
+service_running() {
+  local cid
+  cid=$(docker compose -f "$COMPOSE_FILE" ps -aq "$1" 2>/dev/null | head -1)
+  [ -n "$cid" ] || return 1
+  [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" = "true" ]
+}
+
+stopped_services() {
+  local svc missing=""
+  for svc in $SERVICES; do
+    service_running "$svc" || missing="$missing $svc"
+  done
+  printf '%s' "${missing# }"
+}
+
+self_heal() {
+  log "SELF-HEAL: not running: $1 — restoring the deployed build"
+  IMAGE_TAG=$(git rev-parse --short HEAD); export IMAGE_TAG
+  # --no-build first: the images for this commit are almost certainly already
+  # on disk (they are SHA-tagged since slice 22), and rebuilding during an
+  # outage adds minutes for nothing.
+  if ! docker compose -f "$COMPOSE_FILE" up -d --no-build $SERVICES; then
+    log "SELF-HEAL: no image for $IMAGE_TAG — rebuilding"
+    docker compose -f "$COMPOSE_FILE" up -d --build $SERVICES \
+      || { log "ERROR: SELF-HEAL FAILED — production is DOWN and needs a human"; return 1; }
+  fi
+  local i
+  for i in $(seq 1 30); do
+    if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+      log "=== SELF-HEAL OK: healthy after ${i} attempt(s) at $(git rev-parse --short HEAD) ==="
+      return 0
+    fi
+    sleep 2
+  done
+  log "ERROR: SELF-HEAL started containers but the health check FAILED — needs a human"
+  return 1
+}
+
 cd "$REPO" || fail "repo not found at $REPO"
 git fetch origin main --quiet || fail "git fetch failed"
 
 LOCAL=$(git rev-parse HEAD); REMOTE=$(git rev-parse origin/main)
-[ "$LOCAL" = "$REMOTE" ] && exit 0
+if [ "$LOCAL" = "$REMOTE" ]; then
+  DOWN=$(stopped_services)
+  if [ -n "$DOWN" ]; then
+    self_heal "$DOWN" || exit 1
+  fi
+  exit 0
+fi
 
 log "=== Deploy start: ${LOCAL:0:7} -> ${REMOTE:0:7} ==="
 
 mkdir -p "$BACKUP_DIR"
 STAMP=$(date -u +'%Y%m%dT%H%M%SZ')
 log "Pre-migration backup"
-docker compose -f "$COMPOSE_FILE" exec -T bamform-postgres \
-  pg_dump -U bamform_migrate --format=custom bamform \
-  > "$BACKUP_DIR/predeploy-$STAMP.dump" || fail "pre-deploy backup failed — deploy aborted"
-find "$BACKUP_DIR" -name 'predeploy-*.dump' -mtime +7 -delete
+# The dump runs THROUGH the postgres container, so it needs that container up.
+# When a previous deploy has left the stack down, aborting here makes the
+# outage permanent: the safety check depends on the very thing the failure
+# took away, and every retry dies at the same line. On 2026-07-29 that turned
+# a failed restart into four hours of 502s.
+#
+# A stopped database has accepted no writes since it stopped, so there is
+# nothing this dump would capture that the nightly encrypted archive does not
+# already hold. Skipping is therefore safe HERE and only here — if postgres is
+# UP and the dump fails, that is a real failure and still aborts the deploy.
+if service_running bamform-postgres; then
+  docker compose -f "$COMPOSE_FILE" exec -T bamform-postgres \
+    pg_dump -U bamform_migrate --format=custom bamform \
+    > "$BACKUP_DIR/predeploy-$STAMP.dump" || fail "pre-deploy backup failed — deploy aborted"
+  find "$BACKUP_DIR" -name 'predeploy-*.dump' -mtime +7 -delete
+else
+  log "WARNING: postgres is not running — SKIPPING the pre-deploy backup so the stack can recover (nightly archive is the fallback)"
+fi
 
 git reset --hard origin/main --quiet
 log "Working tree at $(git rev-parse --short HEAD)"
