@@ -227,6 +227,17 @@ jobs:
         run: npm run test:route-coverage
       - name: Every collection endpoint applies area scoping (C-08)
         run: npm run test:scope-coverage
+      # Slice 27-ASSETDOC review m-3. `web/src/api/generated/openapi-types.ts` is
+      # generated FROM api/openapi.yaml and committed, but nothing regenerated it
+      # or compared it — so an API change could (and did) land leaving the
+      # committed types silently stale. Stale types are worse than absent ones:
+      # the web build keeps compiling against a contract the server no longer
+      # serves. This fails the build instead.
+      - name: Generated API types match the contract
+        run: |
+          npm run gen:api-types
+          git diff --exit-code web/src/api/generated \
+            || { echo "::error::web/src/api/generated is stale — run 'npm run gen:api-types' and commit the result"; exit 1; }
 
   # ---------------------------------------------------------------- 6
   security:
