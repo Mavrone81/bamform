@@ -27,17 +27,18 @@ import { encodeSyncToken } from './sync-cursor';
  * `idempotencyKey` straight into those methods' existing
  * `IdempotencyService.checkReplay`/`recordWithin` calls
  * (`results.service.ts` lines 61-72/122-131, 147-158/227-236;
- * `parts.service.ts` lines 40-46/78-89, and `upsertPart`'s equivalent
- * lines 127-134/191-202) — replaying the SAME mutation id + body returns the
+ * `parts.service.ts` lines 46-53/85-96 for `recordPart`, and `upsertPart`'s
+ * lines 127-146/203-212) — replaying the SAME mutation id + body returns the
  * cached response transparently (I-INV-16); the SAME id with a DIFFERENT
  * body throws `idempotencyMismatchProblem()` (422), caught below and
  * surfaced as that mutation's `problem` (I-INV-17). No second idempotency
- * mechanism is built here. Unlike `recordPart`, `upsertPart`'s
- * `idempotencyKey` parameter is optional at the service layer, but THIS
+ * mechanism is built here. `recordPart`'s `idempotencyKey` parameter is
+ * still optional at the service layer (a direct `POST` caller may omit it);
+ * `upsertPart`'s is REQUIRED there (same as the sibling
+ * `recordItemResult`/`recordMeasurementResult` PUTs) — either way THIS
  * dispatch path always supplies `mutation.id` (required/non-optional on
  * `OutboxMutation`, `shared/src/sync.ts`), so every outbox-replayed
- * part-upsert is idempotency-keyed regardless of that service-level
- * looseness.
+ * mutation is idempotency-keyed.
  *
  * Sequencing + transaction shape (PR-API-24/PR-082 — resolved reading, see
  * slice-9-report.md): mutations are sorted by `sequence` ascending and

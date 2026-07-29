@@ -32,6 +32,7 @@ export const EXPECTED_ROUTE_ROLES: Readonly<Record<string, readonly string[]>> =
   // ---- job lifecycle: recording and submitting results (JOB_RECORD_ROLES)
   'POST /api/v1/jobs/{jobId}/submit': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'POST /api/v1/jobs/{jobId}/parts': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
+  'PUT /api/v1/jobs/{jobId}/parts/{partId}': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'POST /api/v1/jobs/{jobId}/attachments': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'POST /api/v1/jobs/{jobId}/recall': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'PUT /api/v1/jobs/{jobId}/items/{templateItemId}': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],

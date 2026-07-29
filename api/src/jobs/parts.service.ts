@@ -3,7 +3,7 @@ import { AuditActionT } from '@prisma/client';
 import type { PartUpsertInput, PartUsed, PartUsedInput } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
-import { notFoundProblem } from '../common/domain-problems';
+import { idempotencyKeyRequiredProblem, notFoundProblem } from '../common/domain-problems';
 import { IdempotencyService } from '../common/idempotency.service';
 import { isUuid } from '../common/uuid';
 import { PrismaService } from '../prisma/prisma.service';
@@ -14,13 +14,18 @@ import { toPartUsed } from './mappers';
 /**
  * PR-033/UR-034 — parts consumed per job. No `DELETE` counterpart
  * (BUILD_HANDOFF non-negotiable #7 / `grants.sql` — see `shared/src/job.ts`
- * header). `Idempotency-Key` is honoured when supplied but NOT required
- * (parts are not documented as outbox-reachable the way item/measurement
- * results are, WORKFLOW_DIAGRAMS.md §5 shows it as a simple `POST` with no
- * offline-replay callout) — a retry without a key simply records a second
- * part-consumption row, which is the correct real-world behaviour (two
- * filters really were used) unless the caller supplies a key to make the
- * retry safe.
+ * header).
+ *
+ * `recordPart` (`POST`): `Idempotency-Key` is honoured when supplied but NOT
+ * required — it was already outbox-reachable before slice 30, but a retry
+ * without a key simply records a second part-consumption row, which is the
+ * correct real-world behaviour (two filters really were used) unless the
+ * caller supplies a key to make the retry safe.
+ *
+ * `upsertPart` (`PUT`, slice 30): `Idempotency-Key` IS required, same as the
+ * sibling `recordItemResult`/`recordMeasurementResult` PUTs
+ * (results.service.ts) — this route is reachable from the offline outbox
+ * (Task 4).
  */
 @Injectable()
 export class PartsService {
@@ -99,11 +104,17 @@ export class PartsService {
    * above. Unlike `recordPart`'s server-assigned id, the caller mints
    * `partId` up front (offline-friendly: an app can create the row locally
    * before it ever reaches the server, and a network retry with the same id
-   * is naturally idempotent even without an `Idempotency-Key`). `active:
-   * false` is the soft-remove path (BUILD_HANDOFF non-negotiable #7 — no
-   * physical `DELETE`); `active` is never part of the canonical signed
-   * record (U-SIG-01) and Task 3 is responsible for filtering inactive
-   * parts out of reads/canonical/PDF.
+   * is row-idempotent on its own). `active: false` is the soft-remove path
+   * (BUILD_HANDOFF non-negotiable #7 — no physical `DELETE`); `active` is
+   * never part of the canonical signed record (U-SIG-01) and Task 3 is
+   * responsible for filtering inactive parts out of reads/canonical/PDF.
+   *
+   * `Idempotency-Key` IS required here (unlike `recordPart`, PR-API-16),
+   * same as the sibling `recordItemResult`/`recordMeasurementResult` PUTs
+   * (results.service.ts) — this route is reachable from the offline outbox
+   * (Task 4). Row-idempotency alone isn't enough: a repeated PUT without the
+   * header would still be a no-op *write* of a duplicate `audit_event`
+   * (`before` equal to `after`) on every replay.
    */
   async upsertPart(
     jobId: string,
@@ -113,6 +124,10 @@ export class PartsService {
     actor: ActorMeta,
     roles: string[],
   ): Promise<PartUsed> {
+    if (!idempotencyKey) {
+      throw idempotencyKeyRequiredProblem();
+    }
+
     // `part_used.id` is `@db.Uuid`; a non-UUID partId reaching Prisma raises
     // P2023 and, with no global exception filter, surfaces as a bare 500 —
     // not RFC 9457, and (per Task 4) a 5xx is retried indefinitely by the
@@ -124,13 +139,10 @@ export class PartsService {
       throw notFoundProblem('Part', partId);
     }
 
-    let fingerprint: Buffer | undefined;
-    if (idempotencyKey) {
-      fingerprint = this.idempotency.fingerprint({ jobId, partId, ...dto });
-      const replay = await this.idempotency.checkReplay(idempotencyKey, fingerprint, actor.actorId);
-      if (replay) {
-        return replay.body as PartUsed;
-      }
+    const fingerprint = this.idempotency.fingerprint({ jobId, partId, ...dto });
+    const replay = await this.idempotency.checkReplay(idempotencyKey, fingerprint, actor.actorId);
+    if (replay) {
+      return replay.body as PartUsed;
     }
 
     const job = await this.jobs.loadForMutation(actor.actorId, roles, jobId);
@@ -188,18 +200,16 @@ export class PartsService {
       });
 
       const dtoOut = toPartUsed(row);
-      if (idempotencyKey && fingerprint) {
-        await this.idempotency.recordWithin(
-          tx,
-          {
-            key: idempotencyKey,
-            userId: actor.actorId,
-            endpoint: 'PUT /jobs/{jobId}/parts/{partId}',
-            fingerprint,
-          },
-          { status: 200, body: dtoOut },
-        );
-      }
+      await this.idempotency.recordWithin(
+        tx,
+        {
+          key: idempotencyKey,
+          userId: actor.actorId,
+          endpoint: 'PUT /jobs/{jobId}/parts/{partId}',
+          fingerprint,
+        },
+        { status: 200, body: dtoOut },
+      );
 
       return dtoOut;
     });

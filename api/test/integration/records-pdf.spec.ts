@@ -281,6 +281,7 @@ describe('GET /records/{recordId}/pdf (E-11, PR-116/117/118)', () => {
     await request(app.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${keptPartId}`)
       .set(...authHeader(performerToken))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Kept Compressor Belt', quantity: 1 })
       .expect(200);
 
@@ -288,11 +289,13 @@ describe('GET /records/{recordId}/pdf (E-11, PR-116/117/118)', () => {
     await request(app.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${removedPartId}`)
       .set(...authHeader(performerToken))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Removed Air Filter', quantity: 2 })
       .expect(200);
     await request(app.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${removedPartId}`)
       .set(...authHeader(performerToken))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Removed Air Filter', quantity: 2, active: false })
       .expect(200);
 

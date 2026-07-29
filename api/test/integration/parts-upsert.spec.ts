@@ -99,9 +99,24 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     const res = await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/abc`)
       .set(...authHeader(token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Gasket', quantity: 1 })
       .expect(404);
     expect(res.body).toMatchObject({ type: '/errors/not-found' });
+  });
+
+  it('rejects a PUT with no Idempotency-Key header (required here, unlike POST /jobs/{id}/parts)', async () => {
+    const { jobId, token } = await makeInProgressJobAssignedToMaintainer();
+    const partId = randomUUID();
+    const res = await request(app!.getHttpServer())
+      .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
+      .set(...authHeader(token))
+      .send({ description: 'Gasket', quantity: 1 })
+      .expect(422);
+    expect(res.body).toMatchObject({ type: '/errors/validation-failed' });
+
+    const { rows } = await adminPool.query(`SELECT id FROM "part_used" WHERE id = $1`, [partId]);
+    expect(rows).toHaveLength(0);
   });
 
   it('PUT updates the same part id (one row, new values)', async () => {
@@ -110,12 +125,14 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
       .set(...authHeader(token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'HEPA filter', quantity: 2 })
       .expect(200);
 
     const res = await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
       .set(...authHeader(token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'HEPA filter', quantity: 5 })
       .expect(200);
     expect(res.body.id).toBe(partId);
@@ -134,12 +151,14 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
       .set(...authHeader(token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Gasket', quantity: 1 })
       .expect(200);
 
     await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
       .set(...authHeader(token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Gasket', quantity: 1, active: false })
       .expect(200);
 
@@ -164,6 +183,7 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     const res = await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobId}/parts/${partId}`)
       .set(...authHeader(token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Gasket', quantity: 1 })
       .expect(409);
     expect(res.body).toMatchObject({ type: '/errors/invalid-transition' });
@@ -177,12 +197,14 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobB.jobId}/parts/${partIdOfB}`)
       .set(...authHeader(jobB.token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Belongs to job B', quantity: 1 })
       .expect(200);
 
     const res = await request(app!.getHttpServer())
       .put(`/api/v1/jobs/${jobA.jobId}/parts/${partIdOfB}`)
       .set(...authHeader(jobA.token))
+      .set('Idempotency-Key', randomUUID())
       .send({ description: 'Hijack attempt', quantity: 99, active: false })
       .expect(404);
     expect(res.body).toMatchObject({ type: '/errors/not-found' });
@@ -227,7 +249,7 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
 
     // A genuine replay short-circuits in `checkReplay`, before the
     // transaction (and its `audit.record` call) ever runs. A NON-replayed
-    // second PUT (e.g. the `if (idempotencyKey)` short-circuit deleted from
+    // second PUT (e.g. the `checkReplay` short-circuit deleted from
     // `upsertPart`) would instead re-run the upsert as an `update` and write
     // a second audit_event — this is the assertion that actually
     // distinguishes "replayed" from "just happened to produce the same
