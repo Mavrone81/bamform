@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { FakeServer, E2E_USERS } from '../support/fake-server';
+import { FakeServer, E2E_TEMPLATES, E2E_USERS } from '../support/fake-server';
 import { signInAs } from '../support/fixtures';
 
 /**
@@ -20,6 +20,16 @@ test.describe('E-15: raise an ad-hoc job', () => {
       code: 'WB-77',
       assetTypeId: 'at-1',
       description: 'Wire bonder, bay 3',
+    });
+    // Slice 28-ASSETDOC-UI: a machine carrying no document can no longer have
+    // work raised on it at all — the checklist comes from a tagged document
+    // (slice 27), and the screen now blocks rather than letting the planner
+    // fill the form and collect a 422. One document = no choice to make, so
+    // this journey's flow is otherwise unchanged.
+    server.seedAssetDocument({
+      assetId: wireBonder.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+      machineNumber: '77',
     });
     await server.install(page);
     await signInAs(page, E2E_USERS.teamLeader.email);
@@ -54,7 +64,11 @@ test.describe('E-15: raise an ad-hoc job', () => {
     page,
   }) => {
     const server = new FakeServer();
-    server.seedAsset({ code: 'WB-78', assetTypeId: 'at-1' });
+    const machine = server.seedAsset({ code: 'WB-78', assetTypeId: 'at-1' });
+    // Tagged, so the raise is blocked by the SERVER's role refusal — the
+    // enforcement this test is about — and not by the client-side "this
+    // machine carries no document" guard.
+    server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.wireBond });
     await server.install(page);
     await signInAs(page, E2E_USERS.technician.email);
 

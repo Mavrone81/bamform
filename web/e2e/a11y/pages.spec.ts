@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect, signInAs } from '../support/fixtures';
-import { E2E_PASSWORD, E2E_USERS, type FakeServer } from '../support/fake-server';
+import { E2E_PASSWORD, E2E_TEMPLATES, E2E_USERS, type FakeServer } from '../support/fake-server';
 import { currentTotpCode } from '../support/totp';
 import AxeBuilder from '@axe-core/playwright';
 
@@ -445,6 +445,75 @@ test('A-01/A-05: the machine detail with a provisional RED code has zero axe vio
   const icon = await chip.locator('[aria-hidden="true"]').first().textContent();
   expect(icon?.trim().length).toBeGreaterThan(0);
 
+  await expectNoViolations(page);
+});
+
+/**
+ * Slice 28-ASSETDOC-UI — the two new surfaces. Both are swept in the state
+ * that matters: the machine page with its inert-machine alarm AND with a
+ * tagged document's form-number field open, and "Raise a job" with the
+ * document picker showing.
+ */
+test('A-01: the machine documents section (inert alarm, tagged row, form-number field) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  const machine = server.seedAsset({ code: 'AW09', assetTypeId: 'at-1' });
+  await signInAsAdmin(page);
+  await page.goto(`/admin/machines/${machine.id}`);
+  // Inert: no document tagged yet.
+  await expect(
+    page.getByRole('alert').filter({ hasText: /carries no active preventive-maintenance/ }),
+  ).toBeVisible();
+  await expectNoViolations(page);
+
+  // Tagged: the row, its "form number not set" chip and the field itself.
+  await page.getByLabel('Document', { exact: true }).selectOption(E2E_TEMPLATES.wireBond);
+  await page.getByRole('button', { name: 'Tag this document' }).click();
+  await expect(page.getByLabel('Form number for CE 95 020 00 03')).toBeVisible();
+  await expectNoViolations(page);
+
+  // The retire confirmation panel is its own interactive surface.
+  await page.getByRole('button', { name: 'Retire CE 95 020 00 03' }).click();
+  await expect(page.getByRole('group', { name: /Confirm retiring/ })).toBeVisible();
+  await expectNoViolations(page);
+
+  // Retired: the chip and the "return to service" action.
+  await page.getByRole('button', { name: 'Yes, retire it' }).click();
+  await expect(page.getByText('Retired', { exact: true })).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01: the ad-hoc document picker has zero axe violations', async ({ page, server }) => {
+  const machine = server.seedAsset({ code: 'AW10', assetTypeId: 'at-1' });
+  server.seedAssetDocument({
+    assetId: machine.id,
+    formTemplateId: E2E_TEMPLATES.wireBond,
+    machineNumber: '13',
+  });
+  server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.epoxy });
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.goto('/jobs/raise');
+  await page.getByLabel('Machine', { exact: true }).selectOption(machine.id);
+  await expect(page.getByLabel('Which document')).toBeVisible();
+  await expectNoViolations(page);
+});
+
+test('A-01/A-05: the "no document" refusal on Raise a job is never colour alone', async ({
+  page,
+  server,
+}) => {
+  const machine = server.seedAsset({ code: 'AW11', assetTypeId: 'at-1' });
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.goto('/jobs/raise');
+  await page.getByLabel('Machine', { exact: true }).selectOption(machine.id);
+  const alert = page
+    .getByRole('alert')
+    .filter({ hasText: /carries no active preventive-maintenance/ });
+  await expect(alert).toBeVisible();
+  // Icon + words, not a red plate on its own.
+  const icon = await alert.locator('[aria-hidden="true"]').first().textContent();
+  expect(icon?.trim().length).toBeGreaterThan(0);
   await expectNoViolations(page);
 });
 

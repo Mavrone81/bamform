@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from '../router';
-import { listAssets, listAssetTypes, type Asset, type AssetType } from '../api/admin-client';
+import {
+  listAssetDocuments,
+  listAssets,
+  listAssetTypes,
+  type Asset,
+  type AssetDocument,
+  type AssetType,
+} from '../api/admin-client';
 import { getServices } from '../state/services';
 import { todayLocalIsoDate } from '../lib/local-date';
 import { bootstrap } from '../offline/sync-engine';
@@ -34,6 +41,18 @@ const MIN_REASON = 10;
  * Presentation-only role gating (non-negotiable #6): the Menu entry appears
  * for the roles the server permits, but the URL stays reachable and the
  * server's own 403 is what refuses anyone else — surfaced here verbatim.
+ *
+ * Slice 28-ASSETDOC-UI adds the owner's process step 4 — "select the form to
+ * start" — and this is the ONLY screen that needs it. A SCHEDULED job already
+ * carries `assetDocumentId`, stamped by the scheduler when it froze that
+ * document's revision onto the job; there is nothing left for a maintainer to
+ * choose by the time they open one, and a picker there would offer a choice
+ * the record cannot honour. Off-plan work is the one place the choice is real:
+ * `POST /jobs/adhoc` takes an optional `assetDocumentId` and answers 422 when
+ * the machine carries several and none was named.
+ *
+ * The document list is read from `GET /assets/{id}/documents`, which carries
+ * no role gate precisely so this screen — and a maintainer — can read it.
  */
 export function RaiseJob() {
   const { navigate } = useRouter();
@@ -41,6 +60,10 @@ export function RaiseJob() {
   const [typeFilter, setTypeFilter] = useState('');
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [assetId, setAssetId] = useState('');
+  const [documents, setDocuments] = useState<AssetDocument[] | null>(null);
+  /** Review M-3: "the list failed" is not "the list is empty". */
+  const [documentsError, setDocumentsError] = useState(false);
+  const [assetDocumentId, setAssetDocumentId] = useState('');
   const [frequency, setFrequency] = useState<Frequency>('M1');
   const [reason, setReason] = useState('');
   // X-7: the DEVICE's local date, not UTC — see `local-date.ts`. In SGT a
@@ -86,8 +109,62 @@ export function RaiseJob() {
     void loadAssets(typeFilter);
   }, [typeFilter, loadAssets]);
 
+  // The machine's documents, re-read whenever the machine changes. A stale
+  // choice from the previous machine is dropped rather than carried over —
+  // sending another machine's document id is exactly the 422 this avoids.
+  useEffect(() => {
+    setDocuments(null);
+    setDocumentsError(false);
+    setAssetDocumentId('');
+    if (!assetId) return;
+    let cancelled = false;
+    void listAssetDocuments(assetId).then((result) => {
+      if (cancelled) return;
+      if (result.ok) {
+        setDocuments(result.value.data);
+      } else {
+        // Review M-3: an empty list here used to be indistinguishable from a
+        // list that never arrived, so a 500 or a dead connection produced a
+        // confidently worded and factually FALSE diagnosis — "this machine
+        // carries no document, an admin must tag one" — complete with an
+        // instruction to act on it. On a flaky plant-floor tablet that is the
+        // worst kind of wrong: specific, actionable and untrue. The raise
+        // stays blocked either way; what changes is that the screen no longer
+        // asserts a cause it does not know.
+        setDocuments([]);
+        setDocumentsError(true);
+        setError(
+          result.status === 0
+            ? 'Could not reach the server. Raising a job needs a connection.'
+            : (result.problem?.detail ??
+                result.problem?.title ??
+                `The server refused this machine’s document list (${result.status}).`),
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [assetId]);
+
+  // Retired documents raise nothing — the scheduler skips them and
+  // `POST /jobs/adhoc` refuses them, so they are not offered as a choice.
+  const activeDocuments = (documents ?? []).filter((doc) => doc.active);
+  const documentsLoaded = documents !== null;
+  const machineIsInert =
+    Boolean(assetId) && documentsLoaded && !documentsError && activeDocuments.length === 0;
+  const soleDocument = activeDocuments.length === 1 ? activeDocuments[0] : null;
+  // Exactly one document is not a choice; several is, and it is mandatory.
+  const chosenDocumentId = soleDocument ? soleDocument.id : assetDocumentId;
+
   const reasonTooShort = reason.trim().length < MIN_REASON;
-  const canRaise = Boolean(assetId) && !reasonTooShort && !submitting && isOnline;
+  const canRaise =
+    Boolean(assetId) &&
+    Boolean(chosenDocumentId) &&
+    !machineIsInert &&
+    !reasonTooShort &&
+    !submitting &&
+    isOnline;
 
   async function raise() {
     setSubmitting(true);
@@ -96,6 +173,12 @@ export function RaiseJob() {
       const { transport } = getServices();
       const result = await transport.createAdhocJob({
         assetId,
+        // Sent even when the machine carries exactly one document and the
+        // server would have inferred it: the record then names the document
+        // that was actually on screen. If it was retired in the meantime the
+        // server refuses it by name, instead of quietly freezing a different
+        // checklist onto the job.
+        assetDocumentId: chosenDocumentId,
         frequency,
         reason: reason.trim(),
         ...(dueOn ? { dueOn } : {}),
@@ -192,6 +275,49 @@ export function RaiseJob() {
           ))}
         </select>
       </div>
+
+      {/* ---- Which form (owner's process step 4) ---- */}
+      {machineIsInert && (
+        <p className="banner" data-tone="bad" role="alert">
+          <span aria-hidden="true">⚠</span> This machine carries no active preventive-maintenance
+          document, so no work can be raised on it — there is no checklist to record against. An
+          admin tags one on the machine&rsquo;s own page before this machine can be worked.
+        </p>
+      )}
+
+      {soleDocument && (
+        <div className="field">
+          <span className="kv-label">Form to start</span>
+          <p className="card-title">{soleDocument.resolvedTitle}</p>
+          <p className="field-hint">
+            <span className="job-code">{soleDocument.documentNumber}</span> — the only document this
+            machine carries, so there is nothing to choose.
+          </p>
+        </div>
+      )}
+
+      {activeDocuments.length > 1 && (
+        <div className="field">
+          <label htmlFor="raise-document">Which document</label>
+          <select
+            id="raise-document"
+            value={assetDocumentId}
+            onChange={(e) => setAssetDocumentId(e.target.value)}
+            aria-describedby="raise-document-hint"
+          >
+            <option value="">Choose the form to start</option>
+            {activeDocuments.map((doc) => (
+              <option key={doc.id} value={doc.id}>
+                {doc.resolvedTitle} ({doc.documentNumber})
+              </option>
+            ))}
+          </select>
+          <p className="field-hint" id="raise-document-hint">
+            This machine carries several. The one chosen decides which checklist is frozen onto the
+            record, so it cannot be picked for you.
+          </p>
+        </div>
+      )}
 
       <div className="field">
         <label htmlFor="raise-frequency">Which checklist</label>

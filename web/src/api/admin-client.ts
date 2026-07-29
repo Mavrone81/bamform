@@ -33,6 +33,10 @@ export type AssetType = components['schemas']['AssetType'];
 export type Asset = components['schemas']['Asset'];
 export type AssetCreate = components['schemas']['AssetCreate'];
 export type AssetUpdate = components['schemas']['AssetUpdate'];
+export type FormTemplate = components['schemas']['FormTemplate'];
+export type AssetDocument = components['schemas']['AssetDocument'];
+export type AssetDocumentCreate = components['schemas']['AssetDocumentCreate'];
+export type AssetDocumentUpdate = components['schemas']['AssetDocumentUpdate'];
 
 export interface AdminPage<T> {
   data: T[];
@@ -132,6 +136,15 @@ export function listAssetTypes(): Promise<AdminResult<AdminPage<AssetType>>> {
   return call(`/asset-types${pageQuery()}`);
 }
 
+/** The controlled-document catalogue (`GET /templates`) — what an admin picks
+ * FROM when tagging a document to a machine. Read-only: the twelve source
+ * templates are loaded by BAMFORM-TLP-001's tooling, not through a screen. */
+export function listTemplates(params?: {
+  cursor?: string;
+}): Promise<AdminResult<AdminPage<FormTemplate>>> {
+  return call(`/templates${pageQuery(params?.cursor)}`);
+}
+
 // ---------------------------------------------------------------- machines
 
 export function listAssets(params?: {
@@ -156,6 +169,54 @@ export function createAsset(body: AssetCreate): Promise<AdminResult<Asset>> {
 /** Changing `code` is what CONFIRMS a provisional one (clears the flag). */
 export function updateAsset(assetId: string, body: AssetUpdate): Promise<AdminResult<Asset>> {
   return call(`/assets/${encodeURIComponent(assetId)}`, {
+    method: 'PATCH',
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
+}
+
+// ------------------------------------------------- machine documents (27/28)
+
+/**
+ * Slice 28-ASSETDOC-UI — the PM documents a machine carries.
+ *
+ * `GET /assets/{assetId}/documents` deliberately carries NO `@Roles()`
+ * server-side: it is the MAINTAINER's form picker (owner's process step 4) as
+ * much as the admin's tagging list, so this one function lives in the admin
+ * client but is called from "Raise a job" too. Area scope still applies, and
+ * an out-of-scope machine answers 403, never a silent empty list.
+ *
+ * NOT paginated — a small, fixed-cardinality set scoped to ONE machine, so the
+ * response is a bare `{ data }` with no `page` envelope and no `limit` query.
+ * DEACTIVATED documents are included; a machine's history stays visible.
+ */
+export function listAssetDocuments(
+  assetId: string,
+): Promise<AdminResult<{ data: AssetDocument[] }>> {
+  return call(`/assets/${encodeURIComponent(assetId)}/documents`);
+}
+
+/** `POST /assets/{assetId}/documents` — ENGINEER or ADMIN. 409 if the machine
+ * already carries that document. */
+export function tagAssetDocument(
+  assetId: string,
+  body: AssetDocumentCreate,
+): Promise<AdminResult<AssetDocument>> {
+  return call(`/assets/${encodeURIComponent(assetId)}/documents`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
+}
+
+/** `PATCH /asset-documents/{id}` — ENGINEER or ADMIN. There is no DELETE
+ * anywhere in this API (INV-16): retiring a document is `active: false`, which
+ * leaves every job it already generated resolvable. */
+export function updateAssetDocument(
+  id: string,
+  body: AssetDocumentUpdate,
+): Promise<AdminResult<AssetDocument>> {
+  return call(`/asset-documents/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: jsonHeaders,
     body: JSON.stringify(body),

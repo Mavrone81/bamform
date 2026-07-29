@@ -5,6 +5,21 @@ import {
   randomBase32Secret,
   verifyTotp,
 } from './totp';
+// Slice 28 review M-2. THE REAL SCHEMAS, not a paraphrase of them.
+//
+// This fake had hand-written its own idea of what `PATCH /asset-documents/{id}`
+// accepts, and got it wrong in the one way that mattered: it normalised `''` to
+// `null` while the real `.trim().min(1)` rejects `''` outright. The client
+// happily sent `''`, the whole e2e battery went green, and the flow would have
+// 422'd in production forever. Validating against the schema the api itself
+// compiles makes that particular lie impossible to tell again.
+//
+// Imported from `shared/src` and not from `@bamform/shared`, deliberately:
+// Playwright transpiles the TypeScript source directly, so this does not
+// depend on `shared/dist` — which CI's e2e job (`npm ci` → playwright) never
+// builds. `zod` is hoisted to the root `node_modules`, so it resolves without
+// any change to `web/package.json` or the lockfile.
+import { assetDocumentCreateSchema, assetDocumentUpdateSchema } from '../../../shared/src/asset';
 
 /**
  * A fake backend for the offline suite, installed via Playwright route
@@ -209,6 +224,45 @@ export interface FakeAsset {
   active: boolean;
 }
 
+/**
+ * Slice 27/28-ASSETDOC — a controlled document in the catalogue (`/templates`,
+ * loaded by BAMFORM-TLP-001's tooling in production, canned reference data
+ * here). Three of the twelve real shapes are represented: a title with a
+ * fillable run, a title with the number already printed (EP01), and one with a
+ * run but no approved revision.
+ */
+export interface FakeTemplate {
+  id: string;
+  documentNumber: string;
+  title: string;
+  active: boolean;
+  currentRevisionId: string | null;
+}
+
+/**
+ * Review M-2: real UUIDs, because `assetDocumentCreateSchema.formTemplateId`
+ * is `z.string().uuid()` and the fake now parses with that schema. The old
+ * readable `tpl-wb` ids would have been refused by the real server too — a
+ * second, smaller instance of the fake being kinder than production.
+ */
+export const E2E_TEMPLATES = {
+  /** `KNS Wire Bond … KW___` — a title with a fillable run. */
+  wireBond: '11111111-1111-4111-8111-111111111111',
+  /** `Epoxy Dispenser EP01 …` — the number is printed already. */
+  epoxy: '22222222-2222-4222-8222-222222222222',
+  /** A fillable title with NO approved revision. */
+  agingOven: '33333333-3333-4333-8333-333333333333',
+} as const;
+
+/** A document tagged to a machine (`asset_document`). */
+export interface FakeAssetDocument {
+  id: string;
+  assetId: string;
+  formTemplateId: string;
+  machineNumber: string | null;
+  active: boolean;
+}
+
 /** The six seeded roles (`role` reference data, seeded by migration). */
 export const FAKE_ROLES: Array<{ id: string; code: string; name: string; description: null }> = [
   { id: 'role-1', code: 'MAINTAINER', name: 'Maintainer', description: null },
@@ -274,6 +328,12 @@ export class FakeServer {
   private assetsById = new Map<string, FakeAsset>();
   private assetSeq = 0;
   private provisionalSeq = 0;
+  /** Slice 28-ASSETDOC-UI — the `/templates` catalogue and the tagged
+   * documents. Deliberately mirrors three of the twelve real title shapes so
+   * `titleHasFillableRun` has both branches to exercise. */
+  private templatesById = new Map<string, FakeTemplate>();
+  private assetDocumentsById = new Map<string, FakeAssetDocument>();
+  private assetDocumentSeq = 0;
 
   constructor() {
     // A small canned asset-type catalogue (reference data the real system
@@ -281,6 +341,31 @@ export class FakeServer {
     // to hang machines off without every spec seeding them.
     this.seedAssetType({ code: 'WB', name: 'Wire Bonder' });
     this.seedAssetType({ code: 'AO', name: 'Aging Oven' });
+    for (const template of [
+      {
+        id: E2E_TEMPLATES.wireBond,
+        documentNumber: 'CE 95 020 00 03',
+        title: 'KNS Wire Bond Preventive Maintenance Record KW___',
+        active: true,
+        currentRevisionId: 'rev-wb',
+      },
+      {
+        id: E2E_TEMPLATES.epoxy,
+        documentNumber: 'CE 95 020 00 01',
+        title: 'Epoxy Dispenser EP01 Preventive Maintenance Record',
+        active: true,
+        currentRevisionId: 'rev-ep',
+      },
+      {
+        id: E2E_TEMPLATES.agingOven,
+        documentNumber: 'CE 95 050 00 01',
+        title: 'Aging Oven Preventive Maintenance Record ______',
+        active: true,
+        currentRevisionId: null,
+      },
+    ]) {
+      this.templatesById.set(template.id, template);
+    }
   }
 
   userById(id: string): FakeAdminUser | undefined {
@@ -340,6 +425,25 @@ export class FakeServer {
     };
     this.assetsById.set(asset.id, asset);
     return asset;
+  }
+
+  /** Tags a document to a machine directly, so a spec can start from a
+   * machine that already carries one (the e12 journey tags through the UI). */
+  seedAssetDocument(input: {
+    assetId: string;
+    formTemplateId: string;
+    machineNumber?: string | null;
+    active?: boolean;
+  }): FakeAssetDocument {
+    const doc: FakeAssetDocument = {
+      id: `ad-${++this.assetDocumentSeq}`,
+      assetId: input.assetId,
+      formTemplateId: input.formTemplateId,
+      machineNumber: input.machineNumber ?? null,
+      active: input.active ?? true,
+    };
+    this.assetDocumentsById.set(doc.id, doc);
+    return doc;
   }
 
   /** Scopes a user directly (bypassing the PUT endpoint) so a spec can set
@@ -1218,6 +1322,7 @@ export class FakeServer {
     if (!requester) return;
     const body = route.request().postDataJSON() as {
       assetId?: string;
+      assetDocumentId?: string;
       frequency?: 'M1' | 'M3' | 'M6' | 'Y';
       reason?: string;
       dueOn?: string;
@@ -1229,6 +1334,44 @@ export class FakeServer {
     }
     if (!body.reason || body.reason.trim().length < 10) {
       await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+      return;
+    }
+    // Slice 27-ASSETDOC — the checklist comes from a DOCUMENT tagged to the
+    // machine. `adhoc-job.service.ts`'s three refusals, mirrored: no active
+    // document at all, a document that is not this machine's, and several
+    // documents with none named. The picker exists to make all three
+    // unreachable from the UI; the fake server keeps them reachable so the
+    // journey can prove the screen never provokes them.
+    const activeDocuments = this.documentsOf(asset.id).filter((doc) => doc.active);
+    if (activeDocuments.length === 0) {
+      await this.fulfillProblem(
+        route,
+        422,
+        'Validation failed',
+        '/errors/validation-failed',
+        'This machine carries no active preventive-maintenance document — an admin must tag one before work can be raised against it.',
+      );
+      return;
+    }
+    if (body.assetDocumentId) {
+      if (!activeDocuments.some((doc) => doc.id === body.assetDocumentId)) {
+        await this.fulfillProblem(
+          route,
+          422,
+          'Validation failed',
+          '/errors/validation-failed',
+          `Document ${body.assetDocumentId} is not an active document of this machine.`,
+        );
+        return;
+      }
+    } else if (activeDocuments.length > 1) {
+      await this.fulfillProblem(
+        route,
+        422,
+        'Validation failed',
+        '/errors/validation-failed',
+        `This machine carries ${activeDocuments.length} documents — name the one this work is recorded on with \`assetDocumentId\`.`,
+      );
       return;
     }
     const id = `adhoc-${++this.adhocSeq}`;
@@ -2035,6 +2178,165 @@ export class FakeServer {
     return { ...asset, assetTypeName: this.assetTypesById.get(asset.assetTypeId)?.name };
   }
 
+  // ---- Slice 28-ASSETDOC-UI: `/templates` and a machine's documents ----
+
+  /** Mirrors `shared/src/template-title.ts` — a run of TWO OR MORE
+   * underscores is the blank; a single underscore is punctuation. Derived
+   * here for the same reason the real api derives it: it is SERVER truth, and
+   * the client under test must never compute it for itself. */
+  private static readonly FILLABLE_RUN = /_{2,}/;
+
+  private toApiAssetDocument(doc: FakeAssetDocument) {
+    const template = this.templatesById.get(doc.formTemplateId);
+    const title = template?.title ?? '';
+    return {
+      id: doc.id,
+      assetId: doc.assetId,
+      formTemplateId: doc.formTemplateId,
+      documentNumber: template?.documentNumber ?? '',
+      title,
+      resolvedTitle: doc.machineNumber
+        ? title.replace(FakeServer.FILLABLE_RUN, () => doc.machineNumber as string)
+        : title,
+      titleHasFillableRun: FakeServer.FILLABLE_RUN.test(title),
+      machineNumber: doc.machineNumber,
+      active: doc.active,
+    };
+  }
+
+  /**
+   * The exact body `ZodValidationPipe` produces (`api/src/common/zod-validation
+   * .pipe.ts` → `zodErrorToValidationProblem`), down to the detail string —
+   * which is the whole point: it names no field and offers no remedy, so a
+   * screen that provokes it leaves the user with nothing to act on. Review
+   * M-1 was exactly that, and this is what the client now has to survive.
+   */
+  private async fulfillValidationFailed(route: Route): Promise<void> {
+    await this.fulfillProblem(
+      route,
+      422,
+      'Validation failed',
+      '/errors/validation-failed',
+      'Request body failed validation.',
+    );
+  }
+
+  private documentsOf(assetId: string): FakeAssetDocument[] {
+    return Array.from(this.assetDocumentsById.values()).filter((doc) => doc.assetId === assetId);
+  }
+
+  private async handleListTemplates(route: Route): Promise<void> {
+    const requester = await this.requireUser(route);
+    if (!requester) return;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.page(Array.from(this.templatesById.values()))),
+    });
+  }
+
+  /**
+   * `GET` carries NO role gate (it is the maintainer's form picker — slice 27
+   * `asset-documents.controller.ts`); `POST` is ENGINEER-or-ADMIN, matching
+   * `POST /assets`. Both are area-scoped, and an out-of-scope machine answers
+   * an explicit 403, never a silent empty list.
+   */
+  private async handleAssetDocuments(route: Route, assetId: string): Promise<void> {
+    const isPost = route.request().method() === 'POST';
+    const requester = isPost
+      ? await this.requireRoles(route, ['ENGINEER', 'ADMIN'])
+      : await this.requireUser(route);
+    if (!requester) return;
+    const asset = this.assetsById.get(assetId);
+    if (!asset) {
+      await this.fulfillProblem(route, 404, 'Asset not found', '/errors/not-found');
+      return;
+    }
+    if (!this.assetInScope(requester, asset)) {
+      await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
+      return;
+    }
+    if (!isPost) {
+      // Deactivated documents are LISTED, not hidden — a machine's history
+      // stays visible; it is the scheduler that stops raising work for them.
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: this.documentsOf(assetId).map((d) => this.toApiAssetDocument(d)),
+        }),
+      });
+      return;
+    }
+    // The api's `ZodValidationPipe` runs BEFORE anything else in the handler.
+    const parsed = assetDocumentCreateSchema.safeParse(route.request().postDataJSON());
+    if (!parsed.success) {
+      await this.fulfillValidationFailed(route);
+      return;
+    }
+    const body = parsed.data;
+    const template = body.formTemplateId ? this.templatesById.get(body.formTemplateId) : undefined;
+    if (!template) {
+      await this.fulfillProblem(route, 404, 'Form template not found', '/errors/not-found');
+      return;
+    }
+    if (this.documentsOf(assetId).some((d) => d.formTemplateId === template.id)) {
+      await this.fulfillProblem(
+        route,
+        409,
+        'Conflict',
+        '/errors/conflict',
+        `This machine already carries document ${template.documentNumber}.`,
+      );
+      return;
+    }
+    const doc = this.seedAssetDocument({
+      assetId,
+      formTemplateId: template.id,
+      machineNumber: body.machineNumber ?? null,
+    });
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiAssetDocument(doc)),
+    });
+  }
+
+  /** `PATCH /asset-documents/{id}` — ENGINEER or ADMIN. There is no DELETE:
+   * `active: false` is the only removal (INV-16). */
+  private async handlePatchAssetDocument(route: Route, id: string): Promise<void> {
+    const requester = await this.requireRoles(route, ['ENGINEER', 'ADMIN']);
+    if (!requester) return;
+    const doc = this.assetDocumentsById.get(id);
+    if (!doc) {
+      await this.fulfillProblem(route, 404, 'Asset document not found', '/errors/not-found');
+      return;
+    }
+    const asset = this.assetsById.get(doc.assetId);
+    if (!asset || !this.assetInScope(requester, asset)) {
+      await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
+      return;
+    }
+    // Review M-2: this used to normalise `'' -> null` on its own authority.
+    // The real schema is `.trim().min(1).max(50).nullable().optional()` — `''`
+    // is REFUSED, and only `null` clears the blank. Parsing with the api's own
+    // schema means the fake can no longer invent behaviour the server has not
+    // got, which is the only reason M-1 survived a full green battery.
+    const parsed = assetDocumentUpdateSchema.safeParse(route.request().postDataJSON());
+    if (!parsed.success) {
+      await this.fulfillValidationFailed(route);
+      return;
+    }
+    const body = parsed.data;
+    if (body.machineNumber !== undefined) doc.machineNumber = body.machineNumber;
+    if (body.active !== undefined) doc.active = body.active;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiAssetDocument(doc)),
+    });
+  }
+
   private assetInScope(requester: FakeAdminUser, asset: FakeAsset): boolean {
     if (requester.areaIds.length === 0) return true;
     return asset.areaId != null && requester.areaIds.includes(asset.areaId);
@@ -2354,6 +2656,37 @@ export class FakeServer {
           .url()
           .match(/\/assets\/([^/]+)$/);
         return this.handleAssetById(route, match ? decodeURIComponent(match[1]) : 'unknown');
+      }),
+    );
+    // ---- Slice 28-ASSETDOC-UI. `/assets/{id}/documents` cannot collide with
+    // the anchored by-id route above (that one ends at the id), but it is
+    // registered afterwards anyway so the more specific path wins outright
+    // under Playwright's last-registered-first resolution.
+    await page.route(
+      /\/api\/v1\/templates(\?.*)?$/,
+      this.guarded((route) => this.handleListTemplates(route)),
+    );
+    await page.route(
+      /\/api\/v1\/assets\/([^/]+)\/documents$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/assets\/([^/]+)\/documents$/);
+        return this.handleAssetDocuments(route, match ? decodeURIComponent(match[1]) : 'unknown');
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/asset-documents\/([^/]+)$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/asset-documents\/([^/]+)$/);
+        return this.handlePatchAssetDocument(
+          route,
+          match ? decodeURIComponent(match[1]) : 'unknown',
+        );
       }),
     );
 
