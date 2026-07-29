@@ -4,14 +4,18 @@ import {
   createAsset,
   createUser,
   listAreas,
+  listAssetDocuments,
   listAssetTypes,
   listAssets,
   listRoles,
+  listTemplates,
   listUsers,
   getUser,
   setUserAreaScopes,
+  tagAssetDocument,
   updateArea,
   updateAsset,
+  updateAssetDocument,
   updateUser,
 } from './admin-client';
 import { setAccessToken, _resetForTests as resetTokens } from '../auth/token-store';
@@ -221,5 +225,76 @@ describe('U-ADMIN-02: admin-client — outcome mapping', () => {
     } as unknown as Response);
     const result = await updateUser('u1', {});
     expect(result.ok).toBe(true);
+  });
+});
+
+/**
+ * Slice 28-ASSETDOC-UI — the document-tagging endpoints (slice 27's API).
+ *
+ * `GET /assets/{id}/documents` is NOT paginated (`{ data: [] }`, no `page`
+ * envelope) and carries no `@Roles()` — it is the maintainer's form picker as
+ * well as the admin's tagging list, so the client must not send a `limit` it
+ * has no meaning for, nor assume an admin-only caller.
+ */
+describe('U-ADMIN-DOC-01: admin-client — asset documents', () => {
+  it('listTemplates GETs the paginated /templates catalogue', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(PAGE));
+    const result = await listTemplates();
+    expect(result.ok).toBe(true);
+    expect(lastCall().url).toContain('/api/v1/templates?limit=100');
+  });
+
+  it('listAssetDocuments GETs /assets/{id}/documents with NO pagination query', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const result = await listAssetDocuments('asset-1');
+    expect(result.ok).toBe(true);
+    const call = lastCall();
+    expect(call.url).toContain('/api/v1/assets/asset-1/documents');
+    expect(call.url).not.toContain('limit=');
+    expect(call.method).toBe('GET');
+  });
+
+  it('listAssetDocuments URI-encodes the asset id', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    await listAssetDocuments('a/b');
+    expect(lastCall().url).toContain('/api/v1/assets/a%2Fb/documents');
+  });
+
+  it('tagAssetDocument POSTs { formTemplateId, machineNumber } to the machine', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'ad-1' }, 201));
+    const result = await tagAssetDocument('asset-1', {
+      formTemplateId: 'tpl-1',
+      machineNumber: '13',
+    });
+    expect(result.ok).toBe(true);
+    const call = lastCall();
+    expect(call.method).toBe('POST');
+    expect(call.url).toContain('/api/v1/assets/asset-1/documents');
+    expect(call.body).toEqual({ formTemplateId: 'tpl-1', machineNumber: '13' });
+  });
+
+  it('updateAssetDocument PATCHes /asset-documents/{id} — retiring is `active: false`, never a DELETE', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'ad-1', active: false }));
+    const result = await updateAssetDocument('ad-1', { active: false });
+    expect(result.ok).toBe(true);
+    const call = lastCall();
+    expect(call.method).toBe('PATCH');
+    expect(call.url).toContain('/api/v1/asset-documents/ad-1');
+    expect(call.body).toEqual({ active: false });
+  });
+
+  it('a 409 (this machine already carries that document) is surfaced, not thrown', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        { type: '/errors/conflict', title: 'Conflict', detail: 'already carries', status: 409 },
+        409,
+      ),
+    );
+    const result = await tagAssetDocument('asset-1', { formTemplateId: 'tpl-1' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(409);
+      expect(result.problem?.detail).toBe('already carries');
+    }
   });
 });
