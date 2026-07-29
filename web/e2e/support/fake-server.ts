@@ -5,6 +5,21 @@ import {
   randomBase32Secret,
   verifyTotp,
 } from './totp';
+// Slice 28 review M-2. THE REAL SCHEMAS, not a paraphrase of them.
+//
+// This fake had hand-written its own idea of what `PATCH /asset-documents/{id}`
+// accepts, and got it wrong in the one way that mattered: it normalised `''` to
+// `null` while the real `.trim().min(1)` rejects `''` outright. The client
+// happily sent `''`, the whole e2e battery went green, and the flow would have
+// 422'd in production forever. Validating against the schema the api itself
+// compiles makes that particular lie impossible to tell again.
+//
+// Imported from `shared/src` and not from `@bamform/shared`, deliberately:
+// Playwright transpiles the TypeScript source directly, so this does not
+// depend on `shared/dist` — which CI's e2e job (`npm ci` → playwright) never
+// builds. `zod` is hoisted to the root `node_modules`, so it resolves without
+// any change to `web/package.json` or the lockfile.
+import { assetDocumentCreateSchema, assetDocumentUpdateSchema } from '../../../shared/src/asset';
 
 /**
  * A fake backend for the offline suite, installed via Playwright route
@@ -224,6 +239,21 @@ export interface FakeTemplate {
   currentRevisionId: string | null;
 }
 
+/**
+ * Review M-2: real UUIDs, because `assetDocumentCreateSchema.formTemplateId`
+ * is `z.string().uuid()` and the fake now parses with that schema. The old
+ * readable `tpl-wb` ids would have been refused by the real server too — a
+ * second, smaller instance of the fake being kinder than production.
+ */
+export const E2E_TEMPLATES = {
+  /** `KNS Wire Bond … KW___` — a title with a fillable run. */
+  wireBond: '11111111-1111-4111-8111-111111111111',
+  /** `Epoxy Dispenser EP01 …` — the number is printed already. */
+  epoxy: '22222222-2222-4222-8222-222222222222',
+  /** A fillable title with NO approved revision. */
+  agingOven: '33333333-3333-4333-8333-333333333333',
+} as const;
+
 /** A document tagged to a machine (`asset_document`). */
 export interface FakeAssetDocument {
   id: string;
@@ -313,21 +343,21 @@ export class FakeServer {
     this.seedAssetType({ code: 'AO', name: 'Aging Oven' });
     for (const template of [
       {
-        id: 'tpl-wb',
+        id: E2E_TEMPLATES.wireBond,
         documentNumber: 'CE 95 020 00 03',
         title: 'KNS Wire Bond Preventive Maintenance Record KW___',
         active: true,
         currentRevisionId: 'rev-wb',
       },
       {
-        id: 'tpl-ep',
+        id: E2E_TEMPLATES.epoxy,
         documentNumber: 'CE 95 020 00 01',
         title: 'Epoxy Dispenser EP01 Preventive Maintenance Record',
         active: true,
         currentRevisionId: 'rev-ep',
       },
       {
-        id: 'tpl-ao',
+        id: E2E_TEMPLATES.agingOven,
         documentNumber: 'CE 95 050 00 01',
         title: 'Aging Oven Preventive Maintenance Record ______',
         active: true,
@@ -2174,6 +2204,23 @@ export class FakeServer {
     };
   }
 
+  /**
+   * The exact body `ZodValidationPipe` produces (`api/src/common/zod-validation
+   * .pipe.ts` → `zodErrorToValidationProblem`), down to the detail string —
+   * which is the whole point: it names no field and offers no remedy, so a
+   * screen that provokes it leaves the user with nothing to act on. Review
+   * M-1 was exactly that, and this is what the client now has to survive.
+   */
+  private async fulfillValidationFailed(route: Route): Promise<void> {
+    await this.fulfillProblem(
+      route,
+      422,
+      'Validation failed',
+      '/errors/validation-failed',
+      'Request body failed validation.',
+    );
+  }
+
   private documentsOf(assetId: string): FakeAssetDocument[] {
     return Array.from(this.assetDocumentsById.values()).filter((doc) => doc.assetId === assetId);
   }
@@ -2221,10 +2268,13 @@ export class FakeServer {
       });
       return;
     }
-    const body = route.request().postDataJSON() as {
-      formTemplateId?: string;
-      machineNumber?: string | null;
-    };
+    // The api's `ZodValidationPipe` runs BEFORE anything else in the handler.
+    const parsed = assetDocumentCreateSchema.safeParse(route.request().postDataJSON());
+    if (!parsed.success) {
+      await this.fulfillValidationFailed(route);
+      return;
+    }
+    const body = parsed.data;
     const template = body.formTemplateId ? this.templatesById.get(body.formTemplateId) : undefined;
     if (!template) {
       await this.fulfillProblem(route, 404, 'Form template not found', '/errors/not-found');
@@ -2267,15 +2317,18 @@ export class FakeServer {
       await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
       return;
     }
-    const body = route.request().postDataJSON() as {
-      machineNumber?: string | null;
-      active?: boolean;
-    };
-    if (body.machineNumber !== undefined) {
-      // An empty string clears the blank back to unfilled, exactly as a null
-      // does — the paper form reads as it does before anyone writes on it.
-      doc.machineNumber = body.machineNumber === '' ? null : body.machineNumber;
+    // Review M-2: this used to normalise `'' -> null` on its own authority.
+    // The real schema is `.trim().min(1).max(50).nullable().optional()` — `''`
+    // is REFUSED, and only `null` clears the blank. Parsing with the api's own
+    // schema means the fake can no longer invent behaviour the server has not
+    // got, which is the only reason M-1 survived a full green battery.
+    const parsed = assetDocumentUpdateSchema.safeParse(route.request().postDataJSON());
+    if (!parsed.success) {
+      await this.fulfillValidationFailed(route);
+      return;
     }
+    const body = parsed.data;
+    if (body.machineNumber !== undefined) doc.machineNumber = body.machineNumber;
     if (body.active !== undefined) doc.active = body.active;
     await route.fulfill({
       status: 200,

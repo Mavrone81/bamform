@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { FakeServer, E2E_USERS } from '../support/fake-server';
+import { FakeServer, E2E_TEMPLATES, E2E_USERS } from '../support/fake-server';
 import { signInAs } from '../support/fixtures';
 
 /**
@@ -28,7 +28,7 @@ test.describe('E-15: raise an ad-hoc job', () => {
     // this journey's flow is otherwise unchanged.
     server.seedAssetDocument({
       assetId: wireBonder.id,
-      formTemplateId: 'tpl-wb',
+      formTemplateId: E2E_TEMPLATES.wireBond,
       machineNumber: '77',
     });
     await server.install(page);
@@ -68,7 +68,7 @@ test.describe('E-15: raise an ad-hoc job', () => {
     // Tagged, so the raise is blocked by the SERVER's role refusal — the
     // enforcement this test is about — and not by the client-side "this
     // machine carries no document" guard.
-    server.seedAssetDocument({ assetId: machine.id, formTemplateId: 'tpl-wb' });
+    server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.wireBond });
     await server.install(page);
     await signInAs(page, E2E_USERS.technician.email);
 

@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect, signInAs } from '../support/fixtures';
-import { E2E_PASSWORD, E2E_USERS, type FakeServer } from '../support/fake-server';
+import { E2E_PASSWORD, E2E_TEMPLATES, E2E_USERS, type FakeServer } from '../support/fake-server';
 import { currentTotpCode } from '../support/totp';
 import AxeBuilder from '@axe-core/playwright';
 
@@ -468,21 +468,30 @@ test('A-01: the machine documents section (inert alarm, tagged row, form-number 
   await expectNoViolations(page);
 
   // Tagged: the row, its "form number not set" chip and the field itself.
-  await page.getByLabel('Document', { exact: true }).selectOption('tpl-wb');
+  await page.getByLabel('Document', { exact: true }).selectOption(E2E_TEMPLATES.wireBond);
   await page.getByRole('button', { name: 'Tag this document' }).click();
   await expect(page.getByLabel('Form number for CE 95 020 00 03')).toBeVisible();
   await expectNoViolations(page);
 
+  // The retire confirmation panel is its own interactive surface.
+  await page.getByRole('button', { name: 'Retire CE 95 020 00 03' }).click();
+  await expect(page.getByRole('group', { name: /Confirm retiring/ })).toBeVisible();
+  await expectNoViolations(page);
+
   // Retired: the chip and the "return to service" action.
-  await page.getByRole('button', { name: 'Retire' }).click();
+  await page.getByRole('button', { name: 'Yes, retire it' }).click();
   await expect(page.getByText('Retired', { exact: true })).toBeVisible();
   await expectNoViolations(page);
 });
 
 test('A-01: the ad-hoc document picker has zero axe violations', async ({ page, server }) => {
   const machine = server.seedAsset({ code: 'AW10', assetTypeId: 'at-1' });
-  server.seedAssetDocument({ assetId: machine.id, formTemplateId: 'tpl-wb', machineNumber: '13' });
-  server.seedAssetDocument({ assetId: machine.id, formTemplateId: 'tpl-ep' });
+  server.seedAssetDocument({
+    assetId: machine.id,
+    formTemplateId: E2E_TEMPLATES.wireBond,
+    machineNumber: '13',
+  });
+  server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.epoxy });
   await signInAs(page, E2E_USERS.teamLeader.email);
   await page.goto('/jobs/raise');
   await page.getByLabel('Machine', { exact: true }).selectOption(machine.id);

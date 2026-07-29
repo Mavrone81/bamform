@@ -61,6 +61,8 @@ export function RaiseJob() {
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [assetId, setAssetId] = useState('');
   const [documents, setDocuments] = useState<AssetDocument[] | null>(null);
+  /** Review M-3: "the list failed" is not "the list is empty". */
+  const [documentsError, setDocumentsError] = useState(false);
   const [assetDocumentId, setAssetDocumentId] = useState('');
   const [frequency, setFrequency] = useState<Frequency>('M1');
   const [reason, setReason] = useState('');
@@ -112,6 +114,7 @@ export function RaiseJob() {
   // sending another machine's document id is exactly the 422 this avoids.
   useEffect(() => {
     setDocuments(null);
+    setDocumentsError(false);
     setAssetDocumentId('');
     if (!assetId) return;
     let cancelled = false;
@@ -120,7 +123,16 @@ export function RaiseJob() {
       if (result.ok) {
         setDocuments(result.value.data);
       } else {
+        // Review M-3: an empty list here used to be indistinguishable from a
+        // list that never arrived, so a 500 or a dead connection produced a
+        // confidently worded and factually FALSE diagnosis — "this machine
+        // carries no document, an admin must tag one" — complete with an
+        // instruction to act on it. On a flaky plant-floor tablet that is the
+        // worst kind of wrong: specific, actionable and untrue. The raise
+        // stays blocked either way; what changes is that the screen no longer
+        // asserts a cause it does not know.
         setDocuments([]);
+        setDocumentsError(true);
         setError(
           result.status === 0
             ? 'Could not reach the server. Raising a job needs a connection.'
@@ -139,7 +151,8 @@ export function RaiseJob() {
   // `POST /jobs/adhoc` refuses them, so they are not offered as a choice.
   const activeDocuments = (documents ?? []).filter((doc) => doc.active);
   const documentsLoaded = documents !== null;
-  const machineIsInert = Boolean(assetId) && documentsLoaded && activeDocuments.length === 0;
+  const machineIsInert =
+    Boolean(assetId) && documentsLoaded && !documentsError && activeDocuments.length === 0;
   const soleDocument = activeDocuments.length === 1 ? activeDocuments[0] : null;
   // Exactly one document is not a choice; several is, and it is mandatory.
   const chosenDocumentId = soleDocument ? soleDocument.id : assetDocumentId;

@@ -1,5 +1,5 @@
 import { test, expect, signInAs } from '../support/fixtures';
-import { E2E_USERS } from '../support/fake-server';
+import { E2E_TEMPLATES, E2E_USERS } from '../support/fake-server';
 
 /**
  * Slice 28-ASSETDOC-UI — the two of the owner's nine process steps that had no
@@ -33,7 +33,7 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     await expect(inert).toContainText('ad-hoc job will be refused');
 
     // Tag the KNS wire-bond record — a title with a real blank (KW___).
-    await page.getByLabel('Document', { exact: true }).selectOption('tpl-wb');
+    await page.getByLabel('Document', { exact: true }).selectOption(E2E_TEMPLATES.wireBond);
     await page.getByRole('button', { name: 'Tag this document' }).click();
 
     await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW___')).toBeVisible();
@@ -52,6 +52,19 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     // It survives a reload — the change really reached the server.
     await page.reload();
     await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW13')).toBeVisible();
+
+    // Review M-1/M-2: the typo path. The screen promises that leaving the
+    // field empty is allowed, and the server's schema
+    // (`.trim().min(1).nullable()`) accepts NULL and refuses `''` — so
+    // clearing has to send null. This step is what would have caught M-1: the
+    // fake server now parses with that same schema, so a client that sent `''`
+    // gets the real 422 here instead of a silent pass.
+    await page.getByLabel('Form number for CE 95 020 00 03').fill('   ');
+    await page.getByRole('button', { name: 'Save form number' }).click();
+    await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW___')).toBeVisible();
+    await expect(page.getByText('Form number not set')).toBeVisible();
+    await page.reload();
+    await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW___')).toBeVisible();
   });
 
   test('a title with the number already printed is offered NO form-number box at all', async ({
@@ -64,7 +77,7 @@ test.describe('E-16: an admin tags documents to a machine', () => {
 
     // EP01's title carries the number already — there is nothing to fill, so
     // the admin is never shown a box that would do nothing.
-    await page.getByLabel('Document', { exact: true }).selectOption('tpl-ep');
+    await page.getByLabel('Document', { exact: true }).selectOption(E2E_TEMPLATES.epoxy);
     await page.getByRole('button', { name: 'Tag this document' }).click();
     await expect(
       page.getByText('Epoxy Dispenser EP01 Preventive Maintenance Record'),
@@ -85,7 +98,7 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     const machine = server.seedAsset({ code: 'AW02', assetTypeId: 'at-1' });
     server.seedAssetDocument({
       assetId: machine.id,
-      formTemplateId: 'tpl-wb',
+      formTemplateId: E2E_TEMPLATES.wireBond,
       machineNumber: '7',
     });
     await signInAs(page, E2E_USERS.admin.email);
@@ -97,7 +110,11 @@ test.describe('E-16: an admin tags documents to a machine', () => {
       .filter({ hasText: /carries no active preventive-maintenance document/ });
     await expect(inert).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Retire' }).click();
+    // Two deliberate steps (review m-2): gloves, tablets, and a word that
+    // reads one-way even though it is not.
+    await page.getByRole('button', { name: 'Retire CE 95 020 00 03' }).click();
+    await expect(page.getByText(/No new job will be raised on CE 95 020 00 03/)).toBeVisible();
+    await page.getByRole('button', { name: 'Yes, retire it' }).click();
 
     // There is no DELETE anywhere in this system: the row stays, marked, and
     // the machine is honestly reported as inert again.
@@ -106,7 +123,7 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     await expect(inert).toBeVisible();
 
     // Reversible — it was retired, not destroyed.
-    await page.getByRole('button', { name: 'Return to service' }).click();
+    await page.getByRole('button', { name: 'Return CE 95 020 00 03 to service' }).click();
     await expect(inert).toHaveCount(0);
   });
 
@@ -118,7 +135,7 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     const bondLine = server.seedArea({ code: 'BL', name: 'Bond Line' });
     const testBay = server.seedArea({ code: 'TB', name: 'Test Bay' });
     const machine = server.seedAsset({ code: 'AW03', assetTypeId: 'at-1' });
-    server.seedAssetDocument({ assetId: machine.id, formTemplateId: 'tpl-wb' });
+    server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.wireBond });
 
     // The machine sits in Bond Line; the engineer can only reach Test Bay.
     await signInAs(page, E2E_USERS.admin.email);
@@ -154,10 +171,10 @@ test.describe('E-17: a maintainer selects the form to start', () => {
     const machine = server.seedAsset({ code: 'AW04', assetTypeId: 'at-1' });
     const wireBond = server.seedAssetDocument({
       assetId: machine.id,
-      formTemplateId: 'tpl-wb',
+      formTemplateId: E2E_TEMPLATES.wireBond,
       machineNumber: '13',
     });
-    server.seedAssetDocument({ assetId: machine.id, formTemplateId: 'tpl-ep' });
+    server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.epoxy });
     await signInAs(page, E2E_USERS.teamLeader.email);
     await page.goto('/jobs/raise');
 
@@ -186,7 +203,7 @@ test.describe('E-17: a maintainer selects the form to start', () => {
     const machine = server.seedAsset({ code: 'AW05', assetTypeId: 'at-1' });
     server.seedAssetDocument({
       assetId: machine.id,
-      formTemplateId: 'tpl-wb',
+      formTemplateId: E2E_TEMPLATES.wireBond,
       machineNumber: '21',
     });
     await signInAs(page, E2E_USERS.teamLeader.email);

@@ -212,3 +212,42 @@ describe('U-RAISE-DOC-03: several documents must be chosen between', () => {
     expect(screen.getByRole('button', { name: /raise this job/i })).toBeDisabled();
   });
 });
+
+/**
+ * Slice 28 review fix pass, M-3. Written against a proven defect and watched
+ * failing before the fix.
+ */
+describe('U-RAISE-DOC-04: a failed document list is not a diagnosis (review M-3)', () => {
+  it('does NOT tell the planner the machine has no document when the list merely failed to load', async () => {
+    seed([]);
+    listAssetDocuments.mockResolvedValue({
+      ok: false,
+      status: 500,
+      problem: { type: 'about:blank', title: 'Internal Server Error', status: 500 },
+    });
+    render(<RaiseJob />);
+    await chooseTheMachine();
+    // The honest error is shown…
+    expect(await screen.findByText(/internal server error/i)).toBeInTheDocument();
+    // …but NOT the confident, actionable, and in this case false claim that
+    // an admin needs to go and tag a document.
+    expect(
+      screen.queryByText(/carries no active preventive-maintenance document/i),
+    ).not.toBeInTheDocument();
+    // Still nothing can be raised — a cause we do not know is not a licence
+    // to proceed.
+    fillReason();
+    expect(screen.getByRole('button', { name: /raise this job/i })).toBeDisabled();
+  });
+
+  it('reports an unreachable server as unreachable, not as an untagged machine', async () => {
+    seed([]);
+    listAssetDocuments.mockResolvedValue({ ok: false, status: 0 });
+    render(<RaiseJob />);
+    await chooseTheMachine();
+    expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/carries no active preventive-maintenance document/i),
+    ).not.toBeInTheDocument();
+  });
+});

@@ -52,6 +52,8 @@ export function MachineDocuments({ assetId }: { assetId: string }) {
   /** Per-row draft form numbers, keyed by document id. */
   const [numberDrafts, setNumberDrafts] = useState<Record<string, string>>({});
   const [rowMsg, setRowMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null);
+  /** Which row's retire confirmation is open (review m-2) — at most one. */
+  const [confirmingRetireId, setConfirmingRetireId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadDocuments = useCallback(async () => {
@@ -72,10 +74,38 @@ export function MachineDocuments({ assetId }: { assetId: string }) {
     void loadDocuments();
   }, [loadDocuments]);
 
+  // Review M-5: a failed catalogue load used to be swallowed whole, leaving
+  // the admin an empty dropdown, no reason, and a red alarm telling them to
+  // tag a document — silent inertness inside the slice written to abolish it.
+  //
+  // Review m-8: the catalogue is paged (`PAGE_LIMIT` 100). Twelve templates
+  // fit today; a truncated list would silently hide documents that exist, so
+  // it follows the cursor rather than assuming one page.
   useEffect(() => {
-    void listTemplates().then((result) => {
-      if (result.ok) setTemplates(result.value.data);
-    });
+    let cancelled = false;
+    void (async () => {
+      const all: FormTemplate[] = [];
+      let cursor: string | undefined;
+      // Bounded: 20 pages of 100 is far beyond any plausible catalogue, and a
+      // server that never stops saying `hasMore` must not spin the browser.
+      for (let page = 0; page < 20; page += 1) {
+        const result = await listTemplates(cursor ? { cursor } : undefined);
+        if (cancelled) return;
+        if (!result.ok) {
+          setLoadError(
+            refusalText(result.status, result.problem, 'Reading the document catalogue'),
+          );
+          return;
+        }
+        all.push(...result.value.data);
+        if (!result.value.page.hasMore || !result.value.page.nextCursor) break;
+        cursor = result.value.page.nextCursor;
+      }
+      setTemplates(all);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function refusalText(status: number, problem?: Problem, what = 'This change'): string {
@@ -110,8 +140,16 @@ export function MachineDocuments({ assetId }: { assetId: string }) {
     setBusy(true);
     setRowMsg(null);
     try {
+      // Review M-1: `assetDocumentUpdateSchema` (shared/src/asset.ts) is
+      // `.trim().min(1).max(50).nullable().optional()` — an empty string is a
+      // 422 whose entire detail is "Request body failed validation.", naming
+      // no field and offering no remedy. NULL is what clears the blank. This
+      // screen's own hint promises that leaving the field empty is allowed,
+      // and sending `''` made that promise false: the typo an admin came here
+      // to fix would have been unfixable.
+      const draft = numberDrafts[doc.id]?.trim() ?? '';
       const result = await updateAssetDocument(doc.id, {
-        machineNumber: numberDrafts[doc.id]?.trim() ?? '',
+        machineNumber: draft === '' ? null : draft,
       });
       if (result.ok) {
         setRowMsg({ tone: 'good', text: `Form number saved for ${doc.documentNumber}.` });
@@ -127,6 +165,7 @@ export function MachineDocuments({ assetId }: { assetId: string }) {
   async function setDocumentActive(doc: AssetDocument, active: boolean) {
     setBusy(true);
     setRowMsg(null);
+    setConfirmingRetireId(null);
     try {
       const result = await updateAssetDocument(doc.id, { active });
       if (result.ok) {
@@ -255,25 +294,82 @@ export function MachineDocuments({ assetId }: { assetId: string }) {
                 </form>
               )}
 
-              <div className="dialog-actions">
-                {doc.active ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void setDocumentActive(doc, false)}
+              {/* Review m-7: a number can legitimately be stored against a
+                  title with nowhere to substitute it (the owner's "some forms
+                  are already pre updated just allow user to choose"), and a
+                  retired document keeps the number it was retired with.
+                  Rendering it ONLY inside the editable field hid it entirely
+                  in both cases. */}
+              {!(doc.titleHasFillableRun && doc.active) && doc.machineNumber && (
+                <div className="kv-row">
+                  <span className="kv-label">Form number</span>
+                  <span className="kv-value">{doc.machineNumber}</span>
+                </div>
+              )}
+
+              {/* Review m-2/m-3: retiring is the house two-step confirm
+                  (`AdminUserDetail`'s deactivation, `global.css`'s rule that
+                  `btn-destructive` only ever sits behind a confirmation) —
+                  this is a gloved tap on a plant-floor tablet. Every control
+                  names its document, so a list of rows is never a column of
+                  identically-labelled buttons to a screen reader. */}
+              {doc.active ? (
+                confirmingRetireId === doc.id ? (
+                  <div
+                    className="dialog"
+                    role="group"
+                    aria-label={`Confirm retiring ${doc.documentNumber}`}
                   >
-                    Retire
-                  </button>
+                    <p>
+                      No new job will be raised on {doc.documentNumber}. Records already made
+                      against it are untouched and keep it, and you can return it to service here at
+                      any time. Nothing is deleted.
+                    </p>
+                    <div className="dialog-actions">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setConfirmingRetireId(null)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-destructive"
+                        disabled={busy}
+                        onClick={() => void setDocumentActive(doc, false)}
+                      >
+                        Yes, retire it
+                      </button>
+                    </div>
+                  </div>
                 ) : (
+                  <div className="dialog-actions">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      aria-label={`Retire ${doc.documentNumber}`}
+                      onClick={() => {
+                        setRowMsg(null);
+                        setConfirmingRetireId(doc.id);
+                      }}
+                    >
+                      Retire
+                    </button>
+                  </div>
+                )
+              ) : (
+                <div className="dialog-actions">
                   <button
                     type="button"
                     disabled={busy}
+                    aria-label={`Return ${doc.documentNumber} to service`}
                     onClick={() => void setDocumentActive(doc, true)}
                   >
                     Return to service
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </li>
         ))}

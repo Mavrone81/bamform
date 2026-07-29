@@ -187,7 +187,8 @@ describe('U-DOC-UI-03: retiring is `active: false`, never a delete', () => {
       value: { ...FILLABLE, active: false },
     });
     render(<MachineDocuments assetId="asset-1" />);
-    fireEvent.click(await screen.findByRole('button', { name: /^retire$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^retire CE 95 020 00 03$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /yes, retire it/i }));
     await waitFor(() =>
       expect(updateAssetDocument).toHaveBeenCalledWith('ad-1', { active: false }),
     );
@@ -198,7 +199,7 @@ describe('U-DOC-UI-03: retiring is `active: false`, never a delete', () => {
     updateAssetDocument.mockResolvedValue({ ok: true, status: 200, value: FILLABLE });
     render(<MachineDocuments assetId="asset-1" />);
     expect(await screen.findByText(/^retired$/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /return to service/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^return CE 95 020 00 03 to service$/i }));
     await waitFor(() => expect(updateAssetDocument).toHaveBeenCalledWith('ad-1', { active: true }));
   });
 });
@@ -241,5 +242,136 @@ describe('U-DOC-UI-04: tagging a document', () => {
     fireEvent.change(await screen.findByLabelText(/^document$/i), { target: { value: 'tpl-1' } });
     fireEvent.click(screen.getByRole('button', { name: /tag this document/i }));
     expect(await screen.findByText(/out of scope/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 28 review fix pass. Every test below was written against a proven
+ * defect and watched failing before the fix.
+ */
+
+describe('U-DOC-UI-05: clearing a form number (review M-1)', () => {
+  it('sends null, NEVER the empty string the server rejects', async () => {
+    // `assetDocumentUpdateSchema` (shared/src/asset.ts:138) is
+    // `.trim().min(1).max(50).nullable().optional()` — `''` is a 422 whose
+    // whole detail is "Request body failed validation.", with no field named
+    // and no remedy offered. `null` is the value that clears the blank.
+    seed([FILLABLE]);
+    updateAssetDocument.mockResolvedValue({
+      ok: true,
+      status: 200,
+      value: { ...FILLABLE, machineNumber: null },
+    });
+    render(<MachineDocuments assetId="asset-1" />);
+    const field = await screen.findByLabelText(/form number for CE 95 020 00 03/i);
+    fireEvent.change(field, { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: /save form number/i }));
+    await waitFor(() =>
+      expect(updateAssetDocument).toHaveBeenCalledWith('ad-1', { machineNumber: null }),
+    );
+  });
+
+  it('the hint promising an empty field is allowed is therefore true', async () => {
+    seed([FILLABLE]);
+    render(<MachineDocuments assetId="asset-1" />);
+    expect(await screen.findByText(/leaving it empty is allowed/i)).toBeInTheDocument();
+  });
+});
+
+describe('U-DOC-UI-06: a failure is never reported as an absence (review M-5, m-1)', () => {
+  it('surfaces a failed template-catalogue load instead of handing over an empty dropdown', async () => {
+    seed([FILLABLE]);
+    listTemplates.mockResolvedValue({
+      ok: false,
+      status: 500,
+      problem: { type: 'about:blank', title: 'Internal Server Error', status: 500 },
+    });
+    render(<MachineDocuments assetId="asset-1" />);
+    expect(await screen.findByText(/internal server error/i)).toBeInTheDocument();
+  });
+
+  it('does NOT claim the machine is inert when the document list merely failed to load', async () => {
+    listAssetDocuments.mockResolvedValue({
+      ok: false,
+      status: 500,
+      problem: { type: 'about:blank', title: 'Internal Server Error', status: 500 },
+    });
+    listTemplates.mockResolvedValue({
+      ok: true,
+      status: 200,
+      value: { data: TEMPLATES, page: { hasMore: false, limit: 100 } },
+    });
+    render(<MachineDocuments assetId="asset-1" />);
+    expect(await screen.findByText(/internal server error/i)).toBeInTheDocument();
+    expect(screen.queryByText(INERT)).not.toBeInTheDocument();
+  });
+
+  it('does NOT claim the machine is inert before the list has arrived', async () => {
+    // The pending state: an unresolved promise, exactly what a slow tablet
+    // sees for the first second. A "this machine will never do anything"
+    // alarm shown here would be a guess.
+    listAssetDocuments.mockReturnValue(new Promise(() => {}));
+    listTemplates.mockResolvedValue({
+      ok: true,
+      status: 200,
+      value: { data: TEMPLATES, page: { hasMore: false, limit: 100 } },
+    });
+    render(<MachineDocuments assetId="asset-1" />);
+    expect(await screen.findByText(/loading/i)).toBeInTheDocument();
+    expect(screen.queryByText(INERT)).not.toBeInTheDocument();
+  });
+});
+
+describe('U-DOC-UI-07: the row’s controls (review m-1, m-2, m-3, m-7)', () => {
+  it('offers no form-number field on a RETIRED document — there is nothing to fill in on a form no job will use', async () => {
+    seed([{ ...FILLABLE, active: false }]);
+    render(<MachineDocuments assetId="asset-1" />);
+    expect(await screen.findByText(/^retired$/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/form number for/i)).not.toBeInTheDocument();
+  });
+
+  it('retiring takes two deliberate steps — gloves, tablets, and a one-way-looking word', async () => {
+    seed([FILLABLE]);
+    updateAssetDocument.mockResolvedValue({
+      ok: true,
+      status: 200,
+      value: { ...FILLABLE, active: false },
+    });
+    render(<MachineDocuments assetId="asset-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /^retire CE 95 020 00 03$/i }));
+    expect(updateAssetDocument).not.toHaveBeenCalled();
+    // The confirm names the document and says what retiring does.
+    expect(
+      screen.getByRole('group', { name: /confirm retiring CE 95 020 00 03/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/No new job will be raised on CE 95 020 00 03/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /yes, retire it/i }));
+    await waitFor(() =>
+      expect(updateAssetDocument).toHaveBeenCalledWith('ad-1', { active: false }),
+    );
+  });
+
+  it('the retire control names its document, so two rows are never two identical buttons', async () => {
+    seed([FILLABLE, FIXED]);
+    render(<MachineDocuments assetId="asset-1" />);
+    expect(
+      await screen.findByRole('button', { name: /^retire CE 95 020 00 03$/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^retire CE 95 020 00 01$/i })).toBeInTheDocument();
+  });
+
+  it('shows a stored form number on a document whose title has no blank — the API permits it, so it must be visible', async () => {
+    // The owner's "some forms are already pre updated just allow user to
+    // choose": a number can legitimately be stored against a title with
+    // nowhere to substitute it. Rendering it only inside the editable field
+    // hid it completely.
+    seed([{ ...FIXED, machineNumber: '4' }]);
+    render(<MachineDocuments assetId="asset-1" />);
+    expect(await screen.findByText(FIXED.resolvedTitle)).toBeInTheDocument();
+    expect(screen.getByText('Form number')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
+    // Still no editable box: the title has no blank to fill.
+    expect(screen.queryByLabelText(/form number for/i)).not.toBeInTheDocument();
   });
 });
