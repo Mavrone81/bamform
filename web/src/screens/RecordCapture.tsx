@@ -11,7 +11,7 @@ import {
 import { jobOutboxCounts, type JobOutboxCounts } from '../offline/outbox';
 import { recoverJobConflicts, type ConflictRecoveryChoice } from '../offline/conflict-recovery';
 import { onSynced, notifySynced } from '../offline/sync-events';
-import type { CachedJob } from '../offline/db';
+import type { BamFormDB, CachedJob, OutboxEntry } from '../offline/db';
 import { uuidv7 } from '../lib/uuidv7';
 import { useCriticalWork } from '../lib/use-critical-work';
 import { ItemStatusControl } from '../components/ItemStatusControl';
@@ -128,6 +128,80 @@ function toPartRow(p: PartUsed): PartRow {
   };
 }
 
+/** Slice 30-PARTS review (Important). `cached.job.partsUsed` only ever holds
+ * what the server last acknowledged — a part added or edited offline sits
+ * in the outbox, durable, but invisible there until it syncs. Without this,
+ * a reload while that PUT is still queued made the part vanish from the
+ * list; re-adding it then mints a SECOND `uuidv7()` id, and once both
+ * queued mutations eventually apply the signed record ends up with the
+ * part twice (parts are client-keyed, unlike item/measurement results,
+ * which key on the fixed template-item id and so cannot duplicate this
+ * way). The outbox is authoritative for any partId with a pending row —
+ * its body is the technician's latest not-yet-applied edit, which may be
+ * newer than whatever `partsUsed` still says — `cached.job.partsUsed`
+ * fills in everything else. */
+async function mergedParts(
+  db: BamFormDB,
+  userId: string,
+  jobId: string,
+  outboxRows: OutboxEntry[],
+): Promise<PartRow[]> {
+  const job = await getCachedJob(db, userId, jobId);
+  const serverParts = job?.job.partsUsed ?? [];
+
+  // `undefined` = no pending mutation for this id. `null` = the pending
+  // mutation is a remove (`active:false`) — the row must not render at all,
+  // which a Map naturally can't express with "absent", hence the explicit
+  // null rather than just omitting the key.
+  const pending = new Map<string, PartRow | null>();
+  // Ascending by sequence: two pending PUTs can coexist for the SAME part
+  // (e.g. an add still unsynced when Remove is tapped) since rows are never
+  // coalesced, only appended — a `Map.set` in send order means the LAST
+  // write here is always the most recent one, regardless of whatever order
+  // Dexie's `.toArray()` happened to return them in.
+  const orderedRows = [...outboxRows].sort((a, b) => a.sequence - b.sequence);
+  for (const row of orderedRows) {
+    const match = row.path.match(/\/parts\/([^/]+)$/);
+    if (!match || row.method !== 'PUT') continue;
+    const body = row.body as {
+      partNo?: string | null;
+      description?: string;
+      quantity?: number;
+      remarks?: string | null;
+      active?: boolean;
+    } | null;
+    const partId = match[1];
+    pending.set(
+      partId,
+      body?.active === false
+        ? null
+        : {
+            id: partId,
+            partNo: body?.partNo ?? '',
+            description: body?.description ?? '',
+            quantity: body?.quantity != null ? String(body.quantity) : '',
+            remarks: body?.remarks ?? '',
+          },
+    );
+  }
+
+  const merged: PartRow[] = [];
+  for (const p of serverParts) {
+    if (pending.has(p.id)) {
+      const row = pending.get(p.id);
+      if (row) merged.push(row); // edited offline — pending value wins
+      // else: pending remove — omit the stale server row entirely
+    } else {
+      merged.push(toPartRow(p));
+    }
+  }
+  // Parts added offline and never yet synced have no server row to replace.
+  for (const [id, row] of pending) {
+    if (row && !serverParts.some((p) => p.id === id)) merged.push(row);
+  }
+  return merged;
+}
+
 export function RecordCapture({ jobId }: { jobId: string }) {
   const { navigate } = useRouter();
   const [cached, setCached] = useState<CachedJob | undefined | null>(null);
@@ -200,10 +274,9 @@ export function RecordCapture({ jobId }: { jobId: string }) {
           readingValues[m.templateMeasurementId] = String(m.readingNumeric);
       }
       setReadings(readingValues);
-      // Soft-removed parts are already excluded server-side (they never
-      // come back in `partsUsed` after a sync), so every row hydrated here
-      // is active by construction.
-      setParts((job.job.partsUsed ?? []).map(toPartRow));
+      // Parts are hydrated in `refreshState`, not here — see that
+      // function's comment. It runs alongside this effect on every mount,
+      // so parts still populate on first render.
     }
   }, [jobId]);
 
@@ -222,6 +295,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       if (match) edited[match[1]] = true;
     }
     setLocallyEdited(edited);
+    setParts(await mergedParts(db, userId, jobId, rows));
   }, [jobId]);
 
   useEffect(() => {
@@ -330,7 +404,12 @@ export function RecordCapture({ jobId }: { jobId: string }) {
 
   /** Add and edit are the SAME call — a client-keyed PUT upsert to
    * `part.id` (server: Task 4's `parts.service.ts#upsertPart`). Same id +
-   * new body = edit; a fresh `uuidv7()` id (from `startAddPart`) = add. */
+   * new body = edit; a fresh `uuidv7()` id (from `startAddPart`) = add.
+   * `versioned: false` (review Critical): `upsertPart` never bumps the
+   * job's `draftVersion` server-side, so this must not carry — or predict —
+   * an `ifMatch` either, or the next real (version-bumping) item/
+   * measurement mutation for this job would fail with a self-inflicted
+   * conflict against a version the server will never reach. */
   async function savePart() {
     if (!draftPart || partDescriptionInvalid || partQuantityInvalid) return;
     const { db, transport } = getServices();
@@ -352,6 +431,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         clientRecordedAt: new Date().toISOString(),
       },
       clientRecordedAt: new Date().toISOString(),
+      versioned: false,
     });
     if (!result.ok) {
       // Non-negotiable #1, same as item/measurement above: the write did
@@ -395,6 +475,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         clientRecordedAt: new Date().toISOString(),
       },
       clientRecordedAt: new Date().toISOString(),
+      versioned: false,
     });
     if (!result.ok) {
       setQuotaBanner(true);
@@ -901,10 +982,18 @@ export function RecordCapture({ jobId }: { jobId: string }) {
                       {row.remarks && <p className="screen-meta">{row.remarks}</p>}
                       {canEditParts && (
                         <div className="card-row" style={{ marginTop: 'var(--space-2)' }}>
-                          <button type="button" onClick={() => startEditPart(row)}>
+                          <button
+                            type="button"
+                            aria-label={`Edit ${row.description}`}
+                            onClick={() => startEditPart(row)}
+                          >
                             Edit
                           </button>
-                          <button type="button" onClick={() => void removePart(row)}>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${row.description}`}
+                            onClick={() => void removePart(row)}
+                          >
                             Remove
                           </button>
                         </div>
@@ -916,11 +1005,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
             </ul>
           )}
           {canEditParts && draftPart && !parts.some((p) => p.id === draftPart.id) && (
-            <div
-              className="card"
-              style={{ marginBottom: 'var(--space-3)' }}
-              data-testid="part-add-form"
-            >
+            <div className="card" style={{ marginBottom: 'var(--space-3)' }}>
               {renderPartForm('Add part')}
             </div>
           )}
