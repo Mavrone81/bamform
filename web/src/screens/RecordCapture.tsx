@@ -11,7 +11,7 @@ import {
 import { jobOutboxCounts, type JobOutboxCounts } from '../offline/outbox';
 import { recoverJobConflicts, type ConflictRecoveryChoice } from '../offline/conflict-recovery';
 import { onSynced, notifySynced } from '../offline/sync-events';
-import type { CachedJob } from '../offline/db';
+import type { BamFormDB, CachedJob, OutboxEntry } from '../offline/db';
 import { uuidv7 } from '../lib/uuidv7';
 import { useCriticalWork } from '../lib/use-critical-work';
 import { ItemStatusControl } from '../components/ItemStatusControl';
@@ -24,6 +24,7 @@ import type { components } from '../api/generated/openapi-types';
 type ItemStatus = components['schemas']['ItemStatus'];
 type ApprovalStep = components['schemas']['ApprovalStep'];
 type Attachment = components['schemas']['Attachment'];
+type PartUsed = components['schemas']['PartUsed'];
 
 /**
  * Turn an RFC 7807 problem into something a technician can act on.
@@ -105,6 +106,102 @@ interface StagedPhoto {
   attachment?: Attachment;
 }
 
+/** Screen-local editable form of a `PartUsed` row — quantity is kept as the
+ * raw string the technician typed (same reasoning as `readings`: an empty
+ * or in-progress numeric entry must round-trip through the input without
+ * `Number('')` silently becoming `0`). */
+interface PartRow {
+  id: string;
+  partNo: string;
+  description: string;
+  quantity: string;
+  remarks: string;
+}
+
+function toPartRow(p: PartUsed): PartRow {
+  return {
+    id: p.id,
+    partNo: p.partNo ?? '',
+    description: p.description,
+    quantity: String(p.quantity),
+    remarks: p.remarks ?? '',
+  };
+}
+
+/** Slice 30-PARTS review (Important). `cached.job.partsUsed` only ever holds
+ * what the server last acknowledged — a part added or edited offline sits
+ * in the outbox, durable, but invisible there until it syncs. Without this,
+ * a reload while that PUT is still queued made the part vanish from the
+ * list; re-adding it then mints a SECOND `uuidv7()` id, and once both
+ * queued mutations eventually apply the signed record ends up with the
+ * part twice (parts are client-keyed, unlike item/measurement results,
+ * which key on the fixed template-item id and so cannot duplicate this
+ * way). The outbox is authoritative for any partId with a pending row —
+ * its body is the technician's latest not-yet-applied edit, which may be
+ * newer than whatever `partsUsed` still says — `cached.job.partsUsed`
+ * fills in everything else. */
+async function mergedParts(
+  db: BamFormDB,
+  userId: string,
+  jobId: string,
+  outboxRows: OutboxEntry[],
+): Promise<PartRow[]> {
+  const job = await getCachedJob(db, userId, jobId);
+  const serverParts = job?.job.partsUsed ?? [];
+
+  // `undefined` = no pending mutation for this id. `null` = the pending
+  // mutation is a remove (`active:false`) — the row must not render at all,
+  // which a Map naturally can't express with "absent", hence the explicit
+  // null rather than just omitting the key.
+  const pending = new Map<string, PartRow | null>();
+  // Ascending by sequence: two pending PUTs can coexist for the SAME part
+  // (e.g. an add still unsynced when Remove is tapped) since rows are never
+  // coalesced, only appended — a `Map.set` in send order means the LAST
+  // write here is always the most recent one, regardless of whatever order
+  // Dexie's `.toArray()` happened to return them in.
+  const orderedRows = [...outboxRows].sort((a, b) => a.sequence - b.sequence);
+  for (const row of orderedRows) {
+    const match = row.path.match(/\/parts\/([^/]+)$/);
+    if (!match || row.method !== 'PUT') continue;
+    const body = row.body as {
+      partNo?: string | null;
+      description?: string;
+      quantity?: number;
+      remarks?: string | null;
+      active?: boolean;
+    } | null;
+    const partId = match[1];
+    pending.set(
+      partId,
+      body?.active === false
+        ? null
+        : {
+            id: partId,
+            partNo: body?.partNo ?? '',
+            description: body?.description ?? '',
+            quantity: body?.quantity != null ? String(body.quantity) : '',
+            remarks: body?.remarks ?? '',
+          },
+    );
+  }
+
+  const merged: PartRow[] = [];
+  for (const p of serverParts) {
+    if (pending.has(p.id)) {
+      const row = pending.get(p.id);
+      if (row) merged.push(row); // edited offline — pending value wins
+      // else: pending remove — omit the stale server row entirely
+    } else {
+      merged.push(toPartRow(p));
+    }
+  }
+  // Parts added offline and never yet synced have no server row to replace.
+  for (const [id, row] of pending) {
+    if (row && !serverParts.some((p) => p.id === id)) merged.push(row);
+  }
+  return merged;
+}
+
 export function RecordCapture({ jobId }: { jobId: string }) {
   const { navigate } = useRouter();
   const [cached, setCached] = useState<CachedJob | undefined | null>(null);
@@ -133,6 +230,12 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   const [recoveryBanner, setRecoveryBanner] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [photos, setPhotos] = useState<StagedPhoto[]>([]);
+  const [parts, setParts] = useState<PartRow[]>([]);
+  /** The one part row currently being added or edited, or null. Deliberately
+   * separate from `parts`: a new row is not appended to `parts` until the
+   * server has ack'd it (non-negotiable #1), and an edit-in-progress must be
+   * discardable without touching the confirmed value `parts` still holds. */
+  const [draftPart, setDraftPart] = useState<PartRow | null>(null);
 
   /**
    * Slice 22-SELFUPDATE: hold the self-update's reload while this screen is
@@ -171,6 +274,9 @@ export function RecordCapture({ jobId }: { jobId: string }) {
           readingValues[m.templateMeasurementId] = String(m.readingNumeric);
       }
       setReadings(readingValues);
+      // Parts are hydrated in `refreshState`, not here — see that
+      // function's comment. It runs alongside this effect on every mount,
+      // so parts still populate on first render.
     }
   }, [jobId]);
 
@@ -189,6 +295,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       if (match) edited[match[1]] = true;
     }
     setLocallyEdited(edited);
+    setParts(await mergedParts(db, userId, jobId, rows));
   }, [jobId]);
 
   useEffect(() => {
@@ -272,6 +379,184 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       void refreshState();
       triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
     }, 400);
+  }
+
+  // ---- Slice 30-PARTS: Parts Used ----
+
+  function startAddPart() {
+    setDraftPart({ id: uuidv7(), partNo: '', description: '', quantity: '', remarks: '' });
+  }
+
+  function startEditPart(row: PartRow) {
+    setDraftPart({ ...row });
+  }
+
+  function cancelPartDraft() {
+    setDraftPart(null);
+  }
+
+  function updateDraftPart(patch: Partial<PartRow>) {
+    setDraftPart((prev) => (prev ? { ...prev, ...patch } : prev));
+  }
+
+  const partDescriptionInvalid = draftPart != null && draftPart.description.trim() === '';
+  const partQuantityInvalid = draftPart != null && !(Number(draftPart.quantity) > 0);
+
+  /** Add and edit are the SAME call — a client-keyed PUT upsert to
+   * `part.id` (server: Task 4's `parts.service.ts#upsertPart`). Same id +
+   * new body = edit; a fresh `uuidv7()` id (from `startAddPart`) = add.
+   * `versioned: false` (review Critical): `upsertPart` never bumps the
+   * job's `draftVersion` server-side, so this must not carry — or predict —
+   * an `ifMatch` either, or the next real (version-bumping) item/
+   * measurement mutation for this job would fail with a self-inflicted
+   * conflict against a version the server will never reach. */
+  async function savePart() {
+    if (!draftPart || partDescriptionInvalid || partQuantityInvalid) return;
+    const { db, transport } = getServices();
+    const userId = getSyncUserId();
+    if (!userId) return;
+    const description = draftPart.description.trim();
+    const quantity = Number(draftPart.quantity);
+    const result = await appendJobMutation(db, {
+      userId,
+      jobId,
+      method: 'PUT',
+      path: `/jobs/${jobId}/parts/${draftPart.id}`,
+      body: {
+        partNo: draftPart.partNo.trim() || null,
+        description,
+        quantity,
+        remarks: draftPart.remarks.trim() || null,
+        active: true,
+        clientRecordedAt: new Date().toISOString(),
+      },
+      clientRecordedAt: new Date().toISOString(),
+      versioned: false,
+    });
+    if (!result.ok) {
+      // Non-negotiable #1, same as item/measurement above: the write did
+      // NOT land in the outbox, so this part must not appear saved.
+      setQuotaBanner(true);
+      return;
+    }
+    setQuotaBanner(false);
+    const saved = { ...draftPart, description, quantity: String(quantity) };
+    setParts((prev) => {
+      // Editing an existing row updates it in place — a filter+push here
+      // would silently shuffle it to the end of the list on every edit.
+      const idx = prev.findIndex((p) => p.id === saved.id);
+      if (idx === -1) return [...prev, saved];
+      const next = [...prev];
+      next[idx] = saved;
+      return next;
+    });
+    setDraftPart(null);
+    void refreshState();
+    triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
+  }
+
+  /** Soft-remove (non-negotiable #7 — never a DELETE): re-sends the row's
+   * own current values with `active: false`. */
+  async function removePart(row: PartRow) {
+    const { db, transport } = getServices();
+    const userId = getSyncUserId();
+    if (!userId) return;
+    const result = await appendJobMutation(db, {
+      userId,
+      jobId,
+      method: 'PUT',
+      path: `/jobs/${jobId}/parts/${row.id}`,
+      body: {
+        partNo: row.partNo.trim() || null,
+        description: row.description,
+        quantity: Number(row.quantity),
+        remarks: row.remarks.trim() || null,
+        active: false,
+        clientRecordedAt: new Date().toISOString(),
+      },
+      clientRecordedAt: new Date().toISOString(),
+      versioned: false,
+    });
+    if (!result.ok) {
+      setQuotaBanner(true);
+      return;
+    }
+    setQuotaBanner(false);
+    setParts((prev) => prev.filter((p) => p.id !== row.id));
+    // A remove mid-edit must not leave a dangling form for a row that is
+    // no longer there to save changes to.
+    setDraftPart((prev) => (prev?.id === row.id ? null : prev));
+    void refreshState();
+    triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
+  }
+
+  /** Plain JSX-returning function, not a component — invoking it as
+   * `renderPartForm(...)` inlines the elements into the parent's own render
+   * rather than mounting a new component instance, which matters here: a
+   * `<PartForm/>` tag would get a fresh identity every RecordCapture
+   * render and remount on every keystroke, dropping focus out of the input
+   * the technician is mid-typing in. */
+  function renderPartForm(confirmLabel: string) {
+    if (!draftPart) return null;
+    return (
+      <>
+        <div className="field">
+          <label htmlFor={`part-desc-${draftPart.id}`}>Description</label>
+          <input
+            id={`part-desc-${draftPart.id}`}
+            type="text"
+            value={draftPart.description}
+            onChange={(e) => updateDraftPart({ description: e.target.value })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`part-qty-${draftPart.id}`}>Quantity</label>
+          <input
+            id={`part-qty-${draftPart.id}`}
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            value={draftPart.quantity}
+            onChange={(e) => updateDraftPart({ quantity: e.target.value })}
+            aria-describedby={`part-qty-hint-${draftPart.id}`}
+          />
+          <p className="field-hint" id={`part-qty-hint-${draftPart.id}`}>
+            Required, greater than 0.
+          </p>
+        </div>
+        <div className="field">
+          <label htmlFor={`part-no-${draftPart.id}`}>Part number (optional)</label>
+          <input
+            id={`part-no-${draftPart.id}`}
+            type="text"
+            value={draftPart.partNo}
+            onChange={(e) => updateDraftPart({ partNo: e.target.value })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`part-remarks-${draftPart.id}`}>Remarks (optional)</label>
+          <textarea
+            id={`part-remarks-${draftPart.id}`}
+            rows={2}
+            value={draftPart.remarks}
+            onChange={(e) => updateDraftPart({ remarks: e.target.value })}
+          />
+        </div>
+        <div className="card-row" style={{ marginTop: 'var(--space-2)' }}>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={partDescriptionInvalid || partQuantityInvalid}
+            onClick={() => void savePart()}
+          >
+            {confirmLabel}
+          </button>
+          <button type="button" onClick={cancelPartDraft}>
+            Cancel
+          </button>
+        </div>
+      </>
+    );
   }
 
   // ---- SYS-5: conflict recovery ----
@@ -445,6 +730,10 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   );
   const returnedStep = activeReturn(cached.job);
   const returnedAtMs = returnedStep ? Date.parse(returnedStep.actedAt) : null;
+  // Design spec 2026-07-29 (parts + special tools), owner decision: parts
+  // capture is edit-window-guarded exactly like item/measurement results —
+  // writable only while the record is still the performer's to fill in.
+  const canEditParts = cached.job.status === 'ASSIGNED' || cached.job.status === 'IN_PROGRESS';
   const serverAttachments = cached.job.attachments ?? [];
   const uploadsInFlight = photos.some((p) => p.state === 'uploading');
   const photosAwaitingAction = photos.some((p) => p.state === 'staged' || p.state === 'failed');
@@ -669,6 +958,62 @@ export function RecordCapture({ jobId }: { jobId: string }) {
               />
             </div>
           ))}
+        </section>
+      )}
+
+      {(canEditParts || parts.length > 0) && (
+        <section aria-label="Parts used">
+          <h2 className="microlabel" style={{ marginBottom: 'var(--space-3)' }}>
+            Parts used
+          </h2>
+          {parts.length > 0 && (
+            <ul className="data-list" style={{ marginBottom: 'var(--space-3)' }}>
+              {parts.map((row) => (
+                <li className="card" key={row.id} data-testid="part-row">
+                  {draftPart?.id === row.id ? (
+                    renderPartForm('Save changes')
+                  ) : (
+                    <>
+                      <div className="card-row">
+                        <span className="job-code">{row.description}</span>
+                        <span className="numeric text-soft">qty {row.quantity}</span>
+                      </div>
+                      {row.partNo && <p className="screen-meta">Part no. {row.partNo}</p>}
+                      {row.remarks && <p className="screen-meta">{row.remarks}</p>}
+                      {canEditParts && (
+                        <div className="card-row" style={{ marginTop: 'var(--space-2)' }}>
+                          <button
+                            type="button"
+                            aria-label={`Edit ${row.description}`}
+                            onClick={() => startEditPart(row)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${row.description}`}
+                            onClick={() => void removePart(row)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {canEditParts && draftPart && !parts.some((p) => p.id === draftPart.id) && (
+            <div className="card" style={{ marginBottom: 'var(--space-3)' }}>
+              {renderPartForm('Add part')}
+            </div>
+          )}
+          {canEditParts && !draftPart && (
+            <button type="button" onClick={startAddPart}>
+              Add a part
+            </button>
+          )}
         </section>
       )}
 

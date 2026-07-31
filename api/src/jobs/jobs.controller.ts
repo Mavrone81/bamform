@@ -18,12 +18,14 @@ import {
   createAdhocJobRequestSchema,
   itemResultInputSchema,
   measurementResultInputSchema,
+  partUpsertInputSchema,
   partUsedInputSchema,
   submitJobRequestSchema,
   type AssignJobRequest,
   type CreateAdhocJobRequest,
   type ItemResultInput,
   type MeasurementResultInput,
+  type PartUpsertInput,
   type PartUsedInput,
   type SubmitJobRequest,
 } from '@bamform/shared';
@@ -188,6 +190,31 @@ export class JobsController {
   ) {
     return this.parts.recordPart(
       jobId,
+      dto,
+      idempotencyKey,
+      { actorId: user.sub, ...requestMeta(req) },
+      user.roles,
+    );
+  }
+
+  /**
+   * Slice 30 — client-keyed create-or-update, additive to the `POST` above.
+   * `active: false` is the soft-remove path (non-negotiable #7: no physical
+   * `DELETE`).
+   */
+  @Put(':jobId/parts/:partId')
+  @Roles(...JOB_RECORD_ROLES)
+  upsertPart(
+    @Param('jobId') jobId: string,
+    @Param('partId') partId: string,
+    @Body(new ZodValidationPipe(partUpsertInputSchema)) dto: PartUpsertInput,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+  ) {
+    return this.parts.upsertPart(
+      jobId,
+      partId,
       dto,
       idempotencyKey,
       { actorId: user.sub, ...requestMeta(req) },

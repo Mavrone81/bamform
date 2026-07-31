@@ -331,4 +331,103 @@ describe('Sync — POST /sync/outbox', () => {
     ]);
     expect(row.rows[0].description).toBe('Filter');
   });
+
+  it('a PUT /jobs/{id}/parts/{partId} mutation applies as a client-keyed upsert via PartsService#upsertPart', async () => {
+    const { jobId, token } = await makeAssignedJob();
+    const partId = randomUUID();
+
+    const res = await drain(app, token, [
+      {
+        id: randomUUID(),
+        sequence: 1,
+        method: 'PUT',
+        path: `/jobs/${jobId}/parts/${partId}`,
+        body: { description: 'Oil filter', quantity: 2 },
+      },
+    ]).expect(200);
+
+    expect(res.body.results[0]).toMatchObject({ id: expect.any(String), applied: true, status: 200 });
+    const row = await adminPool.query(
+      'SELECT description, quantity, active FROM "part_used" WHERE id = $1',
+      [partId],
+    );
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0].description).toBe('Oil filter');
+    expect(Number(row.rows[0].quantity)).toBe(2);
+    expect(row.rows[0].active).toBe(true);
+  });
+
+  it('I-INV-16 for part-upsert: replaying the SAME mutation id/body is idempotent (no duplicate row, no duplicate audit event)', async () => {
+    const { jobId, token } = await makeAssignedJob();
+    const partId = randomUUID();
+    const mutations = [
+      {
+        id: randomUUID(),
+        sequence: 1,
+        method: 'PUT',
+        path: `/jobs/${jobId}/parts/${partId}`,
+        body: { description: 'Belt', quantity: 1 },
+      },
+    ];
+
+    const first = await drain(app, token, mutations).expect(200);
+    const second = await drain(app, token, mutations).expect(200);
+
+    expect(second.body.results).toEqual(first.body.results);
+
+    const rows = await adminPool.query('SELECT count(*) FROM "part_used" WHERE id = $1', [partId]);
+    expect(Number(rows.rows[0].count)).toBe(1);
+
+    const auditRows = await adminPool.query(
+      "SELECT count(*) FROM \"audit_event\" WHERE entity_type = 'part_used' AND entity_id = $1",
+      [partId],
+    );
+    expect(Number(auditRows.rows[0].count)).toBe(1);
+  });
+
+  it('a PUT /jobs/{id}/parts/{partId} mutation with active:false soft-removes the part (non-negotiable #7: no physical DELETE)', async () => {
+    const { jobId, token } = await makeAssignedJob();
+    const partId = randomUUID();
+
+    await drain(app, token, [
+      {
+        id: randomUUID(),
+        sequence: 1,
+        method: 'PUT',
+        path: `/jobs/${jobId}/parts/${partId}`,
+        body: { description: 'Gasket', quantity: 1 },
+      },
+    ]).expect(200);
+
+    const res = await drain(app, token, [
+      {
+        id: randomUUID(),
+        sequence: 2,
+        method: 'PUT',
+        path: `/jobs/${jobId}/parts/${partId}`,
+        body: { description: 'Gasket', quantity: 1, active: false },
+      },
+    ]).expect(200);
+
+    expect(res.body.results[0]).toMatchObject({ applied: true, status: 200 });
+    const row = await adminPool.query('SELECT active FROM "part_used" WHERE id = $1', [partId]);
+    expect(row.rows).toHaveLength(1); // row still present — soft-removed, not deleted
+    expect(row.rows[0].active).toBe(false);
+  });
+
+  it('rejects a part-upsert mutation with a non-UUID partId as a per-mutation 404, not a 500 (poison-queue guard)', async () => {
+    const { jobId, token } = await makeAssignedJob();
+
+    const res = await drain(app, token, [
+      {
+        id: randomUUID(),
+        sequence: 1,
+        method: 'PUT',
+        path: `/jobs/${jobId}/parts/not-a-uuid`,
+        body: { description: 'Belt', quantity: 1 },
+      },
+    ]).expect(200);
+
+    expect(res.body.results[0]).toMatchObject({ applied: false, status: 404 });
+  });
 });

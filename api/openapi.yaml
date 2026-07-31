@@ -1542,6 +1542,54 @@ paths:
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /jobs/{jobId}/parts/{partId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: partId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: Idempotency-Key
+        in: header
+        required: true
+        description: |
+          Client-generated UUIDv7. REQUIRED (PR-API-16) — unlike the `POST`
+          above, this route is reachable from the offline outbox.
+        schema: { type: string, format: uuid }
+    put:
+      tags: [Jobs]
+      operationId: upsertPart
+      summary: Create or update a part consumed on this job, client-keyed
+      description: |
+        Slice 30 — additive to `POST /jobs/{jobId}/parts` above. Unlike that
+        server-assigned id, the CLIENT mints `partId` up front (offline-
+        friendly: a locally-created row and a network retry of the same id
+        are naturally row-idempotent on their own). `Idempotency-Key` is
+        REQUIRED nonetheless (PR-API-16, unlike the `POST` above) — this
+        route is reachable from the offline outbox, and row-idempotency alone
+        would still let a bare retry write a duplicate no-op `audit_event`.
+        `active: false` is the soft-remove path (BUILD_HANDOFF non-negotiable
+        #7 — no physical `DELETE`); a soft-removed part is excluded from
+        reads, canonical serialisation (U-SIG-01) and the PDF.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartUpsertInput' }
+      responses:
+        '200':
+          description: Created or updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartUsed' }
+        '404':
+          description: '`/errors/not-found` - `partId` is not a UUID, or belongs to a different job'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /jobs/{jobId}/submit:
     parameters:
       - $ref: '#/components/parameters/JobId'
@@ -3267,6 +3315,16 @@ components:
         description: { type: string, minLength: 1 }
         quantity: { type: number, exclusiveMinimum: 0 }
         remarks: { type: [string, 'null'] }
+
+    PartUpsertInput:
+      type: object
+      required: [description, quantity]
+      properties:
+        partNo: { type: [string, 'null'] }
+        description: { type: string, minLength: 1 }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        remarks: { type: [string, 'null'] }
+        active: { type: boolean, default: true }
 
     PartUsed:
       type: object

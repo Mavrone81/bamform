@@ -28,7 +28,11 @@ export const JOB_FULL_INCLUDE = {
   },
   itemResults: true,
   measurementResults: true,
-  partsUsed: true,
+  // Slice 30 — soft-removed parts (active=false) never reach a read, the
+  // canonical signed record, or the PDF. One filter here covers every
+  // JobFullRow consumer (DRY), same reasoning as the frozen-revision
+  // items/measurements `where: { active: true }` above.
+  partsUsed: { where: { active: true } },
   attachments: true,
   // Slice 7 — never includes the encrypted drawn-signature bytes in a
   // read path; `mappers.ts#toApprovalStep` maps only the non-personal

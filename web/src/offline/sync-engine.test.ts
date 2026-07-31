@@ -927,4 +927,47 @@ describe('appendJobMutation — predicted draftVersion avoids a self-inflicted c
     if (!result.ok) throw new Error('unreachable');
     expect(result.entry.ifMatch).toBeNull();
   });
+
+  /**
+   * Slice 30-PARTS review (Critical). `PUT /jobs/{id}/parts/{partId}` never
+   * bumps the job's real `draftVersion` server-side (only item/measurement
+   * results do — `sync-outbox.service.ts`'s `part-upsert` dispatch does not
+   * even pass `ifMatch` to `upsertPart`). Predicting one anyway would leave
+   * `predictedDraftVersion` ahead of a version the server will never reach,
+   * so the NEXT real (version-bumping) mutation for the job would carry a
+   * stale `ifMatch` and fail with a conflict it did nothing to cause.
+   * `versioned: false` must skip prediction entirely: `ifMatch: null` on
+   * the outbox row, and no advance of `predictedDraftVersion`.
+   */
+  it('versioned:false sends ifMatch:null and does NOT advance predictedDraftVersion (parts upsert)', async () => {
+    const result = await appendJobMutation(db, {
+      userId: 'user-1',
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/parts/part-1',
+      body: { description: 'Bearing 6203', quantity: 2, active: true },
+      clientRecordedAt: new Date().toISOString(),
+      versioned: false,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.entry.ifMatch).toBeNull();
+    const job = await getCachedJob(db, 'user-1', 'job-1');
+    expect(job?.predictedDraftVersion).toBe(1); // unchanged — the row above never touched it
+
+    // A REAL (version-bumping) mutation queued right after must still see
+    // the untouched version — this is the self-inflicted-conflict scenario
+    // the fix exists to prevent.
+    const next = await appendJobMutation(db, {
+      userId: 'user-1',
+      jobId: 'job-1',
+      method: 'PUT',
+      path: '/jobs/job-1/items/item-1',
+      body: { status: 'DONE' },
+      clientRecordedAt: new Date().toISOString(),
+    });
+    expect(next.ok).toBe(true);
+    if (!next.ok) throw new Error('unreachable');
+    expect(next.entry.ifMatch).toBe(1); // NOT 2 — the part above never advanced it
+  });
 });

@@ -119,6 +119,11 @@ function sinceOrConditions(since: Date): Prisma.JobWhereInput[] {
     { archivedAt: { gte: since } },
     { itemResults: { some: { recordedAt: { gte: since } } } },
     { measurementResults: { some: { recordedAt: { gte: since } } } },
+    // Mirrors the createdAt/recordedAt pattern above, so a soft-remove or
+    // edit (which only touches updatedAt) doesn't re-trigger this delta —
+    // a removed part can linger on another device until some other change
+    // re-sends the job. Not a signing-integrity concern: the server always
+    // reads the active:true-filtered set when assembling a record.
     { partsUsed: { some: { createdAt: { gte: since } } } },
     { attachments: { some: { uploadedAt: { gte: since } } } },
     { approvalSteps: { some: { actedAt: { gte: since } } } },
