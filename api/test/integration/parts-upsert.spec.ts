@@ -59,7 +59,11 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     const authorId = await createUser('author');
     const approvalRouteId = await getSeededApprovalRouteId();
     const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
-    const assetTypeId = await createAssetType(formTemplateId, approvalRouteId, `AT-${randomUUID()}`);
+    const assetTypeId = await createAssetType(
+      formTemplateId,
+      approvalRouteId,
+      `AT-${randomUUID()}`,
+    );
     const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`);
     const revisionId = await createTemplateRevision(formTemplateId, authorId, {
       sequenceOrdinal: 0,
@@ -138,10 +142,7 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
     expect(res.body.id).toBe(partId);
     expect(res.body.quantity).toBe(5);
 
-    const { rows } = await adminPool.query(
-      `SELECT id FROM "part_used" WHERE id = $1`,
-      [partId],
-    );
+    const { rows } = await adminPool.query(`SELECT id FROM "part_used" WHERE id = $1`, [partId]);
     expect(rows).toHaveLength(1);
   });
 
@@ -162,10 +163,9 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
       .send({ description: 'Gasket', quantity: 1, active: false })
       .expect(200);
 
-    const { rows } = await adminPool.query(
-      `SELECT active FROM "part_used" WHERE id = $1`,
-      [partId],
-    );
+    const { rows } = await adminPool.query(`SELECT active FROM "part_used" WHERE id = $1`, [
+      partId,
+    ]);
     expect(rows).toHaveLength(1);
     expect(rows[0].active).toBe(false);
 
@@ -241,10 +241,7 @@ describe('Jobs — PUT /jobs/{id}/parts/{partId}', () => {
       .expect(200);
 
     expect(second.body).toEqual(first.body);
-    const { rows } = await adminPool.query(
-      `SELECT id FROM "part_used" WHERE id = $1`,
-      [partId],
-    );
+    const { rows } = await adminPool.query(`SELECT id FROM "part_used" WHERE id = $1`, [partId]);
     expect(rows).toHaveLength(1);
 
     // A genuine replay short-circuits in `checkReplay`, before the

@@ -22,7 +22,11 @@ import { UsersService } from './users/users.service';
  * choose a role.
  */
 export const inputSchema = z.object({
-  fullName: z.string().trim().min(1, 'Full name is required.').max(200, 'Full name must be at most 200 characters.'),
+  fullName: z
+    .string()
+    .trim()
+    .min(1, 'Full name is required.')
+    .max(200, 'Full name must be at most 200 characters.'),
   email: z.string().trim().email('Enter a valid email address.'),
   password: z.string().min(12, 'Password must be at least 12 characters.'),
 });
@@ -33,8 +37,10 @@ async function promptHidden(question: string): Promise<string> {
   // Mute the output stream while the answer is typed.
   const muted = { muted: false };
   const realWrite = (stdout.write as unknown as (...a: unknown[]) => boolean).bind(stdout);
-  (stdout as unknown as { write: (...a: unknown[]) => boolean }).write = ((chunk: unknown, ...rest: unknown[]) =>
-    muted.muted ? true : realWrite(chunk, ...rest)) as never;
+  (stdout as unknown as { write: (...a: unknown[]) => boolean }).write = ((
+    chunk: unknown,
+    ...rest: unknown[]
+  ) => (muted.muted ? true : realWrite(chunk, ...rest))) as never;
   stdout.write(question);
   muted.muted = true;
   try {
@@ -58,7 +64,9 @@ async function bootstrap(): Promise<void> {
   // keypress events that a plain pipe never emits, hanging forever instead
   // of failing. Fail fast instead, before even opening the Nest app context.
   if (!stdin.isTTY) {
-    console.error('Error: this command must be run interactively from a terminal (stdin is not a TTY).');
+    console.error(
+      'Error: this command must be run interactively from a terminal (stdin is not a TTY).',
+    );
     process.exitCode = 1;
     return;
   }

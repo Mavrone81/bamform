@@ -52,7 +52,7 @@ describe('First-ADMIN bootstrap — UsersService.bootstrapFirstAdmin', () => {
     expect(await passwords.verify(rows[0].password_hash, dto.password)).toBe(true);
   });
 
-  it('self-grants the ADMIN role (granted_by = the new admin\'s own id)', async () => {
+  it("self-grants the ADMIN role (granted_by = the new admin's own id)", async () => {
     const created = await users.bootstrapFirstAdmin(input());
     const { rows } = await adminPool.query(
       `SELECT ur."granted_by", r."code"

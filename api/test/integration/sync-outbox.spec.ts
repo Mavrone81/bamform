@@ -346,7 +346,11 @@ describe('Sync — POST /sync/outbox', () => {
       },
     ]).expect(200);
 
-    expect(res.body.results[0]).toMatchObject({ id: expect.any(String), applied: true, status: 200 });
+    expect(res.body.results[0]).toMatchObject({
+      id: expect.any(String),
+      applied: true,
+      status: 200,
+    });
     const row = await adminPool.query(
       'SELECT description, quantity, active FROM "part_used" WHERE id = $1',
       [partId],
@@ -379,7 +383,7 @@ describe('Sync — POST /sync/outbox', () => {
     expect(Number(rows.rows[0].count)).toBe(1);
 
     const auditRows = await adminPool.query(
-      "SELECT count(*) FROM \"audit_event\" WHERE entity_type = 'part_used' AND entity_id = $1",
+      'SELECT count(*) FROM "audit_event" WHERE entity_type = \'part_used\' AND entity_id = $1',
       [partId],
     );
     expect(Number(auditRows.rows[0].count)).toBe(1);
