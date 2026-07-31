@@ -28,6 +28,12 @@ export interface ListUsersParams {
   active?: string;
 }
 
+export interface BootstrapAdminInput {
+  fullName: string;
+  email: string;
+  password: string;
+}
+
 const USER_ROLES_INCLUDE = {
   userRoles: { where: { active: true }, include: { role: true } },
   // Slice 13-UI-B (SYS-10): `active: false` rows are soft-removed scopes —
@@ -207,6 +213,97 @@ export class UsersService {
       }
       throw error;
     }
+  }
+
+  /**
+   * One-time first-ADMIN bootstrap (design 2026-07-31). BamForm seeds roles
+   * but no users, and `POST /users` needs an ADMIN — so a fresh system has
+   * no way to make its first account. This is the only path that creates a
+   * user with no acting admin, run once by an operator via
+   * `dist/bootstrap-admin.js`.
+   *
+   * Fail-closed: refuses if ANY user exists (checked inside the tx, so it
+   * cannot race a concurrent create), which makes it strictly one-time and
+   * never a privilege-injection path. The ADMIN role is self-attributed
+   * (`granted_by = the new user's own id`) because `user_role.granted_by`
+   * is NOT NULL and there is no external actor. `must_change_password` is
+   * false: the operator chose this password at a prompt, so the
+   * admin-known-temporary-credential rationale (see `create`) does not apply.
+   *
+   * Reuses the exact crypto path `create` uses so the row is a valid,
+   * loginable account; assumes `dto` is already validated by the caller
+   * (the CLI validates against the same policy as `userCreateSchema`).
+   */
+  async bootstrapFirstAdmin(dto: BootstrapAdminInput): Promise<User> {
+    const roles = await this.rolesByCode(['ADMIN']);
+
+    const userId = uuidv7();
+    const passwordHash = await this.passwordService.hash(dto.password);
+    const emailBidx = computeEmailBlindIndex(dto.email, this.blindIndexKey);
+    const fullName = encodeIdentityField(
+      dto.fullName,
+      { column: 'full_name_ct', rowId: userId },
+      this.fieldEncryption,
+    );
+    const email = encodeIdentityField(
+      dto.email,
+      { column: 'email_ct', rowId: userId },
+      this.fieldEncryption,
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.appUser.count();
+      if (existing > 0) {
+        throw new Error(
+          `Bootstrap refused: ${existing} user(s) already exist. ` +
+            'The first-admin bootstrap only runs on an empty system.',
+        );
+      }
+
+      const row = await tx.appUser.create({
+        data: {
+          id: userId,
+          fullNameCt: toBytes(fullName.ciphertext),
+          emailCt: toBytes(email.ciphertext),
+          emailBidx: toBytes(emailBidx),
+          passwordHash,
+          mustChangePassword: false,
+          dekVersion: fullName.dekVersion,
+          status: UserStatusT.active,
+        },
+      });
+
+      await tx.userRole.create({
+        // Self-grant: no external actor exists for the very first user.
+        data: { userId: row.id, roleId: roles[0].id, grantedBy: row.id },
+      });
+
+      const withRoles: AppUserWithRoles = {
+        ...row,
+        userRoles: [
+          {
+            userId: row.id,
+            roleId: roles[0].id,
+            grantedBy: row.id,
+            grantedAt: new Date(),
+            active: true,
+            role: roles[0],
+          },
+        ],
+        userAreaScopes: [],
+      };
+      const after = toUser(withRoles, this.fieldEncryption);
+
+      await this.audit.record(tx, {
+        actorId: row.id,
+        action: AuditActionT.create,
+        entityType: 'user',
+        entityId: row.id,
+        after: toUserAuditView(withRoles),
+      });
+
+      return after;
+    });
   }
 
   /**
