@@ -21,8 +21,8 @@ import { UsersService } from './users/users.service';
  * not apply here — the first admin self-grants ADMIN, there is no actor to
  * choose a role.
  */
-const inputSchema = z.object({
-  fullName: z.string().trim().min(1, 'Full name is required.'),
+export const inputSchema = z.object({
+  fullName: z.string().trim().min(1, 'Full name is required.').max(200, 'Full name must be at most 200 characters.'),
   email: z.string().trim().email('Enter a valid email address.'),
   password: z.string().min(12, 'Password must be at least 12 characters.'),
 });
@@ -99,4 +99,10 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-void bootstrap();
+// Only self-invoke when run directly (`node dist/bootstrap-admin.js`), not
+// when imported — e.g. by `bootstrap-admin.spec.ts`, which imports
+// `inputSchema` to unit-test the validation policy without launching Nest
+// or opening any prompt.
+if (require.main === module) {
+  void bootstrap();
+}
