@@ -84,6 +84,33 @@ describe('First-ADMIN bootstrap — UsersService.bootstrapFirstAdmin', () => {
     expect(rows[0].n).toBe(1);
   });
 
+  it('records the audit event WITHOUT decrypted PII (ciphertext digests only, per toUserAuditView)', async () => {
+    const dto = {
+      fullName: 'Zzyzx Quorvantha Boötstrap',
+      email: `zzyzx-quorvantha-${randomUUID()}@example.com`,
+      password: 'correct horse battery',
+    };
+    const created = await users.bootstrapFirstAdmin(dto);
+    const { rows } = await adminPool.query(
+      `SELECT "after" FROM "audit_event"
+        WHERE "entity_type" = 'user' AND "entity_id" = $1 AND "action" = 'create'`,
+      [created.id],
+    );
+    expect(rows).toHaveLength(1);
+    const serialized = JSON.stringify(rows[0].after);
+    // CR-5/PR-SEC-02: `after` must be `toUserAuditView`'s projection — ciphertext
+    // digests, never the decrypted `toUser` view — because audit_event is
+    // append-only with 7-year retention and no deletion path. A future edit
+    // that swapped in the decrypted view would leak these plaintexts here
+    // permanently; this asserts that never happens.
+    expect(serialized).not.toContain(dto.fullName);
+    expect(serialized).not.toContain(dto.email);
+    expect(rows[0].after).toHaveProperty('fullNameCtSha256');
+    expect(rows[0].after).toHaveProperty('emailCtSha256');
+    expect(typeof rows[0].after.fullNameCtSha256).toBe('string');
+    expect(typeof rows[0].after.emailCtSha256).toBe('string');
+  });
+
   it('refuses when any user already exists, and writes nothing', async () => {
     await users.bootstrapFirstAdmin(input());
     const { rows: before } = await adminPool.query(`SELECT count(*)::int AS n FROM "app_user"`);

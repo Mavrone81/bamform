@@ -222,9 +222,18 @@ export class UsersService {
    * user with no acting admin, run once by an operator via
    * `dist/bootstrap-admin.js`.
    *
-   * Fail-closed: refuses if ANY user exists (checked inside the tx, so it
-   * cannot race a concurrent create), which makes it strictly one-time and
-   * never a privilege-injection path. The ADMIN role is self-attributed
+   * Fail-closed: refuses if ANY user exists. The count check, the insert,
+   * the role grant, and the audit write all share one transaction, so the
+   * guard and the write commit atomically — a tripped guard rolls the whole
+   * thing back and writes nothing. That is NOT the same as race-freedom:
+   * Prisma runs at Postgres' default READ COMMITTED (no isolationLevel is
+   * configured here), and `count()` takes no predicate/range lock, so two
+   * genuinely concurrent invocations could both observe zero users and both
+   * insert. This is deliberately left undefended — bootstrap is a manual,
+   * one-shot CLI run once by a human operator against an empty system, not
+   * a concurrent-request code path, so hardening it with locking or
+   * SERIALIZABLE isolation would be defending against a scenario that does
+   * not occur. The ADMIN role is self-attributed
    * (`granted_by = the new user's own id`) because `user_role.granted_by`
    * is NOT NULL and there is no external actor. `must_change_password` is
    * false: the operator chose this password at a prompt, so the
