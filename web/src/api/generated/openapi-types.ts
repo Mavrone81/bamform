@@ -1144,6 +1144,44 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/jobs/{jobId}/parts/{partId}': {
+    parameters: {
+      query?: never;
+      header: {
+        /**
+         * @description Client-generated UUIDv7. REQUIRED (PR-API-16) — unlike the `POST`
+         *     above, this route is reachable from the offline outbox.
+         */
+        'Idempotency-Key': string;
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+        partId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Create or update a part consumed on this job, client-keyed
+     * @description Slice 30 — additive to `POST /jobs/{jobId}/parts` above. Unlike that
+     *     server-assigned id, the CLIENT mints `partId` up front (offline-
+     *     friendly: a locally-created row and a network retry of the same id
+     *     are naturally row-idempotent on their own). `Idempotency-Key` is
+     *     REQUIRED nonetheless (PR-API-16, unlike the `POST` above) — this
+     *     route is reachable from the offline outbox, and row-idempotency alone
+     *     would still let a bare retry write a duplicate no-op `audit_event`.
+     *     `active: false` is the soft-remove path (BUILD_HANDOFF non-negotiable
+     *     #7 — no physical `DELETE`); a soft-removed part is excluded from
+     *     reads, canonical serialisation (U-SIG-01) and the PDF.
+     */
+    put: operations['upsertPart'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/jobs/{jobId}/submit': {
     parameters: {
       query?: never;
@@ -2505,6 +2543,14 @@ export interface components {
       description: string;
       quantity: number;
       remarks?: string | null;
+    };
+    PartUpsertInput: {
+      partNo?: string | null;
+      description: string;
+      quantity: number;
+      remarks?: string | null;
+      /** @default true */
+      active: boolean;
     };
     PartUsed: {
       /** Format: uuid */
@@ -4611,6 +4657,50 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['PartUsed'];
+        };
+      };
+      409: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  upsertPart: {
+    parameters: {
+      query?: never;
+      header: {
+        /**
+         * @description Client-generated UUIDv7. REQUIRED (PR-API-16) — unlike the `POST`
+         *     above, this route is reachable from the offline outbox.
+         */
+        'Idempotency-Key': string;
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+        partId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PartUpsertInput'];
+      };
+    };
+    responses: {
+      /** @description Created or updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PartUsed'];
+        };
+      };
+      /** @description `/errors/not-found` - `partId` is not a UUID, or belongs to a different job */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
         };
       };
       409: components['responses']['Problem'];
