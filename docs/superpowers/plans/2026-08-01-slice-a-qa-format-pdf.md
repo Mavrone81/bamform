@@ -364,7 +364,6 @@ Replace the existing `.header-block` div and the `frequency-banner` div with:
 ```ts
   <div class="p-head">
     <div class="p-head-l">
-      <div class="p-org">${esc(input.assetDescription)}</div>
       <div class="p-title">${esc(input.documentTitle)}</div>
     </div>
     <div class="p-head-r">
@@ -385,7 +384,6 @@ In the `<style>` block, replacing `.header-block` and `.frequency-banner`:
 ```css
   .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
   .p-head-l { padding: 5px 7px; border-right: 1px solid #1a1a1a; }
-  .p-org { font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: #666; }
   .p-title { font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 2px; }
   .p-head-r { display: grid; grid-template-columns: auto 1fr; }
   .p-head-r span { padding: 2px 6px; border-bottom: 1px solid #c4c4c4; }
