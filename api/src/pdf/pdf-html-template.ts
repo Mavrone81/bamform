@@ -432,7 +432,12 @@ export function renderRecordHtml(input: PdfRecordInput): string {
 <meta charset="utf-8" />
 <title>${esc(input.documentNumber)} — ${esc(input.jobNumber)}</title>
 <style>
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; }
+  @page { size: A4 portrait; margin: 14mm 12mm; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
+  /* Chromium repeats a thead on every page only with table-header-group. */
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  .p-sign, .p-standing { break-inside: avoid; }
   h1 { font-size: 16px; margin-bottom: 2px; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
   th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }

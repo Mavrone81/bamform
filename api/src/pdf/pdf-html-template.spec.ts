@@ -763,6 +763,15 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
   });
 });
 
+describe('print CSS — A4, margins, repeating headers (Task 6)', () => {
+  it('declares A4 with margins and repeats table headers across pages', () => {
+    const html = renderRecordHtml(baseInput({}));
+    expect(html).toContain('@page { size: A4 portrait;');
+    expect(html).toContain('thead { display: table-header-group; }');
+    expect(html).toContain('tr { break-inside: avoid; }');
+  });
+});
+
 describe('itemInScope', () => {
   it('is true when the row frequency is in the visit scope', () => {
     expect(itemInScope('M3', ['M3', 'M6'])).toBe(true);

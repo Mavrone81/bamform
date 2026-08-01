@@ -70,7 +70,19 @@ export class ChromiumBrowserService implements OnModuleDestroy {
         // here since the HTML is fully self-contained (inline CSS, inline
         // base64 signature images, no external requests to wait out).
         await page.setContent(html, { waitUntil: 'load' });
-        const pdf = await page.pdf({ format: 'A4', printBackground: true });
+        // `@page { size: A4 portrait; margin: 14mm 12mm; }` in
+        // `pdf-html-template.ts` owns the page geometry — no `format` or
+        // `margin` here, so one file (the stylesheet) is authoritative and
+        // this call cannot silently override it.
+        const pdf = await page.pdf({
+          printBackground: true,
+          displayHeaderFooter: true,
+          headerTemplate: '<span></span>',
+          footerTemplate:
+            '<div style="width:100%;font-family:Arial,Helvetica,sans-serif;' +
+            'font-size:8px;color:#555;padding:0 12mm;text-align:right;">' +
+            'Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
+        });
         return Buffer.from(pdf);
       } finally {
         await page.close();
