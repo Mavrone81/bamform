@@ -199,15 +199,44 @@ function renderPartsRequired(parts: PdfStandingContentInput['partsRequired']): s
   return `<table class="parts-required"><thead><tr><th>Part No.</th><th>Description</th><th>Qty</th><th>Remarks</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function renderChecklist(items: PdfChecklistItemInput[]): string {
+/** `NOT_APPLICABLE` prints as `N/A`, `NOT_DONE` as `NOT DONE` — the sheet's own words. */
+function statusWord(status: string): string {
+  if (status === 'NOT_APPLICABLE') return 'N/A';
+  if (status === 'NOT_DONE') return 'NOT DONE';
+  return status;
+}
+
+/** The coarsest frequency in scope, for the "Not in scope (6M)" reason. */
+function scopeLabel(scope: string[]): string {
+  const order = ['M1', 'M3', 'M6', 'Y'];
+  const widest = [...scope].sort((a, b) => order.indexOf(b) - order.indexOf(a))[0] ?? '';
+  return widest === 'Y' ? 'Y' : widest.replace('M', '') + 'M';
+}
+
+/**
+ * Assembly service ruling: a checklist row whose template item was
+ * soft-removed from the revision arrives with `frequency === ''` — the
+ * correct fail-closed sentinel for `itemInScope` (it can never be a scope
+ * member). But a bare blank cell is visually indistinguishable from a
+ * rendering defect if a viewer doesn't also read the instruction column, so
+ * the Freq column prints a visible placeholder instead of nothing.
+ */
+function freqCell(frequency: string): string {
+  return frequency === '' ? '—' : esc(frequency);
+}
+
+function renderChecklist(items: PdfChecklistItemInput[], scope: string[]): string {
   if (items.length === 0) return '<p class="muted">No checklist items.</p>';
   const rows = items
-    .map(
-      (item) =>
-        `<tr><td>${item.itemNo}</td><td>${esc(item.instruction)}</td><td class="status-${esc(item.status)}">${esc(item.status)}</td><td>${esc(item.remark)}</td></tr>`,
-    )
+    .map((item) => {
+      if (!item.inScope) {
+        return `<tr class="p-out"><td class="p-no">${item.itemNo}</td><td class="p-fq">${freqCell(item.frequency)}</td><td>${esc(item.instruction)}</td><td class="c">—</td><td>Not in scope (${esc(scopeLabel(scope))})</td></tr>`;
+      }
+      const cls = item.status === 'NOT_DONE' ? 'c fail-ink' : 'c';
+      return `<tr><td class="p-no">${item.itemNo}</td><td class="p-fq">${freqCell(item.frequency)}</td><td>${esc(item.instruction)}</td><td class="${cls}">${esc(statusWord(item.status))}</td><td>${esc(item.remark)}</td></tr>`;
+    })
     .join('');
-  return `<table class="checklist"><thead><tr><th>#</th><th>Instruction</th><th>Status</th><th>Remark</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="p"><thead><tr><th class="p-no">No</th><th class="p-fq">Freq</th><th class="l">Maintenance Instruction</th><th class="p-st">Status</th><th class="l">Remark</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderMeasurements(rows: PdfMeasurementInput[]): string {
@@ -360,6 +389,16 @@ export function renderRecordHtml(input: PdfRecordInput): string {
             padding: 4px; background: #ececec; font-weight: 700; }
   .p-band .off { color: #999; font-weight: 400; }
   .p-band .on { text-decoration: underline; text-underline-offset: 2px; }
+  table.p { width: 100%; border-collapse: collapse; }
+  table.p th, table.p td { border: 1px solid #8a8a8a; padding: 3px 5px; text-align: left; vertical-align: middle; }
+  table.p thead th { background: #ececec; font-size: 9px; text-align: center; font-weight: 700; }
+  table.p thead th.l { text-align: left; }
+  table.p td.c { text-align: center; }
+  .p-no { width: 24px; text-align: center; }
+  .p-fq { width: 32px; text-align: center; }
+  .p-st { width: 58px; text-align: center; }
+  .p-out { color: #777; }
+  .fail-ink { color: #a8261c; font-weight: 700; }
   .muted { color: #777; font-style: italic; }
   .judgement-FAIL { color: #b00020; font-weight: bold; }
   .status-NOT_DONE { color: #b00020; font-weight: bold; }
@@ -398,8 +437,7 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   <h2>Safety</h2>
   <p>${esc(input.standingContent.safety) || '<span class="muted">None specified.</span>'}</p>
 
-  <h2>Checklist</h2>
-  ${renderChecklist(input.checklist)}
+  ${renderChecklist(input.checklist, input.frequencyScope)}
 
   <h2>Measurements</h2>
   ${renderMeasurements(input.measurements)}

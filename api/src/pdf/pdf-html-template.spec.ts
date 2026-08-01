@@ -139,6 +139,119 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('DONE');
   });
 
+  describe("renderChecklist — the sheet's own columns (Task 4)", () => {
+    it('prints No, Freq, Instruction, Status and Remark in that order', () => {
+      const html = renderRecordHtml(baseInput({}));
+      // The brief's own regex (`/<thead>.*?<\/thead>/s`) matches the FIRST
+      // <thead> in the whole document — which is the Parts Required table's,
+      // not the checklist's, since baseInput's standingContent.partsRequired
+      // is non-empty and Parts Required prints before the checklist. Scope
+      // the match to the checklist table specifically (`<table class="p">`).
+      const head = /<table class="p"><thead>(.*?)<\/thead>/s.exec(html)![1];
+      expect(head.indexOf('No')).toBeLessThan(head.indexOf('Freq'));
+      expect(head.indexOf('Freq')).toBeLessThan(head.indexOf('Maintenance Instruction'));
+      expect(head.indexOf('Maintenance Instruction')).toBeLessThan(head.indexOf('Status'));
+      expect(head.indexOf('Status')).toBeLessThan(head.indexOf('Remark'));
+    });
+
+    it("prints each row's frequency in the Freq column", () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: ['M3', 'M6'],
+          checklist: [
+            {
+              itemNo: 1,
+              frequency: 'M3',
+              inScope: true,
+              instruction: 'Clean',
+              status: 'DONE',
+              remark: null,
+            },
+            {
+              itemNo: 9,
+              frequency: 'M6',
+              inScope: true,
+              instruction: 'Fans',
+              status: 'DONE',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('<td class="p-fq">M3</td>');
+      expect(html).toContain('<td class="p-fq">M6</td>');
+    });
+
+    it('prints an out-of-scope row, numbered, with an em dash and a reason', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: ['M3', 'M6'],
+          checklist: [
+            {
+              itemNo: 13,
+              frequency: 'Y',
+              inScope: false,
+              instruction: 'Calibrate',
+              status: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('>13<');
+      expect(html).toContain('—');
+      expect(html).toContain('Not in scope (6M)');
+    });
+
+    it('prints the status word, not a glyph, and flags NOT_DONE', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          checklist: [
+            {
+              itemNo: 12,
+              frequency: 'M6',
+              inScope: true,
+              instruction: 'ESD',
+              status: 'NOT_DONE',
+              remark: 'WO-2291',
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('NOT DONE');
+      expect(html).toContain('class="c fail-ink"');
+    });
+
+    /**
+     * Owner ruling on the soft-removed-item sentinel: the assembly service
+     * deliberately sets `frequency: ''` for a row whose template item was
+     * removed from the revision (the correct fail-closed value for
+     * `itemInScope`), but a bare blank Freq cell is visually
+     * indistinguishable from a rendering defect if a viewer doesn't also
+     * read the instruction column. The Freq column must print a visible
+     * placeholder, not nothing.
+     */
+    it("prints a placeholder, not a blank cell, when a soft-removed item's frequency is empty", () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: ['M3', 'M6'],
+          checklist: [
+            {
+              itemNo: 7,
+              frequency: '',
+              inScope: false,
+              instruction: 'Replace filter (item removed from revision)',
+              status: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('<td class="p-fq">—</td>');
+      expect(html).not.toContain('<td class="p-fq"></td>');
+    });
+  });
+
   it('includes the measurement table with specification and reading', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Temperature');
