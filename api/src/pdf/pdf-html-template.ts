@@ -41,6 +41,14 @@ export interface PdfSignatureInput {
 
 export interface PdfChecklistItemInput {
   itemNo: number;
+  /** `'M1' | 'M3' | 'M6' | 'Y'` — printed in the sheet's Freq column (column B of the workbook). */
+  frequency: string;
+  /**
+   * False when the row's frequency is outside this visit's scope — a Y item on
+   * a 6M visit. Such rows still PRINT, still numbered: the sheet stays whole
+   * and only the cell is closed.
+   */
+  inScope: boolean;
   instruction: string;
   status: string;
   remark: string | null;
@@ -74,6 +82,8 @@ export interface PdfStandingContentInput {
   safety?: string | null;
   procedure?: string | null;
   remarks?: string | null;
+  /** The form's printed banner, verbatim. Absent for forms loaded before Task 1. */
+  frequencyBanner?: string | null;
 }
 
 /**
@@ -96,8 +106,12 @@ export interface PdfRecordInput {
   documentTitle: string;
   revisionCode: string;
   assetCode: string;
+  /** The machine this record covers. One record is one machine — printed in the header. */
+  machineCode: string;
   assetDescription: string | null;
   frequency: string;
+  /** Every frequency in scope for this visit, e.g. `['M3','M6']` for a 6M. */
+  frequencyScope: string[];
   dueOn: string;
   status: string;
   standingContent: PdfStandingContentInput;
@@ -114,6 +128,16 @@ export interface PdfRecordInput {
     integrityDigestHex: string;
     renderedAt: string;
   };
+}
+
+/**
+ * Whether a checklist row applies to this visit. A Y row on a 6M visit is out
+ * of scope: it still PRINTS, still numbered, but its cell is closed.
+ * `job.frequency_scope` already carries the cascade — a Y visit arrives as
+ * `['M3','M6','Y']` — so plain membership is the whole rule.
+ */
+export function itemInScope(frequency: string, scope: readonly string[]): boolean {
+  return scope.includes(frequency);
 }
 
 export function escapeHtml(value: string): string {

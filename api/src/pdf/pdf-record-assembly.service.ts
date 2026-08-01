@@ -12,13 +12,14 @@ import {
 } from '../jobs/job-enums';
 import { JOB_FULL_INCLUDE, latestApprovalStep, type JobFullRow } from '../jobs/job-include';
 import { PrismaService } from '../prisma/prisma.service';
-import type {
-  PdfChecklistItemInput,
-  PdfMeasurementInput,
-  PdfRecordInput,
-  PdfSignatureInput,
-  PdfStandingContentInput,
-  PdfVoidNoticeInput,
+import {
+  itemInScope,
+  type PdfChecklistItemInput,
+  type PdfMeasurementInput,
+  type PdfRecordInput,
+  type PdfSignatureInput,
+  type PdfStandingContentInput,
+  type PdfVoidNoticeInput,
 } from './pdf-html-template';
 
 /**
@@ -75,8 +76,12 @@ export class PdfRecordAssemblyService {
       ),
       revisionCode: job.templateRevision.revisionCode,
       assetCode: job.asset.code,
+      // Slice A/QA-format Task 2 — one record is one machine; the asset code
+      // IS the machine code (`Asset.code`, e.g. `AW02`).
+      machineCode: job.asset.code,
       assetDescription: job.asset.description,
       frequency: job.frequency,
+      frequencyScope: job.frequencyScope,
       dueOn: job.dueOn.toISOString().slice(0, 10),
       status: JOB_STATUS_FROM_DB[job.status],
       standingContent: (job.templateRevision.standingContent ?? {}) as PdfStandingContentInput,
@@ -140,8 +145,15 @@ export class PdfRecordAssemblyService {
     return job.itemResults
       .map((r) => {
         const item = itemsById.get(r.templateItemId);
+        // A result whose item fell off the active revision (soft-removed —
+        // see `JOB_FULL_INCLUDE`'s `active: true` filter) has no frequency of
+        // its own to check against scope; fall back to the job's own
+        // frequency rather than fabricate one.
+        const frequency = item?.frequency ?? job.frequency;
         return {
           itemNo: item?.itemNo ?? 0,
+          frequency,
+          inScope: itemInScope(frequency, job.frequencyScope),
           instruction: item?.instruction ?? '(item no longer on the revision)',
           status: ITEM_STATUS_FROM_DB[r.status],
           remark: r.remark,

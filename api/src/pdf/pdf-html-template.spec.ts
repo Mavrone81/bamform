@@ -1,5 +1,6 @@
 import {
   escapeHtml,
+  itemInScope,
   renderRecordHtml,
   signatureBlockLabel,
   type PdfRecordInput,
@@ -13,8 +14,10 @@ function baseInput(overrides: Partial<PdfRecordInput> = {}): PdfRecordInput {
     documentTitle: 'Besi Die Attach Preventive Maintenance Record',
     revisionCode: 'R2',
     assetCode: 'AST-001',
+    machineCode: 'AW02',
     assetDescription: 'Die Attach Machine',
     frequency: 'M1',
+    frequencyScope: ['M3', 'M6'],
     dueOn: '2026-07-01',
     status: 'ARCHIVED',
     standingContent: {
@@ -25,7 +28,16 @@ function baseInput(overrides: Partial<PdfRecordInput> = {}): PdfRecordInput {
       procedure: null,
       remarks: 'All good',
     },
-    checklist: [{ itemNo: 1, instruction: 'Check belts', status: 'DONE', remark: null }],
+    checklist: [
+      {
+        itemNo: 1,
+        frequency: 'M3',
+        inScope: true,
+        instruction: 'Check belts',
+        status: 'DONE',
+        remark: null,
+      },
+    ],
     measurements: [
       {
         description: 'Temperature',
@@ -247,6 +259,8 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
         checklist: [
           {
             itemNo: 1,
+            frequency: 'M3',
+            inScope: true,
             instruction: 'Check belts',
             status: 'DONE',
             remark: '<img src=x onerror=alert(1)>',
@@ -329,5 +343,20 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     );
     expect(html).not.toContain('<script>alert(9)</script>');
     expect(html).toContain('&lt;script&gt;alert(9)&lt;/script&gt;');
+  });
+});
+
+describe('itemInScope', () => {
+  it('is true when the row frequency is in the visit scope', () => {
+    expect(itemInScope('M3', ['M3', 'M6'])).toBe(true);
+    expect(itemInScope('M6', ['M3', 'M6'])).toBe(true);
+  });
+
+  it('is false for a yearly row on a six-monthly visit', () => {
+    expect(itemInScope('Y', ['M3', 'M6'])).toBe(false);
+  });
+
+  it('is false against an empty scope rather than throwing', () => {
+    expect(itemInScope('M3', [])).toBe(false);
   });
 });
