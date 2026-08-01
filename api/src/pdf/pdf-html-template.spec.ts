@@ -125,12 +125,62 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).not.toContain('<script>');
   });
 
-  it('includes tools, parts-required, PPE and safety blocks', () => {
+  /**
+   * Task 5: the old separate "Parts Required" `<h2>` section is gone — the
+   * sheet's own standing-content block prints what was actually USED
+   * (`partsUsed`), not the planning list (`partsRequired`), matching the
+   * physical form (see `renderStandingBlock`'s doc comment). `standingContent
+   * .partsRequired`'s `Filter` row is therefore no longer expected on the
+   * printed record; `partsUsed`'s `Belt` row is.
+   */
+  it('includes standing content: special tools, parts used, PPE and safety, in one labelled block', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Torque wrench');
-    expect(html).toContain('Filter');
+    expect(html).toContain('Belt');
     expect(html).toContain('Gloves');
     expect(html).toContain('Lockout/tagout before servicing');
+  });
+
+  describe('renderStandingBlock / renderSignatures / page footer (Task 5)', () => {
+    it('prints standing content as one labelled block, not separate headings', () => {
+      const html = renderRecordHtml(
+        baseInput({ standingContent: { ppe: ['Safety Shoes'], safety: 'Lock out.' } }),
+      );
+      expect(html).toContain('<dt>PPE</dt>');
+      expect(html).not.toContain('<h2>PPE</h2>');
+    });
+
+    it('prints three signature cells with the captions signatureBlockLabel gives', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          signatures: [
+            {
+              approvalStepId: 's1',
+              stageOrdinal: 0,
+              action: 'SUBMITTED',
+              actorName: 'R. Tan',
+              actorRoleCode: 'MAINTAINER',
+              actedAt: '2026-08-14',
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('Maintenance Performed By');
+      expect(html).toContain('R. Tan');
+    });
+
+    it('prints the stored digest in the footer without recomputing it', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          footer: {
+            recordId: 'r1',
+            integrityDigestHex: 'deadbeef',
+            renderedAt: '2026-08-14T00:00:00Z',
+          },
+        }),
+      );
+      expect(html).toContain('deadbeef');
+    });
   });
 
   it('includes the numbered checklist with recorded status', () => {
@@ -142,11 +192,10 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
   describe("renderChecklist — the sheet's own columns (Task 4)", () => {
     it('prints No, Freq, Instruction, Status and Remark in that order', () => {
       const html = renderRecordHtml(baseInput({}));
-      // The brief's own regex (`/<thead>.*?<\/thead>/s`) matches the FIRST
-      // <thead> in the whole document — which is the Parts Required table's,
-      // not the checklist's, since baseInput's standingContent.partsRequired
-      // is non-empty and Parts Required prints before the checklist. Scope
-      // the match to the checklist table specifically (`<table class="p">`).
+      // A generic `<thead>` match is not scoped to a specific table — the
+      // document renders more than one (checklist, measurements). Scope the
+      // match to the checklist table specifically (`<table class="p">`,
+      // first one in document order) rather than relying on ordering.
       const head = /<table class="p"><thead>(.*?)<\/thead>/s.exec(html)![1];
       expect(head.indexOf('No')).toBeLessThan(head.indexOf('Freq'));
       expect(head.indexOf('Freq')).toBeLessThan(head.indexOf('Maintenance Instruction'));
@@ -373,10 +422,16 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     });
   });
 
-  it('includes the signature block with name, role and timestamp (UR-057)', () => {
+  /**
+   * Task 5: the three-cell signature row prints name + timestamp under the
+   * sheet's own caption (`signatureBlockLabel`); it no longer prints the
+   * actor's raw role code as a separate line — the caption itself already
+   * says who the signature is ("Verified By (Workshop Team Leader)"), and
+   * the physical form's own signature box has no separate role field.
+   */
+  it('includes the signature row with name and timestamp (UR-057)', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Jane Doe');
-    expect(html).toContain('TEAM_LEADER');
     expect(html).toContain('2026-07-02T10:00:00.000Z');
   });
 
@@ -468,7 +523,15 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('data:image/png;base64,BASE64DATA');
   });
 
-  it('renders "(no drawn signature captured...)" when a step has none (return/recall/void)', () => {
+  /**
+   * Task 5: a step with no drawn signature (return/recall/void) prints the
+   * sheet's own blank signature line (`.p-sigline`) in place of the drawn
+   * `<img>` — the physical form's blank rule, not prose apologising for its
+   * absence. The three-cell row no longer prints the free-text `reason`
+   * field inline (dropped along with `onBehalfOfName`, matching the sheet's
+   * signature box, which has neither).
+   */
+  it('renders a blank signature line when a step has none (return/recall/void)', () => {
     const html = renderRecordHtml(
       baseInput({
         signatures: [
@@ -485,8 +548,9 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
         ],
       }),
     );
-    expect(html).toContain('no drawn signature captured');
-    expect(html).toContain('Missing measurement');
+    expect(html).toContain('class="p-sigline"');
+    expect(html).toContain('Returned By (Stage 1)');
+    expect(html).toContain('John Smith');
     expect(html).not.toContain('data:image/png;base64,');
   });
 
@@ -495,9 +559,16 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('All good');
   });
 
-  it('the page footer carries the record id and integrity digest (PR-118)', () => {
+  /**
+   * Task 5: the `.p-foot` page footer identifies the record by its
+   * document/machine/job identity line (what an ISO auditor reads a
+   * controlled record by), not the internal `recordId` UUID — the sheet has
+   * no such field. The integrity digest is still carried verbatim (PR-118).
+   */
+  it('the page footer carries the record identity and integrity digest (PR-118)', () => {
     const html = renderRecordHtml(baseInput());
-    expect(html).toContain('rec-1');
+    expect(html).toContain('CE 95 010 00 01');
+    expect(html).toContain('PM-0001');
     expect(html).toContain('deadbeef');
   });
 
@@ -509,10 +580,15 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
    * header-identical. Owner ruling: print status in the footer alongside
    * the other record metadata (integrity digest, record id) rather than
    * restoring it to the sheet's own header/body.
+   *
+   * Task 5 replaced the `.record-footer` div this ruling landed on with the
+   * sheet's own `.p-foot` page footer — the selector below tracks that
+   * rename, but the ruling itself (status must survive in the footer) is
+   * unchanged and is NOT weakened here.
    */
   it('the page footer carries the record status (fix round 1, finding 1)', () => {
     const html = renderRecordHtml(baseInput({ status: 'SUBMITTED' }));
-    expect(html).toMatch(/record-footer[\s\S]*Status:\s*SUBMITTED/);
+    expect(html).toMatch(/p-foot[\s\S]*Status:\s*SUBMITTED/);
   });
 
   it('a DIFFERENT integrity digest produces a DIFFERENT footer (tamper-detectable at a glance)', () => {
@@ -567,14 +643,17 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     );
     expect(html).toContain('No checklist items.');
     expect(html).toContain('No measurements.');
-    expect(html).toContain('No parts used.');
+    // Task 5: "no parts used" is now rendered inline in the standing-content
+    // block's <dd> (`<span class="muted">None.</span>`), not as its own
+    // sentence — the same fallback used for "no remarks".
+    expect(html).toContain('<dt>Parts Used</dt><dd><span class="muted">None.</span></dd>');
     expect(html).toContain('No attachments.');
     expect(html).toContain('No approval actions recorded yet.');
   });
 
   // ------------------------------------------------------- slice 17-VOID
 
-  it('U-VOID-04: a voided record renders the VOID watermark, banner and footer line — the PDF must tell the truth', () => {
+  it('U-VOID-04: a voided record renders the VOID watermark, banner and footer status — the PDF must tell the truth', () => {
     const html = renderRecordHtml(
       baseInput({
         status: 'VOIDED',
@@ -590,9 +669,13 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('Raised against the wrong machine');
     expect(html).toContain('Ada Admin');
     expect(html).toContain('2026-07-28T01:00:00.000Z');
-    // The footer carries the void line too (survives a single-page print of
-    // the last page alone).
-    expect(html).toMatch(/record-footer[\s\S]*RECORD VOID/);
+    // Task 5: the `.p-foot` page footer no longer repeats the full void
+    // line (`renderVoidNotice`'s `position: fixed` watermark already
+    // repeats on every printed page — see that function's doc comment — so
+    // a single last-page view still carries the truth); the footer instead
+    // carries the same signal via the record `Status:` field the owner
+    // ruling put there.
+    expect(html).toMatch(/p-foot[\s\S]*Status:\s*VOIDED/);
   });
 
   it('U-VOID-05: a live record renders NO void marking (the stylesheet may define the class; no element uses it)', () => {

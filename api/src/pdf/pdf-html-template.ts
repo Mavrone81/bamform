@@ -6,10 +6,13 @@
  * so layout/escaping can be asserted without a real browser or database.
  *
  * PR-116's required blocks: header (title/document number/revision/page),
- * frequency banner, tools/parts/PPE/safety blocks, the numbered checklist,
- * the measurement table, the signature block (UR-057: name/role/timestamp
- * per signature), and the Remarks footer. PR-118: the page footer ALSO
- * carries the record id and integrity digest.
+ * frequency banner, the numbered checklist, the measurement table, the
+ * labelled standing-content block (special tools/parts used/PPE/safety/
+ * remarks — Task 5), the signature row (UR-057: name/timestamp per
+ * signature), and the page footer. PR-118: the page footer ALSO carries the
+ * document identity line, the record status (owner ruling — see
+ * `signatureBlockLabel`'s neighbour, the `.p-foot` markup in
+ * `renderRecordHtml`) and the integrity digest.
  *
  * SECURITY_ARCHITECTURE.md §8 ("PDF rendering... template variables
  * escaped — a remark field must not be able to inject markup into a
@@ -204,17 +207,6 @@ function renderFrequencyBand(banner: string | null | undefined, scope: string[])
   return `<div class="p-band">${spans}</div>`;
 }
 
-function renderPartsRequired(parts: PdfStandingContentInput['partsRequired']): string {
-  if (!parts || parts.length === 0) return '<p class="muted">None specified.</p>';
-  const rows = parts
-    .map(
-      (p) =>
-        `<tr><td>${esc(p.partNo)}</td><td>${esc(p.description)}</td><td>${esc(p.qty)}</td><td>${esc(p.remarks)}</td></tr>`,
-    )
-    .join('');
-  return `<table class="parts-required"><thead><tr><th>Part No.</th><th>Description</th><th>Qty</th><th>Remarks</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
-
 /** `NOT_APPLICABLE` prints as `N/A`, `NOT_DONE` as `NOT DONE` — the sheet's own words. */
 function statusWord(status: string): string {
   if (status === 'NOT_APPLICABLE') return 'N/A';
@@ -287,15 +279,32 @@ function renderMeasurements(rows: PdfMeasurementInput[]): string {
   <table class="p"><thead><tr><th class="l">Description</th><th class="p-sp">Specification</th><th class="p-mk">Reading</th><th class="p-mk">Result</th><th class="l">Remark</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
-function renderParts(parts: PdfPartUsedInput[]): string {
-  if (parts.length === 0) return '<p class="muted">No parts used.</p>';
-  const body = parts
-    .map(
-      (p) =>
-        `<tr><td>${esc(p.partNo)}</td><td>${esc(p.description)}</td><td>${esc(p.quantity)}</td><td>${esc(p.remarks)}</td></tr>`,
-    )
-    .join('');
-  return `<table class="parts-used"><thead><tr><th>Part No.</th><th>Description</th><th>Qty</th><th>Remarks</th></tr></thead><tbody>${body}</tbody></table>`;
+/**
+ * The sheet's own labelled block — Special Tools · Parts · PPE · Safety —
+ * replacing the old stacked `<h2>` sections. "Parts" here is PARTS USED (what
+ * the controlled record actually consumed), not `partsRequired` (a planning
+ * list): the printed record reports what happened, matching the physical
+ * form, which has no separate "required" list of its own.
+ */
+function renderStandingBlock(sc: PdfStandingContentInput, partsUsed: PdfPartUsedInput[]): string {
+  const partsLine =
+    partsUsed.length === 0
+      ? '<span class="muted">None.</span>'
+      : partsUsed
+          .map((p) => `${esc(p.partNo)} — ${esc(p.description)} — Qty ${esc(p.quantity)}`)
+          .join('<br />');
+  const ppe =
+    sc.ppe && sc.ppe.length > 0
+      ? sc.ppe.map(esc).join(' · ')
+      : '<span class="muted">None specified.</span>';
+  return `<div class="p-sect">Special Tools · Parts · PPE · Safety</div>
+  <dl class="p-standing">
+    <dt>Special Tools</dt><dd>${esc(sc.specialTools) || '<span class="muted">None specified.</span>'}</dd>
+    <dt>Parts Used</dt><dd>${partsLine}</dd>
+    <dt>PPE</dt><dd>${ppe}</dd>
+    <dt>Safety</dt><dd>${esc(sc.safety) || '<span class="muted">None specified.</span>'}</dd>
+    <dt>Remarks</dt><dd>${esc(sc.remarks) || '<span class="muted">None.</span>'}</dd>
+  </dl>`;
 }
 
 function renderAttachments(attachments: PdfAttachmentInput[]): string {
@@ -376,32 +385,27 @@ export function signatureBlockLabel(
   }
 }
 
+/**
+ * The sheet's own three-cell signature row, replacing the old free-standing
+ * `.signature-block` grid. A blank `.p-sigline` prints in place of a drawn
+ * signature for an action that never captures one (return/recall/void) — the
+ * physical form's own blank rule, not prose apologising for its absence.
+ */
 function renderSignatures(signatures: PdfSignatureInput[]): string {
-  if (signatures.length === 0) {
-    return '<p class="muted">No approval actions recorded yet.</p>';
-  }
-  const blocks = signatures
+  if (signatures.length === 0) return '<p class="muted">No approval actions recorded yet.</p>';
+  const cells = signatures
     .map((s) => {
-      const drawn = s.drawnSignatureBase64
-        ? `<img class="drawn-signature" alt="signature" src="data:image/png;base64,${s.drawnSignatureBase64}" />`
-        : '<p class="muted">(no drawn signature captured for this action)</p>';
-      const onBehalf = s.onBehalfOfName
-        ? `<div class="on-behalf-of">on behalf of ${esc(s.onBehalfOfName)}</div>`
-        : '';
-      const reason = s.reason ? `<div class="reason">Reason: ${esc(s.reason)}</div>` : '';
-      return `
-        <div class="signature-block">
-          <div class="signature-stage">${esc(signatureBlockLabel(s.stageOrdinal, s.action, s.stageLabel))}</div>
-          ${drawn}
-          <div class="signature-name">${esc(s.actorName)}</div>
-          <div class="signature-role">${esc(s.actorRoleCode)}</div>
-          <div class="signature-timestamp">${esc(s.actedAt)}</div>
-          ${onBehalf}
-          ${reason}
-        </div>`;
+      const img = s.drawnSignatureBase64
+        ? `<img class="drawn-signature" src="data:image/png;base64,${s.drawnSignatureBase64}" alt="" />`
+        : '<div class="p-sigline"></div>';
+      return `<div>
+        <div class="lbl">${esc(signatureBlockLabel(s.stageOrdinal, s.action, s.stageLabel))}</div>
+        ${img}
+        <div class="p-signm">${esc(s.actorName)} · ${esc(s.actedAt)}</div>
+      </div>`;
     })
     .join('');
-  return `<div class="signatures">${blocks}</div>`;
+  return `<div class="p-sign">${cells}</div>`;
 }
 
 export function renderRecordHtml(input: PdfRecordInput): string {
@@ -413,7 +417,6 @@ export function renderRecordHtml(input: PdfRecordInput): string {
 <style>
   body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; }
   h1 { font-size: 16px; margin-bottom: 2px; }
-  h2 { font-size: 13px; margin-top: 18px; margin-bottom: 4px; border-bottom: 1px solid #999; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
   th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }
   .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
@@ -439,11 +442,23 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   .p-out { color: #777; }
   .fail-ink { color: #a8261c; font-weight: 700; }
   .muted { color: #777; font-style: italic; }
-  .signature-block { display: inline-block; width: 45%; margin: 6px 2%; border: 1px solid #ccc; padding: 6px; vertical-align: top; }
   .drawn-signature { max-width: 180px; max-height: 80px; display: block; border-bottom: 1px solid #333; }
-  .record-footer { margin-top: 24px; border-top: 1px solid #999; padding-top: 4px; font-size: 9px; color: #444; }
   .void-watermark { position: fixed; top: 40%; left: 8%; font-size: 130px; font-weight: bold; color: rgba(176, 0, 32, 0.14); transform: rotate(-30deg); letter-spacing: 24px; pointer-events: none; z-index: 1000; }
   .void-banner { border: 2px solid #b00020; color: #b00020; font-weight: bold; padding: 6px 8px; margin: 8px 0; }
+  .p-sect { border: 1px solid #1a1a1a; border-top: none; background: #ececec;
+            padding: 3px 5px; font-weight: 700; font-size: 9px;
+            letter-spacing: 0.05em; text-transform: uppercase; }
+  .p-standing { border: 1px solid #8a8a8a; border-top: none; display: grid; grid-template-columns: 90px 1fr; }
+  .p-standing dt { padding: 3px 5px; border-right: 1px solid #c4c4c4; border-bottom: 1px solid #c4c4c4; font-weight: 700; color: #444; }
+  .p-standing dd { margin: 0; padding: 3px 5px; border-bottom: 1px solid #c4c4c4; }
+  .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
+  .p-sign > div { padding: 5px 6px; }
+  .p-sign > div + div { border-left: 1px solid #8a8a8a; }
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
+  .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
+  .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
+            display: flex; justify-content: space-between; font-size: 8px; color: #555; }
 </style>
 </head>
 <body>
@@ -462,36 +477,17 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   </div>
   ${renderFrequencyBand(input.standingContent.frequencyBanner, input.frequencyScope)}
 
-  <h2>Special Tools</h2>
-  <p>${esc(input.standingContent.specialTools) || '<span class="muted">None specified.</span>'}</p>
-
-  <h2>Parts Required</h2>
-  ${renderPartsRequired(input.standingContent.partsRequired)}
-
-  <h2>PPE</h2>
-  <p>${input.standingContent.ppe && input.standingContent.ppe.length > 0 ? input.standingContent.ppe.map(esc).join(', ') : '<span class="muted">None specified.</span>'}</p>
-
-  <h2>Safety</h2>
-  <p>${esc(input.standingContent.safety) || '<span class="muted">None specified.</span>'}</p>
-
   ${renderChecklist(input.checklist, input.frequencyScope)}
 
   ${renderMeasurements(input.measurements)}
 
-  <h2>Parts Used</h2>
-  ${renderParts(input.partsUsed)}
-
-  <h2>Attachments</h2>
-  ${renderAttachments(input.attachments)}
-
-  <h2>Signatures</h2>
+  ${renderStandingBlock(input.standingContent, input.partsUsed)}
   ${renderSignatures(input.signatures)}
-
-  <h2>Remarks</h2>
-  <p>${esc(input.standingContent.remarks) || '<span class="muted">None.</span>'}</p>
-
-  <div class="record-footer">
-    Record ${esc(input.footer.recordId)} — Status: ${esc(input.status)} — Integrity digest (SHA-256): ${esc(input.footer.integrityDigestHex)} — Rendered ${esc(input.footer.renderedAt)}${input.voidNotice ? ` — ${voidLine(input.voidNotice)}` : ''}
+  ${renderAttachments(input.attachments)}
+  <div class="p-foot">
+    <span>${esc(input.documentNumber)} Rev ${esc(input.revisionCode)} · ${esc(input.machineCode)} · ${esc(input.jobNumber)}</span>
+    <span>Status: ${esc(input.status)}</span>
+    <span>SHA-256 ${esc(input.footer.integrityDigestHex)}</span>
   </div>
 </body>
 </html>`;
