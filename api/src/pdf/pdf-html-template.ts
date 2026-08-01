@@ -473,9 +473,7 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   thead { display: table-header-group; }
   tr { break-inside: avoid; }
   .p-sign, .p-standing { break-inside: avoid; }
-  h1 { font-size: 16px; margin-bottom: 2px; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-  th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }
   .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
   .p-head-l { padding: 5px 7px; border-right: 1px solid #1a1a1a; }
   .p-title { font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 2px; }

@@ -6,6 +6,21 @@ import {
   type PdfRecordInput,
 } from './pdf-html-template';
 
+/**
+ * Fix round 2, I-finding: `class="c fail-ink"` and `<td class="c">—</td>`
+ * are produced by BOTH the checklist table (a NOT_DONE row / an out-of-scope
+ * row) and the measurement table (a FAIL judgement / a blank reading) — an
+ * unscoped `html.toContain(...)` for one can pass only because the other
+ * table's default fixture happens not to also produce it. Scope each
+ * assertion to the table it actually means to test.
+ */
+function checklistTableOf(html: string): string {
+  return /<table class="p">[\s\S]*?<\/table>/.exec(html)![0];
+}
+function measurementsTableOf(html: string): string {
+  return /Measurement Records<\/div>\s*<table class="p">[\s\S]*?<\/table>/.exec(html)![0];
+}
+
 function baseInput(overrides: Partial<PdfRecordInput> = {}): PdfRecordInput {
   return {
     recordId: 'rec-1',
@@ -314,8 +329,9 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
           ],
         }),
       );
-      expect(html).toContain('NOT DONE');
-      expect(html).toContain('class="c fail-ink"');
+      const checklistTable = checklistTableOf(html);
+      expect(checklistTable).toContain('NOT DONE');
+      expect(checklistTable).toContain('class="c fail-ink"');
     });
 
     /**
@@ -459,8 +475,9 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
           ],
         }),
       );
-      expect(html).toContain('0.19 – 0.21 μm/encoder');
-      expect(html).toContain('class="c fail-ink"');
+      const measurementsTable = measurementsTableOf(html);
+      expect(measurementsTable).toContain('0.19 – 0.21 μm/encoder');
+      expect(measurementsTable).toContain('class="c fail-ink"');
     });
 
     it('prints an em dash for a measurement with no reading', () => {
@@ -478,7 +495,7 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
           ],
         }),
       );
-      expect(html).toContain('<td class="c">—</td>');
+      expect(measurementsTableOf(html)).toContain('<td class="c">—</td>');
     });
   });
 
@@ -765,15 +782,16 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('Reason: &lt;script&gt;alert(3)&lt;/script&gt;');
   });
 
-  it('escapes malicious content in the document title and asset description', () => {
+  // `assetDescription` is not rendered anywhere in this template — dropped
+  // from this test (was asserting nothing) rather than left implying
+  // coverage that doesn't exist.
+  it('escapes malicious content in the document title', () => {
     const html = renderRecordHtml(
       baseInput({
         documentTitle: '<script>alert(1)</script>',
-        assetDescription: '"><script>alert(2)</script>',
       }),
     );
     expect(html).not.toContain('<script>alert(1)</script>');
-    expect(html).not.toContain('<script>alert(2)</script>');
   });
 
   it('handles an empty checklist/measurements/parts/attachments/signatures gracefully', () => {
