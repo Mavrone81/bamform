@@ -7,7 +7,7 @@ exports[`QA-format record — golden shapes renders long-18-item stably 1`] = `
 <meta charset="utf-8" />
 <title>CE 95 043 00 01 — PM-4471</title>
 <style>
-  @page { size: A4 portrait; margin: 14mm 12mm; }
+  @page { size: A4 portrait; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
   /* Chromium repeats a thead on every page only with table-header-group. */
   thead { display: table-header-group; }
@@ -113,7 +113,7 @@ exports[`QA-format record — golden shapes renders monthly-only stably 1`] = `
 <meta charset="utf-8" />
 <title>CE 95 012 00 02 — PM-4471</title>
 <style>
-  @page { size: A4 portrait; margin: 14mm 12mm; }
+  @page { size: A4 portrait; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
   /* Chromium repeats a thead on every page only with table-header-group. */
   thead { display: table-header-group; }
@@ -219,7 +219,7 @@ exports[`QA-format record — golden shapes renders single-3m stably 1`] = `
 <meta charset="utf-8" />
 <title>CE 95 020 00 01 — PM-4471</title>
 <style>
-  @page { size: A4 portrait; margin: 14mm 12mm; }
+  @page { size: A4 portrait; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
   /* Chromium repeats a thead on every page only with table-header-group. */
   thead { display: table-header-group; }
@@ -325,7 +325,7 @@ exports[`QA-format record — golden shapes renders voided stably 1`] = `
 <meta charset="utf-8" />
 <title>CE 95 020 00 01 — PM-4471</title>
 <style>
-  @page { size: A4 portrait; margin: 14mm 12mm; }
+  @page { size: A4 portrait; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
   /* Chromium repeats a thead on every page only with table-header-group. */
   thead { display: table-header-group; }

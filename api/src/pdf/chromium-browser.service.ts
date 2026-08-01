@@ -70,11 +70,16 @@ export class ChromiumBrowserService implements OnModuleDestroy {
         // here since the HTML is fully self-contained (inline CSS, inline
         // base64 signature images, no external requests to wait out).
         await page.setContent(html, { waitUntil: 'load' });
-        // `@page { size: A4 portrait; margin: 14mm 12mm; }` in
-        // `pdf-html-template.ts` owns the page geometry — no `format` or
-        // `margin` here, so one file (the stylesheet) is authoritative and
-        // this call cannot silently override it.
+        // These `page.pdf()` options own the page geometry, not the
+        // stylesheet's `@page` rule: Puppeteer only consults `@page` when
+        // `preferCSSPageSize` is `true` (default `false`, and not set here),
+        // so `format`/`margin` below are the sole authority — verified
+        // against the vendored `puppeteer-core@21.11.0`
+        // (`common/util.js:313-355`), where omitting them sends US Letter
+        // (8.5x11in) with zero margins to CDP instead.
         const pdf = await page.pdf({
+          format: 'A4',
+          margin: { top: '14mm', right: '12mm', bottom: '14mm', left: '12mm' },
           printBackground: true,
           displayHeaderFooter: true,
           headerTemplate: '<span></span>',
