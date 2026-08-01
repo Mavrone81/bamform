@@ -49,7 +49,13 @@ exports[`QA-format record — golden shapes renders long-18-item stably 1`] = `
   .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
   .p-sign > div { padding: 5px 6px; }
   .p-sign > div + div { border-left: 1px solid #8a8a8a; }
-  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  /* NO text-transform here. The caption comes from signatureBlockLabel() and is
+     the paper form's own wording ("Maintenance Performed By", "Verified By
+     (Workshop Team Leader)"). Chromium bakes text-transform into the rendered
+     glyphs, so uppercasing it changes what pdf-parse extracts — which broke
+     four assertions in records-pdf.spec.ts that pin those exact captions.
+     Cosmetic styling must not alter the text of a controlled record. */
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; }
   .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
   .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
   .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
@@ -156,7 +162,13 @@ exports[`QA-format record — golden shapes renders monthly-only stably 1`] = `
   .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
   .p-sign > div { padding: 5px 6px; }
   .p-sign > div + div { border-left: 1px solid #8a8a8a; }
-  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  /* NO text-transform here. The caption comes from signatureBlockLabel() and is
+     the paper form's own wording ("Maintenance Performed By", "Verified By
+     (Workshop Team Leader)"). Chromium bakes text-transform into the rendered
+     glyphs, so uppercasing it changes what pdf-parse extracts — which broke
+     four assertions in records-pdf.spec.ts that pin those exact captions.
+     Cosmetic styling must not alter the text of a controlled record. */
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; }
   .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
   .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
   .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
@@ -263,7 +275,13 @@ exports[`QA-format record — golden shapes renders single-3m stably 1`] = `
   .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
   .p-sign > div { padding: 5px 6px; }
   .p-sign > div + div { border-left: 1px solid #8a8a8a; }
-  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  /* NO text-transform here. The caption comes from signatureBlockLabel() and is
+     the paper form's own wording ("Maintenance Performed By", "Verified By
+     (Workshop Team Leader)"). Chromium bakes text-transform into the rendered
+     glyphs, so uppercasing it changes what pdf-parse extracts — which broke
+     four assertions in records-pdf.spec.ts that pin those exact captions.
+     Cosmetic styling must not alter the text of a controlled record. */
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; }
   .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
   .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
   .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
@@ -370,7 +388,13 @@ exports[`QA-format record — golden shapes renders voided stably 1`] = `
   .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
   .p-sign > div { padding: 5px 6px; }
   .p-sign > div + div { border-left: 1px solid #8a8a8a; }
-  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  /* NO text-transform here. The caption comes from signatureBlockLabel() and is
+     the paper form's own wording ("Maintenance Performed By", "Verified By
+     (Workshop Team Leader)"). Chromium bakes text-transform into the rendered
+     glyphs, so uppercasing it changes what pdf-parse extracts — which broke
+     four assertions in records-pdf.spec.ts that pin those exact captions.
+     Cosmetic styling must not alter the text of a controlled record. */
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; }
   .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
   .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
   .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
