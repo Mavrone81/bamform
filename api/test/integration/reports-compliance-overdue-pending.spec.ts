@@ -110,6 +110,170 @@ describe('GET /reports/compliance, /overdue, /pending (E-14, UR-067/068)', () =>
     expect(row.completedLateCount).toBe(1);
   });
 
+  /**
+   * Slice 18-WORKFLOW review, finding X-4. The slice's independence proof
+   * stopped at `schedule_rule` and never reached reporting, so an ad-hoc job
+   * was silently entering UR-067's headline compliance figure — the metric
+   * whose whole subject is the maintenance PLAN that an ad-hoc job, by this
+   * slice's own thesis, is not part of.
+   */
+  describe('X-4 — ad-hoc work and the plan-compliance metric', () => {
+    it('compliance: an ad-hoc job is EXCLUDED from every bucket and reported as adhocExcludedCount', async () => {
+      const { approvalRouteId, assetTypeId, assetId, revisionId } = await baseAsset();
+      // One PLANNED job, completed on time.
+      await createJob({
+        assetId,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `PM-RPT-PLAN-${randomUUID()}`,
+        status: 'archived',
+        dueOn: '2026-06-10',
+        archivedAt: new Date('2026-06-05T00:00:00Z'),
+      });
+      // Two AD-HOC call-outs in the same window — one closed promptly, one
+      // left open. Under the defect the first inflated compliance to 100%
+      // over three jobs and the second dragged it to 50%.
+      const adhocAsset = await createAsset(assetTypeId, `AS-RPT-ADHOC-${randomUUID()}`);
+      await createJob({
+        assetId: adhocAsset,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `PM-RPT-ADHOC1-${randomUUID()}`,
+        status: 'archived',
+        dueOn: '2026-06-12',
+        archivedAt: new Date('2026-06-12T00:00:00Z'),
+        isAdhoc: true,
+      });
+      await createJob({
+        assetId: adhocAsset,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `PM-RPT-ADHOC2-${randomUUID()}`,
+        status: 'in_progress',
+        dueOn: '2026-06-12',
+        isAdhoc: true,
+      });
+
+      const adminId = await createUser('admin-adhoc-rpt');
+      await grantRole(adminId, 'ADMIN');
+      const token = await mintAccessToken(app, adminId, ['ADMIN']);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/reports/compliance')
+        .query({ from: '2026-06-01', to: '2026-06-30' })
+        .set(...authHeader(token))
+        .expect(200);
+
+      const row = res.body.rows[0];
+      // The plan: one job due, one done on time. 100% — the truth.
+      expect(row.dueCount).toBe(1);
+      expect(row.completedOnTimeCount).toBe(1);
+      expect(row.completedLateCount).toBe(0);
+      expect(row.notCompletedCount).toBe(0);
+      expect(row.compliancePercent).toBe(100);
+      // ...and the extra work is VISIBLE, not silently dropped.
+      expect(row.adhocExcludedCount).toBe(2);
+    });
+
+    it('compliance: a window of nothing BUT ad-hoc work reports no plan activity, not a fake 100%', async () => {
+      const { approvalRouteId, assetId, revisionId } = await baseAsset();
+      await createJob({
+        assetId,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `PM-RPT-ONLYADHOC-${randomUUID()}`,
+        status: 'archived',
+        dueOn: '2026-06-10',
+        archivedAt: new Date('2026-06-09T00:00:00Z'),
+        isAdhoc: true,
+      });
+      const adminId = await createUser('admin-onlyadhoc');
+      await grantRole(adminId, 'ADMIN');
+      const token = await mintAccessToken(app, adminId, ['ADMIN']);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/reports/compliance')
+        .query({ from: '2026-06-01', to: '2026-06-30' })
+        .set(...authHeader(token))
+        .expect(200);
+      const row = res.body.rows[0];
+      expect(row.dueCount).toBe(0);
+      expect(row.compliancePercent).toBe(0);
+      expect(row.adhocExcludedCount).toBe(1);
+    });
+
+    it('overdue and pending KEEP ad-hoc work — an overdue breakdown is real outstanding work — but flag it', async () => {
+      const { approvalRouteId, assetTypeId, assetId, revisionId } = await baseAsset();
+      const maintainerId = await createUser('maintainer-adhoc-rpt');
+      await grantRole(maintainerId, 'MAINTAINER');
+
+      await createJob({
+        assetId,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `PM-RPT-OVERDUE-ADHOC-${randomUUID()}`,
+        status: 'in_progress',
+        dueOn: '2020-01-01',
+        assignedTo: maintainerId,
+        isAdhoc: true,
+      });
+      const pendingAsset = await createAsset(assetTypeId, `AS-RPT-PEND-${randomUUID()}`);
+      await createJob({
+        assetId: pendingAsset,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `PM-RPT-PENDING-ADHOC-${randomUUID()}`,
+        status: 'submitted',
+        submittedBy: maintainerId,
+        submittedAt: new Date(),
+        currentStageOrdinal: 1,
+        isAdhoc: true,
+      });
+
+      const adminId = await createUser('admin-worklist');
+      await grantRole(adminId, 'ADMIN');
+      const token = await mintAccessToken(app, adminId, ['ADMIN']);
+
+      const overdue = await request(app.getHttpServer())
+        .get('/api/v1/reports/overdue')
+        .set(...authHeader(token))
+        .expect(200);
+      expect(overdue.body.data).toHaveLength(1);
+      expect(overdue.body.data[0].isAdhoc).toBe(true);
+
+      const pending = await request(app.getHttpServer())
+        .get('/api/v1/reports/pending')
+        .set(...authHeader(token))
+        .expect(200);
+      expect(pending.body.data).toHaveLength(1);
+      expect(pending.body.data[0].isAdhoc).toBe(true);
+    });
+
+    it('a PLANNED job reports isAdhoc:false — the flag is populated, not merely absent', async () => {
+      const { approvalRouteId, assetId, revisionId } = await baseAsset();
+      const maintainerId = await createUser('maintainer-planned-rpt');
+      await grantRole(maintainerId, 'MAINTAINER');
+      await createJob({
+        assetId,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `PM-RPT-PLANNED-${randomUUID()}`,
+        status: 'in_progress',
+        dueOn: '2020-01-01',
+        assignedTo: maintainerId,
+      });
+      const adminId = await createUser('admin-planned-rpt');
+      await grantRole(adminId, 'ADMIN');
+      const token = await mintAccessToken(app, adminId, ['ADMIN']);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/reports/overdue')
+        .set(...authHeader(token))
+        .expect(200);
+      expect(res.body.data[0].isAdhoc).toBe(false);
+    });
+  });
+
   it('overdue: a job past due AND not verified/archived/voided appears; a completed one does not', async () => {
     const { approvalRouteId, assetTypeId, assetId, revisionId } = await baseAsset();
     await createJob({

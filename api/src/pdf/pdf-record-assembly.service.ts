@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { resolveTemplateTitle } from '@bamform/shared';
 import { decodeIdentityField } from '../auth/crypto/identity-codec';
 import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
 import type { FieldEncryptionService } from '../crypto/field-encryption';
@@ -68,7 +69,10 @@ export class PdfRecordAssemblyService {
       recordId: job.id,
       jobNumber: job.jobNumber,
       documentNumber: job.templateRevision.formTemplate.documentNumber,
-      documentTitle: job.templateRevision.formTemplate.title,
+      documentTitle: resolveTemplateTitle(
+        job.templateRevision.formTemplate.title,
+        job.assetDocument.machineNumber,
+      ),
       revisionCode: job.templateRevision.revisionCode,
       assetCode: job.asset.code,
       assetDescription: job.asset.description,
@@ -196,6 +200,10 @@ export class PdfRecordAssemblyService {
       return {
         approvalStepId: step.id,
         stageOrdinal: step.stageOrdinal,
+        // Slice 26-TWOSTAGE M1 — read from the STEP, never joined from
+        // `approval_stage`: the caption an auditor reads must be the one that
+        // was true when the signature was taken.
+        stageLabel: step.stageLabel,
         action: approvalActionFromDb(step.action),
         actorName: nameById.get(step.actorId) ?? step.actorId,
         actorRoleCode: step.actorRoleCode,

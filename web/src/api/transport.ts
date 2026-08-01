@@ -10,6 +10,8 @@ export type QueueEntry = components['schemas']['QueueEntry'];
 export type Delegation = components['schemas']['Delegation'];
 export type CreateDelegationRequest = components['schemas']['CreateDelegationRequest'];
 export type VerifyJobRequest = components['schemas']['VerifyJobRequest'];
+export type SubmitJobRequest = components['schemas']['SubmitJobRequest'];
+export type CreateAdhocJobRequest = components['schemas']['CreateAdhocJobRequest'];
 
 export interface DrainOutboxResponse {
   results: OutboxResult[];
@@ -100,8 +102,24 @@ export interface SyncTransport {
   drainOutbox(mutations: OutboxMutation[]): Promise<DrainOutboxResponse>;
   /** Non-negotiable #2: submit is a separate atomic call, never folded into
    * an outbox batch. This method exists precisely so no caller can
-   * accidentally smuggle a submit into `drainOutbox`. */
-  submitJob(jobId: string, idempotencyKey: string): Promise<SubmitJobResponse>;
+   * accidentally smuggle a submit into `drainOutbox`.
+   *
+   * Slice 18-WORKFLOW: `request.drawnSignature` is REQUIRED — the
+   * PERFORMER'S signature, captured by the same `SignaturePad` the verifier
+   * stages use (stylus, finger and mouse through one pointer-event path).
+   * The pad works offline; the signature rides THIS call, which stays the
+   * separate, never-batched submit it has always been. */
+  submitJob(
+    jobId: string,
+    idempotencyKey: string,
+    request: SubmitJobRequest,
+  ): Promise<SubmitJobResponse>;
+
+  /** POST /jobs/adhoc — slice 18-WORKFLOW. Raise work off-plan (UR-028).
+   * Online-only by design: raising a job needs the server's asset list, its
+   * current template revision and a job number, none of which a device can
+   * invent offline. */
+  createAdhocJob(request: CreateAdhocJobRequest): Promise<JobActionResponse>;
 
   /** GET /jobs/{jobId} — the full record (frozen-revision checklist,
    * measurements, results, parts, attachments, approval history). Used by

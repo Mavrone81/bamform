@@ -317,6 +317,36 @@ button:disabled {
   color: var(--signal-info-ink);
 }
 
+/* Slice 22-SELFUPDATE: the "an update is waiting for you to finish" notice.
+ * A banner in every respect except that it sits above the whole app rather
+ * than inside one screen's flow, so it needs the shell's own gutter — and it
+ * pushes content down rather than floating, per the no-toast-layer rule
+ * above: it must never cover the control the technician is reaching for. */
+.update-banner {
+  margin: var(--space-3) var(--space-4) 0;
+  align-items: center;
+}
+
+.update-banner-action,
+.update-banner-dismiss {
+  flex: none;
+}
+
+/* The action sits at the far end, the dismissal after it — the affirmative
+ * choice is the one the thumb reaches first on a phone. */
+.update-banner-action {
+  margin-left: auto;
+  font-weight: 700;
+}
+
+.update-banner-action + .update-banner-dismiss {
+  margin-left: 0;
+}
+
+.update-banner-dismiss {
+  margin-left: auto;
+}
+
 /* ---- Cards / panels ------------------------------------------------------ */
 .card {
   border: var(--border-width) solid var(--color-border);

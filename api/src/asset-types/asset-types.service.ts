@@ -15,14 +15,21 @@ function toAssetType(row: AssetTypeRow): AssetType {
     code: row.code,
     name: row.name,
     description: row.description,
-    formTemplateId: row.formTemplateId,
     approvalRouteId: row.approvalRouteId,
     leadTimeDays: row.leadTimeDays,
     active: row.active,
   };
 }
 
-/** PR-019 `asset_type` — one `form_template` per type (DBD §6.7, 1:1 unique index). */
+/**
+ * PR-019 `asset_type` — the machine-family grouping: an approval route and a
+ * lead time.
+ *
+ * Slice 27-ASSETDOC removed `formTemplateId`. It was UNIQUE ("one form_template
+ * per type"), which also meant one type per form_template — so two machine
+ * families could not share a document, and a machine could not carry two. The
+ * route from a machine to a form is now `asset_document`.
+ */
 @Injectable()
 export class AssetTypesService {
   constructor(
@@ -60,7 +67,6 @@ export class AssetTypesService {
             code: dto.code,
             name: dto.name,
             description: dto.description,
-            formTemplateId: dto.formTemplateId,
             approvalRouteId: dto.approvalRouteId,
             leadTimeDays: dto.leadTimeDays,
           },
@@ -80,12 +86,8 @@ export class AssetTypesService {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const target = String(error.meta?.target ?? '');
-        if (target.includes('form_template_id')) {
-          throw conflictProblem(
-            `form_template ${dto.formTemplateId} already governs another asset type (one template per type).`,
-          );
-        }
+        // `code` is the only unique column left — slice 27 dropped
+        // `form_template_id` and with it the "one template per type" conflict.
         throw conflictProblem(`Asset type code '${dto.code}' is already in use.`);
       }
       throw error;

@@ -193,4 +193,55 @@ describe('Queue — GET /queue (PR-073/076/081, UR-049)', () => {
       .expect(200);
     expect(res.body.data.map((e: { id: string }) => e.id)).not.toContain(jobId);
   });
+
+  // ---- Slice 26-TWOSTAGE: the queue must say WHICH stage a record awaits ---
+  //
+  // Against the REAL delivered route (`TWO_STAGE_TL_THEN_ENG`), not a fixture
+  // route: the labels and the stage count come from the seed/migration chain,
+  // so this fails if anyone reconfigures the route back to one stage.
+
+  it('slice 26: a stage-1 entry reports stage 1 of 2 with the seeded team-leader label', async () => {
+    const { jobId } = await submittedJob();
+    const tl = await stepUpUser('tl-stage-label', ['TEAM_LEADER']);
+
+    const res = await request(app.getHttpServer())
+      .get('/api/v1/queue')
+      .set(...authHeader(tl.token))
+      .expect(200);
+
+    const entry = res.body.data.find((e: { id: string }) => e.id === jobId);
+    expect(entry).toBeTruthy();
+    expect(entry.stageOrdinal).toBe(1);
+    expect(entry.stageCount).toBe(2);
+    expect(entry.stageLabel).toBe('Verified By (Workshop Team Leader)');
+  });
+
+  it('slice 26: a stage-2 entry reports stage 2 of 2 with the seeded engineer label — and never reaches the team leader', async () => {
+    const { jobId } = await submittedJob();
+    await adminPool.query('UPDATE "job" SET current_stage_ordinal = 2 WHERE id = $1', [jobId]);
+    const eng = await stepUpUser('eng-stage-label', ['ENGINEER']);
+    const tl = await stepUpUser('tl-not-stage-2', ['TEAM_LEADER']);
+    // Review fix m3 — a CONTROL job still at stage 1, so the "the stage-2 job
+    // is not in the team leader's queue" assertion below cannot pass merely
+    // because that queue came back empty for some unrelated reason.
+    const { jobId: stage1JobId } = await submittedJob();
+
+    const engRes = await request(app.getHttpServer())
+      .get('/api/v1/queue')
+      .set(...authHeader(eng.token))
+      .expect(200);
+    const entry = engRes.body.data.find((e: { id: string }) => e.id === jobId);
+    expect(entry).toBeTruthy();
+    expect(entry.stageOrdinal).toBe(2);
+    expect(entry.stageCount).toBe(2);
+    expect(entry.stageLabel).toBe('Verified By (Supervisor / Engineer)');
+
+    const tlRes = await request(app.getHttpServer())
+      .get('/api/v1/queue')
+      .set(...authHeader(tl.token))
+      .expect(200);
+    const tlIds = tlRes.body.data.map((e: { id: string }) => e.id);
+    expect(tlIds).toContain(stage1JobId); // the queue is working…
+    expect(tlIds).not.toContain(jobId); // …and it still excludes the stage-2 record
+  });
 });

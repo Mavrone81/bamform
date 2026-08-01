@@ -3,6 +3,7 @@ import {
   itemResultInputSchema,
   measurementResultInputSchema,
   partUsedInputSchema,
+  partUpsertInputSchema,
   type OutboxMutation,
   type OutboxResponse,
   type OutboxResult,
@@ -19,18 +20,25 @@ import { encodeSyncToken } from './sync-cursor';
  * PR-082). Dispatches each mutation to the SAME slice-6 service methods
  * `jobs.controller.ts` calls for the equivalent direct HTTP endpoint —
  * `ResultsService#recordItemResult`/`#recordMeasurementResult`,
- * `PartsService#recordPart` (`api/src/jobs/results.service.ts`,
+ * `PartsService#recordPart`/`#upsertPart` (`api/src/jobs/results.service.ts`,
  * `parts.service.ts`) — IN-PROCESS, not by the api HTTP-calling itself.
  *
  * Idempotency reuse point (PR-API-25): `mutation.id` is passed as
  * `idempotencyKey` straight into those methods' existing
  * `IdempotencyService.checkReplay`/`recordWithin` calls
  * (`results.service.ts` lines 61-72/122-131, 147-158/227-236;
- * `parts.service.ts` lines 40-46/78-89) — replaying the SAME mutation id +
- * body returns the cached response transparently (I-INV-16); the SAME id
- * with a DIFFERENT body throws `idempotencyMismatchProblem()` (422),
- * caught below and surfaced as that mutation's `problem` (I-INV-17). No
- * second idempotency mechanism is built here.
+ * `parts.service.ts` lines 46-53/85-96 for `recordPart`, and `upsertPart`'s
+ * lines 127-146/203-212) — replaying the SAME mutation id + body returns the
+ * cached response transparently (I-INV-16); the SAME id with a DIFFERENT
+ * body throws `idempotencyMismatchProblem()` (422), caught below and
+ * surfaced as that mutation's `problem` (I-INV-17). No second idempotency
+ * mechanism is built here. `recordPart`'s `idempotencyKey` parameter is
+ * still optional at the service layer (a direct `POST` caller may omit it);
+ * `upsertPart`'s is REQUIRED there (same as the sibling
+ * `recordItemResult`/`recordMeasurementResult` PUTs) — either way THIS
+ * dispatch path always supplies `mutation.id` (required/non-optional on
+ * `OutboxMutation`, `shared/src/sync.ts`), so every outbox-replayed
+ * mutation is idempotency-keyed.
  *
  * Sequencing + transaction shape (PR-API-24/PR-082 — resolved reading, see
  * slice-9-report.md): mutations are sorted by `sequence` ascending and
@@ -114,6 +122,11 @@ export class SyncOutboxService {
           const dto = parseMutationBody(partUsedInputSchema, mutation.body);
           await this.parts.recordPart(route.jobId, dto, mutation.id, actor, roles);
           return { id: mutation.id, status: 201, applied: true };
+        }
+        case 'part-upsert': {
+          const dto = parseMutationBody(partUpsertInputSchema, mutation.body);
+          await this.parts.upsertPart(route.jobId, route.partId, dto, mutation.id, actor, roles);
+          return { id: mutation.id, status: 200, applied: true };
         }
       }
     } catch (error) {

@@ -5,6 +5,7 @@ import {
   isPasswordChangeRequired,
   _resetForTests as resetPasswordGate,
 } from '../auth/password-change-gate';
+import { __resetUpdateStateForTests } from '../update';
 
 /** `clone()` is part of the contract now: `authorizedFetch` reads a 403 body
  * to spot `/errors/password-change-required` and must leave the original
@@ -21,6 +22,7 @@ function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 401): Respon
 beforeEach(() => {
   _resetForTests();
   resetPasswordGate();
+  __resetUpdateStateForTests();
   vi.stubGlobal('fetch', vi.fn());
 });
 
@@ -99,7 +101,9 @@ describe('HttpSyncTransport', () => {
     setAccessToken('tok', 900);
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'SUBMITTED' }));
     const transport = new HttpSyncTransport();
-    const result = await transport.submitJob('job-1', 'idem-1');
+    const result = await transport.submitJob('job-1', 'idem-1', {
+      drawnSignature: 'data:image/png;base64,iVBORw0KGgo=',
+    });
     expect(result).toEqual({ status: 200, ok: true, body: { id: 'job-1', status: 'SUBMITTED' } });
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toContain('/jobs/job-1/submit');
@@ -111,7 +115,9 @@ describe('HttpSyncTransport', () => {
     const problem = { type: 'about:blank', title: 'incomplete-record', status: 422 };
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(problem, false, 422));
     const transport = new HttpSyncTransport();
-    const result = await transport.submitJob('job-1', 'idem-2');
+    const result = await transport.submitJob('job-1', 'idem-2', {
+      drawnSignature: 'data:image/png;base64,iVBORw0KGgo=',
+    });
     expect(result).toEqual({ status: 422, ok: false, problem });
   });
 
@@ -125,7 +131,9 @@ describe('HttpSyncTransport', () => {
       },
     } as unknown as Response);
     const transport = new HttpSyncTransport();
-    const result = await transport.submitJob('job-1', 'idem-3');
+    const result = await transport.submitJob('job-1', 'idem-3', {
+      drawnSignature: 'data:image/png;base64,iVBORw0KGgo=',
+    });
     expect(result).toEqual({ status: 500, ok: false, problem: undefined });
   });
 
@@ -660,5 +668,41 @@ describe('U-TRANS-01: the forced-password-change 403 is intercepted centrally', 
 
     expect(result.status).toBe(403);
     expect(isPasswordChangeRequired()).toBe(false);
+  });
+
+  /**
+   * Slice 22-SELFUPDATE §1: a rejection that a client built against an older
+   * contract would receive is a HARD signal that this client is stale — the
+   * exact shape of the owner's stranding, where a build made before
+   * `drawnSignature` existed submitted without one and was refused. It must
+   * trigger the update path, not only an apology.
+   */
+  describe('an outdated-client rejection triggers the update path', () => {
+    it('checks for a newer build after a 422 on submit', async () => {
+      setAccessToken('tok', 900);
+      const update = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', {
+        serviceWorker: { getRegistration: vi.fn().mockResolvedValue({ update }) },
+      });
+      vi.mocked(fetch).mockResolvedValueOnce(
+        jsonResponse({ title: 'Validation failed' }, false, 422),
+      );
+
+      await new HttpSyncTransport().submitJob('job-1', 'k', { drawnSignature: 'x' });
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    });
+
+    it('does NOT check on statuses that say nothing about staleness', async () => {
+      setAccessToken('tok', 900);
+      const update = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', {
+        serviceWorker: { getRegistration: vi.fn().mockResolvedValue({ update }) },
+      });
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ title: 'Conflict' }, false, 409));
+
+      await new HttpSyncTransport().submitJob('job-1', 'k', { drawnSignature: 'x' });
+      await Promise.resolve();
+      expect(update).not.toHaveBeenCalled();
+    });
   });
 });

@@ -146,7 +146,7 @@ describe('Scheduling engine — PR-050..058 (I-INV-14/15, worker sweep, /assets/
       await scheduler.run(); // triggers ensureForAllActiveAssets()
 
       const rules = await adminPool.query(
-        'SELECT frequency FROM "schedule_rule" WHERE asset_id = $1 ORDER BY frequency',
+        'SELECT frequency FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 ORDER BY r.frequency',
         [assetId],
       );
       expect(rules.rows.map((r) => r.frequency)).toEqual(['M1']);
@@ -339,7 +339,7 @@ describe('Scheduling engine — PR-050..058 (I-INV-14/15, worker sweep, /assets/
         .expect(200); // bootstraps the M1 row (last_completed_on null by default)
 
       await adminPool.query(
-        `UPDATE "schedule_rule" SET last_completed_on = '2026-01-15' WHERE asset_id = $1 AND frequency = 'M1'`,
+        `UPDATE "schedule_rule" SET last_completed_on = '2026-01-15' WHERE asset_document_id IN (SELECT id FROM "asset_document" WHERE asset_id = $1) AND frequency = 'M1'`,
         [assetId],
       );
 

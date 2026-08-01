@@ -30,6 +30,13 @@ export interface PdfSignatureInput {
   reason?: string | null;
   /** Decrypted base64 PNG (no data-URL prefix) — `null` for actions that never capture one (return/recall/void). */
   drawnSignatureBase64?: string | null;
+  /**
+   * Slice 26-TWOSTAGE M1 — `approval_step.stage_label`: the configured stage
+   * caption as it read when this signature was taken. `null`/absent for
+   * actions that are not a verification signature, and for rows written
+   * before the column existed.
+   */
+  stageLabel?: string | null;
 }
 
 export interface PdfChecklistItemInput {
@@ -192,6 +199,58 @@ function renderVoidNotice(notice: PdfVoidNoticeInput | null | undefined): string
   <div class="void-banner">${voidLine(notice)}</div>`;
 }
 
+/**
+ * The heading printed above each signature block on the CONTROLLED RECORD.
+ *
+ * Slice 18-WORKFLOW review, finding X-3: the template rendered a bare
+ * `Stage ${stageOrdinal} — ${action}`, so the performer's new stage-0
+ * signature printed as "Stage 0 — SUBMITTED" on the archived PDF — the
+ * artefact an ISO-13485 auditor actually holds. The screen had already been
+ * given the paper form's own wording ("Maintenance Performed By",
+ * `RecordReview.tsx`'s `STAGE_LABELS`); that reasoning applies with MORE
+ * force to the printed record than to the screen.
+ *
+ * Keyed on the ACTION first, then the stage, because the two say different
+ * things: `SUBMITTED` is always the performer regardless of ordinal, while a
+ * `RETURNED`/`RECALLED`/`VOIDED` block carries a stage ordinal that is a
+ * verification stage. Anything unrecognised falls back to the old shape
+ * rather than printing nothing — a controlled record must never lose a
+ * caption because an enum grew.
+ */
+export function signatureBlockLabel(
+  stageOrdinal: number,
+  action: string,
+  stageLabel?: string | null,
+): string {
+  switch (action) {
+    case 'SUBMITTED':
+      return 'Maintenance Performed By';
+    case 'VERIFIED':
+      // Slice 26-TWOSTAGE M1: the label snapshotted onto the step at signing
+      // time WINS. The map below had drifted from the configured route (it
+      // printed "Verified By (Engineer)" where the route, and the paper form,
+      // say "Supervisor / Engineer"), and it is kept only as the fallback for
+      // steps carrying no snapshot — a controlled record must never lose a
+      // caption. Only this branch consults the snapshot: the other actions
+      // are captioned by WHAT THEY ARE, so a stray label must not make a
+      // rejection read like an approval.
+      if (stageLabel) return stageLabel;
+      return stageOrdinal === 1
+        ? 'Verified By (Workshop Team Leader)'
+        : stageOrdinal === 2
+          ? 'Verified By (Engineer)'
+          : `Verified By (Stage ${stageOrdinal})`;
+    case 'RETURNED':
+      return `Returned By (Stage ${stageOrdinal})`;
+    case 'RECALLED':
+      return 'Recalled By Submitter';
+    case 'VOIDED':
+      return 'Voided By';
+    default:
+      return `Stage ${stageOrdinal} — ${action}`;
+  }
+}
+
 function renderSignatures(signatures: PdfSignatureInput[]): string {
   if (signatures.length === 0) {
     return '<p class="muted">No approval actions recorded yet.</p>';
@@ -207,7 +266,7 @@ function renderSignatures(signatures: PdfSignatureInput[]): string {
       const reason = s.reason ? `<div class="reason">Reason: ${esc(s.reason)}</div>` : '';
       return `
         <div class="signature-block">
-          <div class="signature-stage">Stage ${s.stageOrdinal} — ${esc(s.action)}</div>
+          <div class="signature-stage">${esc(signatureBlockLabel(s.stageOrdinal, s.action, s.stageLabel))}</div>
           ${drawn}
           <div class="signature-name">${esc(s.actorName)}</div>
           <div class="signature-role">${esc(s.actorRoleCode)}</div>

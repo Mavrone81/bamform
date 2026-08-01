@@ -23,6 +23,7 @@
 | Revision | Date | Details of revision | Revised by | Approved by |
 |---|---|---|---|---|
 | 0.1 | 24 Jul 2026 | Initial draft | Lead Engineer | _(pending)_ |
+| 0.2 | 29 Jul 2026 | Slice 27-ASSETDOC — a machine carries many PM documents: `/assets/{assetId}/documents` and `/asset-documents/{id}` added; `AssetType.formTemplateId` and `FormTemplate.assetTypeId` removed; `ScheduleRule` re-keyed to the document; `Job` gains `assetDocumentId` | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -164,25 +165,57 @@ usability affordance, never a security control (UR-074).
 
 ## 4.1 Permission matrix
 
-| Capability | MAINTAINER | TEAM_LEADER | ENGINEER | DOC_CONTROLLER | ADMIN | AUDITOR |
-|---|---|---|---|---|---|---|
-| View own assigned jobs | ✓ | ✓ | ✓ | | ✓ | |
-| View all jobs in scope | | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Record results / submit | ✓ | ✓ | ✓ | | | |
-| Verify a record | | ✓ | ✓ | | | |
-| Return a record | | ✓ | ✓ | | | |
-| Recall own submission | ✓ | ✓ | ✓ | | | |
-| Void a job | | ✓ | ✓ | | ✓ | |
-| Create/edit template revision | | | ✓ | ✓ | | |
-| Approve template revision | | | | ✓ | | |
-| Create/edit assets | | | ✓ | | ✓ | |
-| Adjust schedules | | ✓ | ✓ | | ✓ | |
-| Manage users and roles | | | | | ✓ | |
-| Create delegation | | ✓ | ✓ | | ✓ | |
-| View archive | ✓ (own) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| View audit trail | | | | ✓ | ✓ | ✓ |
-| Export records | | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Modify anything** | | | | | | **✗ — read-only** |
+`PLANNER` is the slice-18-WORKFLOW addition (owner decision, 2026-07-28 — named
+`PLANNER`, deliberately not "SCHEDULER", which already names the background worker).
+The change is **ADDITIVE**: every ✓ that existed before slice 18 is still there, and no
+role lost any capability. PLANNER deliberately holds NO verification right — planning
+work and independently checking it are different jobs (separation of duties); a person
+who genuinely does both holds both roles, and the distinct-person rule still forbids one
+human signing both verification stages.
+
+| Capability | MAINTAINER | PLANNER | TEAM_LEADER | ENGINEER | DOC_CONTROLLER | ADMIN | AUDITOR |
+|---|---|---|---|---|---|---|---|
+| View own assigned jobs | ✓ | ✓ | ✓ | ✓ | | ✓ | |
+| View all jobs in scope | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Record results / submit (signed) | ✓ | | ✓ | ✓ | | | |
+| Raise an ad-hoc job | | ✓ | ✓ | ✓ | | ✓ | |
+| Assign / reassign a job | | ✓ | ✓ | ✓ | | ✓ | |
+| Verify a record | | | ✓ | ✓ | | | |
+| Return a record | | | ✓ | ✓ | | | |
+| Recall own submission | ✓ | | ✓ | ✓ | | | |
+| Void a job | | | ✓ | ✓ | | ✓ | |
+| Create/edit template revision | | | | ✓ | ✓ | | |
+| Approve template revision | | | | | ✓ | | |
+| Create/edit assets | | | | ✓ | | ✓ | |
+| Tag PM documents to a machine | | | | ✓ | | ✓ | |
+| Adjust schedules | | ✓ | ✓ | ✓ | | ✓ | |
+| Manage users and roles | | | | | | ✓ | |
+| Create delegation | | | ✓ | ✓ | | ✓ | |
+| View archive | ✓ (own) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| View audit trail | | | | | ✓ | ✓ | ✓ |
+| **Export records (bulk ZIP)** | | | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **View organisation reports** | | | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Modify anything** | | | | | | | **✗ — read-only** |
+
+**PR-API-09b — "view archive" and "export records" are two different rights, enforced by two
+different mechanisms, and must not share a role list.** "View archive" is a PER-ROW visibility
+predicate (`JOB_VIEW_ALL_ROLES`, evaluated after area scoping by
+`JobAccessService#assertAccessible` / `RecordsService#assertAccessible`). "Export records" and the
+`/reports/*` family are ROUTE-LEVEL grants over organisation-wide bulk output
+(`ORG_REPORTING_ROLES`, `@Roles()`), and the export produces a ZIP of rendered PDFs carrying
+DECRYPTED signatory full names and drawn-signature images.
+
+PLANNER is the worked example: it holds broad archive/job visibility (without it the role is inert
+— every job mutation runs through `assertAccessible`), and it deliberately holds **no** bulk export
+or reporting right. Slice 18-WORKFLOW originally spread one constant across both and silently
+granted the second; the review caught it (finding X-1). The two constants are now separate, and
+`api/test/contract/route-roles.spec.ts` pins the exact `@Roles()` set of **every** route in the
+system so the next accidental widening fails CI rather than review.
+
+**Slice 18-WORKFLOW note on "Record results / submit"** — `POST /jobs/{id}/submit` now
+carries the PERFORMER'S DRAWN SIGNATURE (mandatory). The plant's process is "completed
+work — team member will sign and submit to team lead for checks"; the record now carries
+three signatures (performer + two verifiers), matching the paper forms.
 
 **PR-API-09** `AUDITOR` is enforced read-only at the database connection level, not only in
 guards: auditor-scoped queries use the `bamform_readonly` role (DBD §7.1).
@@ -371,7 +404,9 @@ Full schemas in `api/openapi.yaml`. Summarised here by resource group.
 | `GET` `POST` | `/assets` | UR-002. `POST` rejects duplicate `code` (INV-06) |
 | `GET` `PATCH` | `/assets/{id}` | `PATCH` cannot delete; deactivation via `status` (UR-006) |
 | `GET` | `/assets/{id}/history` | UR-007 — paginated record history |
-| `GET` `PUT` | `/assets/{id}/schedule` | UR-023, UR-025. `PUT` requires `adjustedReason` |
+| `GET` `PUT` | `/assets/{id}/schedule` | UR-023, UR-025. `PUT` requires `adjustedReason`. Slice 27: takes an optional `assetDocumentId`; **422 rather than a guess** when a machine carries several documents at that frequency |
+| `GET` `POST` | `/assets/{assetId}/documents` | **Slice 27-ASSETDOC.** The PM documents this machine carries. `GET` is the maintainer's form picker (owner's process step 4) and is open to any authenticated user who can see the machine; `POST` tags one and is ENGINEER/ADMIN — the same gate as `POST /assets`, which creates the machine. `409` if the machine already carries that document |
+| `PATCH` | `/asset-documents/{id}` | **Slice 27-ASSETDOC.** Change `machineNumber`, or retire with `active: false`. ENGINEER/ADMIN. **No `DELETE`** — INV-16 forbids it on record tables and a document that has generated jobs must stay resolvable |
 
 ## 10.4 Templates and revisions
 
@@ -394,14 +429,14 @@ Full schemas in `api/openapi.yaml`. Summarised here by resource group.
 |---|---|---|
 | `GET` | `/jobs` | Filter: `status`, `assignedTo`, `assetId`, `dueFrom`, `dueTo`, `overdue` |
 | `GET` | `/jobs/{id}` | Full job with frozen template content |
-| `POST` | `/jobs/adhoc` | UR-028. Requires reason |
+| `POST` | `/jobs/adhoc` | UR-028. Requires a reason >= 10 chars (audited, and DB-enforced by `job_adhoc_reason_length_chk`). PLANNER/TL/ENG/ADMIN. Neither satisfies nor advances `next_due_on` — created with an empty `frequency_scope` and excluded from the schedule-period key |
 | `POST` | `/jobs/{id}/assign` | UR-029 |
 | `PUT` | `/jobs/{id}/items/{templateItemId}` | Idempotency key required. `If-Match` on `draftVersion` |
 | `PUT` | `/jobs/{id}/measurements/{templateMeasurementId}` | As above |
 | `POST` `DELETE` | `/jobs/{id}/parts` `/jobs/{id}/parts/{partId}` | UR-034 |
 | `POST` | `/jobs/{id}/attachments` | `multipart/form-data`. Magic-byte validated |
 | `GET` | `/jobs/{id}/attachments/{attachmentId}` | **Streamed through the API** — authorisation on every fetch (PR-011) |
-| `POST` | `/jobs/{id}/submit` | Completeness gate (PR-045) |
+| `POST` | `/jobs/{id}/submit` | Completeness gate (PR-045) + the PERFORMER's drawn signature (mandatory, slice 18-WORKFLOW) — produces a stage-0 `approval_step` with an encrypted drawn signature and a content-bound Ed25519 signature |
 | `POST` | `/jobs/{id}/recall` | Submitter only, while `SUBMITTED` (UR-051) |
 
 ## 10.6 Approval

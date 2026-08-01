@@ -342,20 +342,25 @@ client that clears optimistically and then fails loses a technician's work irrec
 
 ```mermaid
 flowchart TD
-    A["Technician taps Submit"] --> B{"All outbox mutations<br/>for this job acknowledged?"}
+    A["Technician taps Sign and submit"] --> A2["Signature pad opens<br/>stylus / finger / mouse"]
+    A2 --> B{"All outbox mutations<br/>for this job acknowledged?"}
     B -->|No| C["Drain outbox first"]
     C --> B
-    B -->|Yes| D["POST /jobs/{id}/submit"]
+    B -->|Yes| D["POST /jobs/{id}/submit<br/>+ drawnSignature (PNG)"]
+    D --> D2{"Genuine PNG?<br/>(magic-byte check)"}
+    D2 -->|No| F2["422 attachment-rejected"]
+    F2 --> A
     D --> E{"Every mandatory item<br/>has a result?"}
     E -->|No| F["422 incomplete-record<br/>outstanding items listed"]
     F --> G["Client jumps to first missing item"]
     G --> A
+    D2 -->|Yes| E
     E -->|Yes| H{"Attachments all received?"}
     H -->|Pending| I["Allow submit<br/>flag attachments pending"]
     H -->|Yes| J["Proceed"]
     I --> J
     J --> K["Status = SUBMITTED<br/>submitted_by, submitted_at set"]
-    K --> L["approval_step: SUBMITTED<br/>content hash + signature"]
+    K --> L["approval_step stage 0: SUBMITTED<br/>content hash + Ed25519 signature<br/>+ ENCRYPTED drawn signature"]
     L --> M["current_stage_ordinal = 1"]
     M --> N["Write audit_event"]
     N --> O["Queue RECORD_PENDING_VERIFICATION"]
@@ -369,6 +374,16 @@ flowchart TD
 **PR-WFD-06** Submission itself produces a signed `approval_step` (action `SUBMITTED`), not
 merely a status change. This is the "Maintenance Performed by" signature on the paper form, and
 it must be as attributable as the verification signature.
+
+*Implemented in slice 18-WORKFLOW* (it was specified here from the start and never built —
+until then submit recorded only who and when). The step is written at `stage_ordinal = 0`,
+outside the 1..N verification stages, and carries BOTH halves of what makes a signature mean
+something: the DRAWN signature (`drawn_signature_ct`, field-encrypted with AAD bound to its own
+row, `dek_version` recorded, never logged and never in an audit payload) and a content-bound
+Ed25519 signature over the canonical record — which includes the step itself, so it cannot be
+replayed under another identity. The owner's requirement, verbatim: "the signature needs to be
+able to draw via mouse and stylus" (2026-07-28); the pad handles both through one pointer-event
+path and works offline. Submit remains a separate atomic call, never batched (non-negotiable #2).
 
 ---
 

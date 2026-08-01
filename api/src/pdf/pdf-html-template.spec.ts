@@ -1,4 +1,9 @@
-import { escapeHtml, renderRecordHtml, type PdfRecordInput } from './pdf-html-template';
+import {
+  escapeHtml,
+  renderRecordHtml,
+  signatureBlockLabel,
+  type PdfRecordInput,
+} from './pdf-html-template';
 
 function baseInput(overrides: Partial<PdfRecordInput> = {}): PdfRecordInput {
   return {
@@ -103,6 +108,89 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('Jane Doe');
     expect(html).toContain('TEAM_LEADER');
     expect(html).toContain('2026-07-02T10:00:00.000Z');
+  });
+
+  /**
+   * Slice 18-WORKFLOW review, finding X-3. The PDF is the CONTROLLED record
+   * an auditor holds; a block captioned "Stage 0 — SUBMITTED" says nothing to
+   * anyone in the plant. These pin the paper form's own wording.
+   */
+  describe('signatureBlockLabel — the controlled record reads like the paper form (X-3)', () => {
+    it("the performer's stage-0 block is captioned 'Maintenance Performed By', never 'Stage 0'", () => {
+      expect(signatureBlockLabel(0, 'SUBMITTED')).toBe('Maintenance Performed By');
+      expect(signatureBlockLabel(0, 'SUBMITTED')).not.toMatch(/Stage 0/);
+    });
+
+    it('the two verification stages fall back to their paper-form captions when no label was snapshotted', () => {
+      expect(signatureBlockLabel(1, 'VERIFIED')).toBe('Verified By (Workshop Team Leader)');
+      expect(signatureBlockLabel(2, 'VERIFIED')).toBe('Verified By (Engineer)');
+    });
+
+    /**
+     * Slice 26-TWOSTAGE review fix M1. This hard-coded map had DRIFTED from
+     * the configured route: the live stage-2 label is
+     * "Verified By (Supervisor / Engineer)" (and the paper form reads
+     * "Verified By: (Workshop Supervisor/Engr)"), while this file printed
+     * "Verified By (Engineer)" on the controlled record. The step now carries
+     * the label snapshotted at signing time, and that snapshot wins.
+     */
+    it('M1: a snapshotted stage label WINS over the hard-coded map for a verification block', () => {
+      expect(signatureBlockLabel(2, 'VERIFIED', 'Verified By (Supervisor / Engineer)')).toBe(
+        'Verified By (Supervisor / Engineer)',
+      );
+      expect(signatureBlockLabel(1, 'VERIFIED', 'Verified By (Workshop Team Leader)')).toBe(
+        'Verified By (Workshop Team Leader)',
+      );
+    });
+
+    it('M1: a null/absent snapshot falls back to the map — historical rows still render', () => {
+      expect(signatureBlockLabel(2, 'VERIFIED', null)).toBe('Verified By (Engineer)');
+      expect(signatureBlockLabel(2, 'VERIFIED', undefined)).toBe('Verified By (Engineer)');
+      expect(signatureBlockLabel(2, 'VERIFIED', '')).toBe('Verified By (Engineer)');
+    });
+
+    it('M1: the snapshot never overrides a non-verification caption — a return is still a return', () => {
+      // Only the VERIFIED branch consults the snapshot: a returned/recalled/
+      // voided block is captioned by WHAT IT IS, not by the stage it happened
+      // at (this file's own doc comment), so a stray label must not turn a
+      // rejection into something that reads like an approval.
+      expect(signatureBlockLabel(1, 'RETURNED', 'Verified By (Workshop Team Leader)')).toBe(
+        'Returned By (Stage 1)',
+      );
+      expect(signatureBlockLabel(0, 'SUBMITTED', 'Verified By (Workshop Team Leader)')).toBe(
+        'Maintenance Performed By',
+      );
+    });
+
+    it('return, recall and void are captioned by what they are', () => {
+      expect(signatureBlockLabel(1, 'RETURNED')).toBe('Returned By (Stage 1)');
+      expect(signatureBlockLabel(1, 'RECALLED')).toBe('Recalled By Submitter');
+      expect(signatureBlockLabel(1, 'VOIDED')).toBe('Voided By');
+    });
+
+    it('an unrecognised action still prints a caption rather than nothing', () => {
+      expect(signatureBlockLabel(3, 'FUTURE_ACTION')).toBe('Stage 3 — FUTURE_ACTION');
+    });
+
+    it('the rendered HTML uses the caption, not the raw stage ordinal', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          signatures: [
+            {
+              approvalStepId: 'step-0',
+              stageOrdinal: 0,
+              action: 'SUBMITTED',
+              actorName: 'Pat Performer',
+              actorRoleCode: 'MAINTAINER',
+              actedAt: '2026-07-02T08:00:00.000Z',
+              drawnSignatureBase64: 'BASE64DATA',
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('Maintenance Performed By');
+      expect(html).not.toContain('Stage 0');
+    });
   });
 
   it('embeds the drawn signature as a base64 PNG data URL', () => {

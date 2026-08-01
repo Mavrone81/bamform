@@ -99,7 +99,10 @@ describe('slice 13-TL API additions (I-TL-25..27)', () => {
       .expect(200);
     expect(Array.isArray(res.body)).toBe(true);
     const codes = res.body.map((r: { code: string }) => r.code);
-    expect(codes).toContain('SINGLE_STAGE_TL_OR_ENG');
+    expect(codes).toContain('TWO_STAGE_TL_THEN_ENG');
+    // The code must not lie about the route's shape (slice 26-TWOSTAGE): the
+    // delivered route really is two stages, TEAM_LEADER then ENGINEER.
+    expect(codes).not.toContain('SINGLE_STAGE_TL_OR_ENG');
     expect(res.body[0]).toMatchObject({ active: true });
     expect(typeof res.body[0].id).toBe('string');
 

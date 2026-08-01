@@ -41,7 +41,7 @@ export class TemplatesService {
           requestId: actor.requestId,
         });
 
-        return toFormTemplate(row, null, null);
+        return toFormTemplate(row, null);
       });
     } catch (error) {
       // INV-07: document numbers are unique. Loudly conflict — the loader's
@@ -63,7 +63,6 @@ export class TemplatesService {
       where: afterId ? { id: { gt: afterId } } : undefined,
       orderBy: { id: 'asc' },
       take: limit + 1,
-      include: { assetTypes: true },
     });
 
     const page = paginate(rows, limit);
@@ -85,17 +84,14 @@ export class TemplatesService {
     );
 
     const data = page.data.map((row) =>
-      toFormTemplate(row, row.assetTypes[0]?.id ?? null, currentByTemplateId.get(row.id) ?? null),
+      toFormTemplate(row, currentByTemplateId.get(row.id) ?? null),
     );
 
     return { data, page: page.page };
   }
 
   async get(id: string): Promise<FormTemplate> {
-    const row = await this.prisma.formTemplate.findUnique({
-      where: { id },
-      include: { assetTypes: true },
-    });
+    const row = await this.prisma.formTemplate.findUnique({ where: { id } });
     if (!row) {
       throw notFoundProblem('Form template', id);
     }
@@ -103,6 +99,6 @@ export class TemplatesService {
       where: { formTemplateId: id, status: 'current' },
       select: { id: true },
     });
-    return toFormTemplate(row, row.assetTypes[0]?.id ?? null, current?.id ?? null);
+    return toFormTemplate(row, current?.id ?? null);
   }
 }

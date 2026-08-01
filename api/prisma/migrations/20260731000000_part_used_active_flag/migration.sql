@@ -1,0 +1,13 @@
+-- Slice 30 — soft-remove flag for parts. Additive, nullable-safe via DEFAULT.
+-- Forward-only, additive; does not edit any prior migration.
+--
+-- Reversal:
+--   ALTER TABLE "part_used" DROP COLUMN "active";
+--
+-- Reversing is safe for the schema but LOSES the soft-remove state: every
+-- part a maintainer removed during capture becomes indistinguishable from a
+-- live one, so it would reappear in reads, in the canonical serialisation
+-- (U-SIG-01) and in the PDF. Any record signed after this migration would
+-- therefore fail `GET /records/{id}/integrity`. Reverse only if no part has
+-- been soft-removed yet.
+ALTER TABLE "part_used" ADD COLUMN "active" boolean NOT NULL DEFAULT true;

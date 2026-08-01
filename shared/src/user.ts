@@ -5,13 +5,21 @@ import { z } from 'zod';
  * `api/openapi.yaml` `/users`, `/roles` schemas exactly (ADR-002: same rule
  * client and server validate against).
  *
- * The six roles are seeded by migration, not created through the API
+ * Roles are seeded by migration, not created through the API
  * (`api/prisma/migrations/20260723180100_seed_reference_data`'s comment:
  * "role ... is seeded by migration, not manual") — this enum is the closed
  * set `role.code` can ever hold today.
+ *
+ * Slice 18-WORKFLOW adds a SEVENTH, `PLANNER` (migration
+ * 20260728020000_planner_role_and_adhoc_job) — the maintenance planner who
+ * plans the PM schedule and raises work. ADDITIVE: no existing member is
+ * removed or renamed. Named `PLANNER` and deliberately NOT "SCHEDULER"
+ * (owner decision, 2026-07-28) — that word already names the background
+ * worker, `api/src/scheduling/scheduler.service.ts`.
  */
 export const roleCodeSchema = z.enum([
   'MAINTAINER',
+  'PLANNER',
   'TEAM_LEADER',
   'ENGINEER',
   'DOC_CONTROLLER',

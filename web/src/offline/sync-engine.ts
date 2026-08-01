@@ -166,8 +166,8 @@ export async function getClockSkew(db: BamFormDB): Promise<ClockSkewRecord | nul
 
 /**
  * The only place a screen should call `outbox.append()` for a job-scoped
- * mutation (item result, measurement reading). Wraps it with the
- * `predictedDraftVersion` bookkeeping described on `CachedJob`: a
+ * mutation (item result, measurement reading, part upsert). Wraps it with
+ * the `predictedDraftVersion` bookkeeping described on `CachedJob`: a
  * technician entering several checklist items offline queues several
  * mutations for the SAME job before any of them has been acknowledged. If
  * every one of those carried the same `ifMatch` (the version last seen from
@@ -178,6 +178,20 @@ export async function getClockSkew(db: BamFormDB): Promise<ClockSkewRecord | nul
  * own next edit. Optimistically predicting and advancing the version
  * locally (only reset by the next bootstrap) keeps a real conflict
  * detectable while eliminating this self-inflicted one.
+ *
+ * `versioned: false` (slice 30-PARTS review, Critical) opts a route OUT of
+ * all of that. `PUT /jobs/{id}/parts/{partId}` never bumps the job's
+ * `draftVersion` server-side (`parts.service.ts#upsertPart` has no
+ * `job.update`, and `sync-outbox.service.ts`'s `part-upsert` dispatch does
+ * not even pass `ifMatch` to it) — only item/measurement results do
+ * (`results.service.ts`). Predicting and advancing a version the server
+ * will never actually reach would leave `predictedDraftVersion` ahead of
+ * reality, so the NEXT real (version-bumping) mutation for the job — an
+ * item or measurement entered after the part — would carry a stale
+ * `ifMatch` and fail with a self-inflicted draft-version conflict it did
+ * nothing to cause. The fix is to never predict a version for this route at
+ * all: `ifMatch: null` end to end, which `conflict-recovery.ts` already
+ * treats as "unversioned" and exempts from the conflict count.
  */
 export async function appendJobMutation(
   db: BamFormDB,
@@ -189,11 +203,19 @@ export async function appendJobMutation(
     path: string;
     body: unknown;
     clientRecordedAt: string;
+    /** Defaults to true — every existing caller (item/measurement results)
+     * needs the predicted-version bookkeeping above. Pass `false` only for
+     * a route whose server-side handler does not check/bump draftVersion. */
+    versioned?: boolean;
   },
 ): Promise<AppendResult> {
+  const { versioned = true, ...mutation } = input;
+  if (!versioned) {
+    return append(db, { ...mutation, ifMatch: null });
+  }
   const job = await db.jobs.get([input.userId, input.jobId]);
   const ifMatch = job?.predictedDraftVersion ?? job?.job.draftVersion ?? null;
-  const result = await append(db, { ...input, ifMatch });
+  const result = await append(db, { ...mutation, ifMatch });
   if (result.ok && ifMatch != null) {
     // Re-fetch rather than reuse `job`: `append()` above already wrote its
     // own update to this same row (setting `hasPendingOutbox: true`) in a
@@ -229,11 +251,24 @@ export type SubmitGuardError =
   | { ok: false; reason: 'server-rejected'; status: number; problem?: unknown };
 export type SubmitResult = { ok: true; status: number } | SubmitGuardError;
 
+/**
+ * Slice 18-WORKFLOW: `drawnSignature` (the PERFORMER's, a base64 PNG
+ * data-URL from `SignaturePad`) is REQUIRED and rides this one call. The pad
+ * itself works offline — it is a `<canvas>`, no network — and submit stays
+ * exactly what non-negotiable #2 makes it: a separate, atomic, never-batched
+ * request that refuses to run while any outbox row for the job remains. The
+ * signature is held in memory for the duration of the call only; it is never
+ * written to IndexedDB (an unsent record's signature would be a personal-data
+ * blob sitting unencrypted in browser storage) — which means a submission
+ * attempted offline is re-signed on the retry, by the same person, in front
+ * of the same record.
+ */
 export async function submitJob(
   db: BamFormDB,
   transport: SyncTransport,
   userId: string,
   jobId: string,
+  drawnSignature: string,
 ): Promise<SubmitResult> {
   const job = await db.jobs.get([userId, jobId]);
   if (job?.serverRemoved) {
@@ -260,7 +295,7 @@ export async function submitJob(
 
   let response: Awaited<ReturnType<SyncTransport['submitJob']>>;
   try {
-    response = await transport.submitJob(jobId, idempotencyKey);
+    response = await transport.submitJob(jobId, idempotencyKey, { drawnSignature });
   } catch {
     // SYS-14: a transport throw is NOT a rejection of the record — no
     // response reached us. Reset the visible state (the chip must not say

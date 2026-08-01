@@ -4,6 +4,7 @@ export * from './auth';
 export * from './area';
 export * from './asset-type';
 export * from './template';
+export * from './template-title';
 export * from './schedule';
 export * from './job';
 export * from './audit';

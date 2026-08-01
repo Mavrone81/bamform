@@ -384,12 +384,18 @@ model RefreshToken {
 
 // ------------------------------------------------------------- §6.7 asset_type
 
+// Slice 27-ASSETDOC: `formTemplateId @unique` is GONE. It made the machine->form
+// relation one-to-one in both directions, so a machine could hold exactly one
+// document and a document could serve exactly one machine family — both
+// contradicted by the owner's 2026 schedule workbook. The route from a machine
+// to a form is now `AssetDocument`. `AssetType` remains the machine-family
+// grouping and keeps the two properties that really are family-wide: the
+// approval route and the lead time.
 model AssetType {
   id              String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
   code            String  @unique
   name            String
   description     String?
-  formTemplateId  String  @unique @map("form_template_id") @db.Uuid
   approvalRouteId String  @map("approval_route_id") @db.Uuid
   leadTimeDays    Int     @default(30) @map("lead_time_days")
   active          Boolean @default(true)
@@ -397,11 +403,58 @@ model AssetType {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  formTemplate  FormTemplate   @relation(fields: [formTemplateId], references: [id])
   approvalRoute ApprovalRoute  @relation(fields: [approvalRouteId], references: [id])
   assets        Asset[]
 
   @@map("asset_type")
+}
+
+// ------------------------------------------------------- slice 27 asset_document
+
+/// Tags one controlled document to one machine. The owner's process step 2 —
+/// "Admin will log in to setup the machine tagged with which preventive
+/// Maintenance document" — and step 4's form picker both read this table.
+///
+/// A machine may carry several documents (TE7 needs a monthly pH-meter check
+/// AND a monthly preventive maintenance; LM03 needs three monthly documents),
+/// and a document may be tagged to several machines (CM02 and CM03 both use
+/// CE 95 030 00 01).
+model AssetDocument {
+  id             String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  assetId        String  @map("asset_id") @db.Uuid
+  formTemplateId String  @map("form_template_id") @db.Uuid
+  /// Fills the blank in the template title: "…Record KW___" + "13" -> "…Record KW13".
+  /// NULL for templates whose title carries no fillable run (CE 95 012 00 01 is
+  /// a fixed "EP01"), and NULL is valid for every template — never a validation
+  /// error. Substituted at RENDER, never stored resolved, so a revision that
+  /// changes the title stays correct.
+  machineNumber  String? @map("machine_number")
+  active         Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  asset        Asset        @relation(fields: [assetId], references: [id])
+  formTemplate FormTemplate @relation(fields: [formTemplateId], references: [id])
+
+  scheduleRules ScheduleRule[]
+  jobs          Job[]
+
+  // The read index is PARTIAL — `(asset_id) WHERE active`, created in
+  // migration 20260730000000. Prisma's DSL cannot express a partial index
+  // (same reason INV-01's one-current-revision index and job's period key
+  // live only in raw SQL), so it is deliberately absent here rather than
+  // declared as a weaker full index that `migrate dev` would then try to add.
+  //
+  // Likewise absent: `UNIQUE (id, asset_id)` and the composite FK from
+  // `job(asset_document_id, asset_id)` that references it (migration
+  // 20260730000030, review m-2). It ties `job.asset_id` to the machine its
+  // document belongs to. Expressing it here would need `Job.assetId` to
+  // participate in two relations at once, which reshapes the generated client
+  // for no gain — the constraint is a database-level integrity guard, not
+  // something application code ever traverses.
+  @@unique([assetId, formTemplateId])
+  @@map("asset_document")
 }
 
 // ------------------------------------------------------------------ §6.8 asset
@@ -430,10 +483,12 @@ model Asset {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  assetType     AssetType      @relation(fields: [assetTypeId], references: [id])
-  area          Area?          @relation(fields: [areaId], references: [id])
-  scheduleRules ScheduleRule[]
-  jobs          Job[]
+  assetType AssetType @relation(fields: [assetTypeId], references: [id])
+  area      Area?     @relation(fields: [areaId], references: [id])
+  // Slice 27: a machine's schedule now hangs off its DOCUMENTS, not off the
+  // machine directly — `asset.documents[].scheduleRules`.
+  documents AssetDocument[]
+  jobs      Job[]
 
   @@index([assetTypeId, status])
   @@map("asset")
@@ -458,8 +513,10 @@ model FormTemplate {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  assetTypes AssetType[]
-  revisions  TemplateRevision[]
+  // Slice 27: a template is no longer owned by one machine family. It is
+  // tagged to any number of machines through `asset_document`.
+  assetDocuments AssetDocument[]
+  revisions      TemplateRevision[]
 
   @@map("form_template")
 }
@@ -615,9 +672,15 @@ model ApprovalStageRole {
 
 // ------------------------------------------------------------ §6.14 schedule_rule
 
+// Slice 27-ASSETDOC re-key: was `assetId` + `@@unique([assetId, frequency])`,
+// i.e. one schedule per MACHINE per frequency. That was the second, independent
+// blocker on the owner's process — even with many documents per machine, TE7's
+// monthly pH check and its monthly PM could not both exist. Frequencies still
+// derive from each document's own current revision's active items, so a
+// document naturally brings its own set.
 model ScheduleRule {
   id               String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  assetId          String     @map("asset_id") @db.Uuid
+  assetDocumentId  String     @map("asset_document_id") @db.Uuid
   frequency        FrequencyT
   intervalMonths   Int        @map("interval_months")
   anchorDate       DateTime   @map("anchor_date") @db.Date
@@ -629,9 +692,9 @@ model ScheduleRule {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  asset Asset @relation(fields: [assetId], references: [id])
+  assetDocument AssetDocument @relation(fields: [assetDocumentId], references: [id])
 
-  @@unique([assetId, frequency])
+  @@unique([assetDocumentId, frequency])
   @@map("schedule_rule")
 }
 
@@ -641,6 +704,12 @@ model Job {
   id                  String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   jobNumber           String       @unique @map("job_number")
   assetId             String       @map("asset_id") @db.Uuid
+  /// Slice 27-ASSETDOC. WHICH document this job satisfies. `assetId` alone was
+  /// enough while a machine carried one document; with several, resolving a
+  /// completed job's schedule rules by machine advances its SIBLING documents'
+  /// schedules too — see `completion-cascade.service.ts` and
+  /// `void-schedule-recompute.service.ts`.
+  assetDocumentId     String       @map("asset_document_id") @db.Uuid
   templateRevisionId  String       @map("template_revision_id") @db.Uuid
   approvalRouteId     String       @map("approval_route_id") @db.Uuid
   frequency           FrequencyT
@@ -667,6 +736,7 @@ model Job {
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   asset            Asset             @relation(fields: [assetId], references: [id])
+  assetDocument    AssetDocument     @relation(fields: [assetDocumentId], references: [id])
   templateRevision TemplateRevision  @relation(fields: [templateRevisionId], references: [id])
   approvalRoute    ApprovalRoute     @relation(fields: [approvalRouteId], references: [id])
   assignee         AppUser?          @relation("JobAssignedTo", fields: [assignedTo], references: [id])
@@ -681,10 +751,19 @@ model Job {
 
   @@index([assetId, dueOn(sort: Desc)])
   // PR-052 idempotency key (I-INV-14) — since slice 17-VOID a PARTIAL unique
-  // index, `job_asset_frequency_scope_due_on_not_voided_key` ON (asset_id,
-  // frequency_scope, due_on) WHERE status <> 'voided': a VOIDED job never
-  // occupies its schedule period (SYS-19, owner decision 2026-07-27), so the
-  // scheduler can generate the replacement. Prisma's DSL cannot express
+  // index; since slice 27-ASSETDOC it is
+  // `job_asset_document_frequency_scope_due_on_scheduled_key` ON
+  // (asset_document_id, frequency_scope, due_on) WHERE status <> 'voided'
+  // AND is_adhoc = false. It was keyed on `asset_id` until slice 27, which
+  // was correct only while a machine carried ONE document: two documents due
+  // on the same day at the same frequency collided, and job-generation
+  // swallowed the P2002 as an "already exists" no-op, so the second document
+  // was silently never raised. See migrations 20260730000010/20260730000020.
+  // A VOIDED job never occupies its schedule period (SYS-19, owner decision
+  // 2026-07-27), so the scheduler can generate the replacement; and an
+  // AD-HOC job (UR-028) never occupies one at all — it is extra work, not
+  // the planned service, so it neither blocks generation nor collides with
+  // a second ad-hoc job raised the same day. Prisma's DSL cannot express
   // partial unique indexes (same as INV-01's one-current-revision index), so
   // it lives ONLY in raw SQL — see migrations 20260728000010 (create
   // partial) + 20260728000020 (drop the old full `@@unique`). Violations
@@ -753,6 +832,10 @@ model PartUsed {
   description String
   quantity    Decimal  @db.Decimal(12, 3)
   remarks     String?
+  /// Slice 30 — soft-remove flag. A maintainer may remove a part during the
+  /// capture window; #7 forbids physical DELETE, so removal sets active=false.
+  /// Every read/canonical/PDF path filters to active=true (JOB_FULL_INCLUDE).
+  active      Boolean  @default(true)
   recordedBy  String   @map("recorded_by") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -817,6 +900,14 @@ model ApprovalStep {
   // capture a drawn signature).
   drawnSignatureCt         Bytes? @map("drawn_signature_ct")
   drawnSignatureDekVersion Int?   @map("drawn_signature_dek_version") @db.SmallInt
+  // Slice 26-TWOSTAGE M1 (20260729010000_approval_step_stage_label_snapshot):
+  // `approval_stage.label` AS IT READ WHEN THIS STEP WAS SIGNED. Snapshotted,
+  // never joined at render time — routes are configuration (ADR-011) and an
+  // administrator relabelling a stage must not rewrite an archived record's
+  // caption. Null for non-verification actions (stage-0 submission,
+  // return/recall/void), whose caption comes from the action itself, and for
+  // rows written before the column existed.
+  stageLabel               String? @map("stage_label")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 

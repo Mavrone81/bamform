@@ -19,6 +19,22 @@ export const queueEntrySchema = jobSummarySchema.extend({
   ageHours: z.number(),
   escalated: z.boolean(),
   onBehalfOf: z.string().uuid().nullable().optional(),
+  /**
+   * Slice 26-TWOSTAGE — WHICH stage of the route this record is waiting at,
+   * and how many stages the route has. Required, not optional: a queue entry
+   * is by construction a SUBMITTED job sitting at a configured stage (the
+   * server resolves the stage to decide eligibility in the first place), so
+   * there is no state in which these are unknown.
+   *
+   * The delivered route is two stages — TEAM_LEADER then ENGINEER — and a
+   * queue that says nothing about the stage leaves a verifier unable to tell
+   * where in the owner's process a record actually is. `stageLabel` is the
+   * administrator-configured `approval_stage.label` verbatim (ADR-011 route-
+   * as-data); the client renders it, it does not derive it from the ordinal.
+   */
+  stageOrdinal: z.number().int().positive(),
+  stageCount: z.number().int().positive(),
+  stageLabel: z.string(),
 });
 export type QueueEntry = z.infer<typeof queueEntrySchema>;
 

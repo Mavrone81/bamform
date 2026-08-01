@@ -107,9 +107,14 @@ export function toTemplateRevision(
   };
 }
 
+/**
+ * Slice 27-ASSETDOC dropped the `assetTypeId` field. It was the reverse of
+ * `asset_type.form_template_id @unique` — "the one machine family that governs
+ * this document" — and a document no longer belongs to one machine family.
+ * Which machines carry it is read from `GET /assets/{id}/documents`.
+ */
 export function toFormTemplate(
   row: FormTemplateRow,
-  assetTypeId: string | null,
   currentRevisionId: string | null,
 ): FormTemplate {
   return {
@@ -117,7 +122,6 @@ export function toFormTemplate(
     documentNumber: row.documentNumber,
     title: row.title,
     active: row.active,
-    assetTypeId,
     currentRevisionId,
   };
 }

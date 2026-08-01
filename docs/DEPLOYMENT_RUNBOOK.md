@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.1 |
+| Revision | 0.2 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -22,6 +22,7 @@
 | Revision | Date | Details of revision | Revised by | Approved by |
 |---|---|---|---|---|
 | 0.1 | 24 Jul 2026 | Initial draft | Lead Engineer | _(pending)_ |
+| 0.2 | 1 Aug 2026 | §3.4 added — create the first ADMIN account via the `bootstrap-admin` entrypoint (PR-RUN-21, PR-RUN-22); §11 gains the no-account-yet failure mode | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -196,6 +197,61 @@ ss -tulpn | sort -k5                            # compare to the recon baseline
 
 **PR-RUN-06** This check is mandatory after every first install and every deploy. It is the
 evidence required by acceptance criterion AC-16.
+
+## 3.4 Create the first ADMIN account
+
+Migrations seed roles and reference data but **no user accounts**. Until this step runs the
+sign-in page rejects every credential and there is no way into the application. This is the
+final step of a first install.
+
+The `bootstrap-admin` entrypoint creates one ADMIN, self-granting the role — no actor exists
+to grant it — and writes the matching audit event. It is **one-time and fail-closed**: it
+counts `app_user` inside the same transaction as the insert and refuses unless the count is
+zero, so it cannot mint a second admin or be used to escalate later.
+
+```bash
+docker compose -f /opt/bamform/docker-compose.yml exec bamform-api \
+  node dist/bootstrap-admin.js
+```
+
+It takes all four values **only** from the interactive prompt — never from argv, the
+environment or a file — so they cannot leak into shell history, `docker inspect` or the
+deploy log:
+
+| Prompt | Rule |
+|---|---|
+| `Full name:` | 1–200 characters |
+| `Email:` | Must be a valid address. This becomes the sign-in identity |
+| `Password (min 12 chars, hidden):` | At least 12 characters. Terminal echo is muted while typing |
+| `Confirm password:` | Must match, or the command exits 1 without touching the database |
+
+On success it prints the new account's email and id. The account is `active` and
+`mustChangePassword` is **not** set — the password typed here is the permanent one. Choose it
+accordingly and record it in the password manager, never in a ticket or a chat.
+
+**PR-RUN-21** Use `docker compose exec`, never `run`, and never `-T`. The command requires an
+interactive terminal: it checks `stdin.isTTY` and exits 1 with `this command must be run
+interactively from a terminal` before it opens a database connection. It cannot be driven from
+cron, a script, or a piped `echo`. That is deliberate — it keeps the credentials off every
+non-interactive surface — and is not a limitation to work around.
+
+**PR-RUN-22** On the server, invoke it as `node dist/bootstrap-admin.js`. The
+`npm run bootstrap:admin` shortcut in `api/package.json` works **only in a developer
+checkout**: the runtime stage of `api/Dockerfile` deletes `npm`, `npx` and `corepack` outright
+to strip their vulnerable transitive dependencies from the image, so the npm form fails on the
+server with `npm: not found`.
+
+Verify, then sign in:
+
+```bash
+# Expect exactly one user
+docker compose -f /opt/bamform/docker-compose.yml exec -T bamform-postgres \
+  psql -U bamform -d bamform -c "SELECT count(*) FROM app_user;"
+```
+
+Sign in at the application URL with the address just entered, then create the remaining users
+through the admin screens. Re-running the command afterwards is harmless — it refuses with
+`Bootstrap refused: 1 user(s) already exist.`
 
 ---
 
@@ -586,6 +642,7 @@ grep -E 'ERROR|FAILED' /var/log/bamform-deploy.log | tail -20
 | Site returns 502 | `bamform-api` down or unhealthy | `docker compose ps`; `logs bamform-api` | Restart `bamform-api`. If it crash-loops, check `.env` and database reachability |
 | Site returns 404 for app routes | Proxy vhost misconfigured or `bamform-web` down | Check proxy config; `curl` the web container directly | Fix vhost; restart `bamform-web` |
 | Login fails for everyone | Blind index key missing/changed, or database unreachable | `logs bamform-api`; verify `secrets/blind_index_key` present | **Do not regenerate the key** — that orphans every account. Restore the correct key |
+| Login fails for everyone **on a brand-new install** | No account exists yet — §3.4 was never run | `SELECT count(*) FROM app_user` returns 0 | Run §3.4. If the count is non-zero the bootstrap will refuse; this is the wrong diagnosis |
 | Login fails for one user | Account locked after failed attempts | Query `app_user.locked_until` | Wait, or clear the lockout as ADMIN |
 | **No new jobs appearing** | Scheduler stalled or `SCHEDULER_ENABLED=false` | §9.2 query; `logs bamform-worker`; check `.env` | Restart `bamform-worker`; verify the Redis lock is not stuck |
 | Redis lock stuck after a crash | Lock TTL not yet expired | `docker compose exec bamform-redis redis-cli TTL bf:lock:scheduler` | Wait for TTL, or delete the key deliberately after confirming no worker is running |

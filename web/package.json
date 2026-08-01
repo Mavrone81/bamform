@@ -13,7 +13,7 @@
     "test:offline": "playwright test --project=offline",
     "test:e2e": "playwright test --project=e2e",
     "test:a11y": "playwright test --project=a11y",
-    "gen:api-types": "npx --yes openapi-typescript@7.13.0 ../api/openapi.yaml -o src/api/generated/openapi-types.ts"
+    "gen:api-types": "npx --yes openapi-typescript@7.13.0 ../api/openapi.yaml -o src/api/generated/openapi-types.ts && npx prettier --write src/api/generated/openapi-types.ts"
   },
   "dependencies": {
     "dexie": "4.4.4",

@@ -119,6 +119,7 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
     await request(server)
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(users.maintainerToken))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     await request(server)
       .post(`/api/v1/jobs/${jobId}/verify`)
@@ -162,7 +163,7 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
     // verify date (today), next_due_on = +1 month (ADR-009 rolling, not
     // anchor-based).
     const rule = await adminPool.query(
-      `SELECT last_completed_on, next_due_on FROM "schedule_rule" WHERE asset_id = $1 AND frequency = 'M1'`,
+      `SELECT last_completed_on, next_due_on FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 AND r.frequency = 'M1'`,
       [assetId],
     );
     expect(rule.rowCount).toBe(1);
@@ -201,7 +202,7 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
     await completeJob(yJob.rows[0].id as string, itemIds, users);
 
     const rules = await adminPool.query(
-      `SELECT frequency, last_completed_on, next_due_on FROM "schedule_rule" WHERE asset_id = $1 ORDER BY frequency`,
+      `SELECT frequency, last_completed_on, next_due_on FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 ORDER BY r.frequency`,
       [assetId],
     );
     expect(rules.rowCount).toBe(2);
@@ -220,13 +221,15 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
 
     // INV-09 discipline — the cascade audits each schedule_rule move within
     // the verify transaction.
+    // Slice 27-ASSETDOC: `entity_id` is the asset_document, not the asset.
     const audit = await adminPool.query(
-      `SELECT after FROM "audit_event"
-       WHERE entity_type = 'schedule_rule' AND entity_id = $1 AND action = 'update'`,
+      `SELECT a.after FROM "audit_event" a
+       JOIN "asset_document" d ON d.id = a.entity_id
+       WHERE a.entity_type = 'schedule_rule' AND d.asset_id = $1 AND a.action = 'update'`,
       [assetId],
     );
     // One update event per cascaded rule (M1 + Y). (The bootstrap's own
-    // `create` event for the same asset is action='create', excluded above.)
+    // `create` event for the same document is action='create', excluded above.)
     expect(audit.rowCount).toBe(2);
     const frequencies = audit.rows.map((r) => (r.after as { frequency: string }).frequency).sort();
     expect(frequencies).toEqual(['M1', 'Y']);
@@ -257,6 +260,7 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
     await request(server)
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(users.maintainerToken))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     await request(server)
       .post(`/api/v1/jobs/${jobId}/verify`)
@@ -265,7 +269,7 @@ describe('Completion cascade wiring — verify advances the schedule and the suc
       .expect(200);
 
     const rule = await adminPool.query(
-      `SELECT last_completed_on FROM "schedule_rule" WHERE asset_id = $1 AND frequency = 'M1'`,
+      `SELECT last_completed_on FROM "schedule_rule" r JOIN "asset_document" d ON d.id = r.asset_document_id WHERE d.asset_id = $1 AND r.frequency = 'M1'`,
       [assetId],
     );
     expect(rule.rows[0].last_completed_on).toBeNull();

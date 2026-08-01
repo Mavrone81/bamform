@@ -15,13 +15,19 @@ import {
 import type { Request } from 'express';
 import {
   assignJobRequestSchema,
+  createAdhocJobRequestSchema,
   itemResultInputSchema,
   measurementResultInputSchema,
+  partUpsertInputSchema,
   partUsedInputSchema,
+  submitJobRequestSchema,
   type AssignJobRequest,
+  type CreateAdhocJobRequest,
   type ItemResultInput,
   type MeasurementResultInput,
+  type PartUpsertInput,
   type PartUsedInput,
+  type SubmitJobRequest,
 } from '@bamform/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -29,6 +35,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AccessTokenClaims } from '../auth/jwt/access-token.types';
 import { requestMeta } from '../common/request-meta';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { AdhocJobService } from './adhoc-job.service';
 import { AssignmentService } from './assignment.service';
 import { JOB_RECORD_ROLES } from './job-access';
 import { JobsService } from './jobs.service';
@@ -51,6 +58,7 @@ export class JobsController {
     private readonly parts: PartsService,
     private readonly submission: SubmissionService,
     private readonly assignment: AssignmentService,
+    private readonly adhoc: AdhocJobService,
   ) {}
 
   @Get()
@@ -77,14 +85,40 @@ export class JobsController {
     });
   }
 
+  /**
+   * UR-028/PR-058 — raise a job OFF-PLAN (slice 18-WORKFLOW §2). Declared
+   * before the `:jobId` routes purely for readability; Nest matches on the
+   * HTTP method too, and no other single-segment `POST /jobs/*` exists.
+   *
+   * Roles: PLANNER (new, slice 18) plus TEAM_LEADER/ENGINEER/ADMIN — the
+   * roles that already manage the schedule and the team. ADDITIVE: no role
+   * loses anything.
+   */
+  @Post('adhoc')
+  @Roles('PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN')
+  @HttpCode(HttpStatus.CREATED)
+  createAdhoc(
+    @Body(new ZodValidationPipe(createAdhocJobRequestSchema)) dto: CreateAdhocJobRequest,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+  ) {
+    return this.adhoc.create(dto, { actorId: user.sub, ...requestMeta(req) });
+  }
+
   @Get(':jobId')
   get(@Param('jobId') jobId: string, @CurrentUser() user: AccessTokenClaims) {
     return this.jobs.get(user.sub, user.roles, jobId);
   }
 
-  /** UR-029 — assignment/reassignment. Permission matrix §4.1 has no dedicated row; TL/ENG/ADMIN per the review-confirmed intent (SYS-2) — the roles that manage the schedule and the team. */
+  /**
+   * UR-029 — assignment/reassignment. Permission matrix §4.1 has no
+   * dedicated row; TL/ENG/ADMIN per the review-confirmed intent (SYS-2) —
+   * the roles that manage the schedule and the team. Slice 18-WORKFLOW adds
+   * PLANNER: planning work and handing it to someone are the same job.
+   * ADDITIVE — TL/ENG/ADMIN keep exactly the right they had.
+   */
   @Post(':jobId/assign')
-  @Roles('TEAM_LEADER', 'ENGINEER', 'ADMIN')
+  @Roles('PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN')
   @HttpCode(HttpStatus.OK)
   assign(
     @Param('jobId') jobId: string,
@@ -163,17 +197,50 @@ export class JobsController {
     );
   }
 
+  /**
+   * Slice 30 — client-keyed create-or-update, additive to the `POST` above.
+   * `active: false` is the soft-remove path (non-negotiable #7: no physical
+   * `DELETE`).
+   */
+  @Put(':jobId/parts/:partId')
+  @Roles(...JOB_RECORD_ROLES)
+  upsertPart(
+    @Param('jobId') jobId: string,
+    @Param('partId') partId: string,
+    @Body(new ZodValidationPipe(partUpsertInputSchema)) dto: PartUpsertInput,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+  ) {
+    return this.parts.upsertPart(
+      jobId,
+      partId,
+      dto,
+      idempotencyKey,
+      { actorId: user.sub, ...requestMeta(req) },
+      user.roles,
+    );
+  }
+
+  /**
+   * Slice 18-WORKFLOW §1 — submit now carries the PERFORMER's drawn
+   * signature (`SubmitJobRequest.drawnSignature`, mandatory). The role gate
+   * is unchanged: the people who record results are the people who sign for
+   * them.
+   */
   @Post(':jobId/submit')
   @Roles(...JOB_RECORD_ROLES)
   @HttpCode(HttpStatus.OK)
   submit(
     @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(submitJobRequestSchema)) dto: SubmitJobRequest,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @CurrentUser() user: AccessTokenClaims,
     @Req() req: Request,
   ) {
     return this.submission.submit(
       jobId,
+      dto,
       idempotencyKey,
       { actorId: user.sub, ...requestMeta(req) },
       user.roles,

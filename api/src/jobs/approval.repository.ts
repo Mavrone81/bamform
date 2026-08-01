@@ -14,6 +14,14 @@ export interface CreateApprovalStepData {
   id: string;
   jobId: string;
   stageOrdinal: number;
+  /**
+   * Slice 26-TWOSTAGE M1 — `approval_stage.label` captured HERE, in the
+   * signing transaction, so the archived record's caption can never be
+   * rewritten by a later administrative relabel. `null` for actions whose
+   * caption is derived from the action itself (submission, return, recall,
+   * void) rather than from route configuration.
+   */
+  stageLabel: string | null;
   action: ApprovalActionT;
   actorId: string;
   onBehalfOfId: string | null;
@@ -72,7 +80,7 @@ export class ApprovalRepository {
    *
    * The DELIVERED route no longer relies on that null state: migration
    * `20260726120000_enable_verification_escalation_default` sets 72 hours on
-   * both stages of `SINGLE_STAGE_TL_OR_ENG` (UR-050 — Samuel, 2026-07-26,
+   * both stages of `TWO_STAGE_TL_THEN_ENG` (UR-050 — Samuel, 2026-07-26,
    * resolving the slice-11a finding-D contradiction between
    * `ENVIRONMENT_REQUIREMENTS.md`'s advertised 72h default and the original
    * seed's "escalation off"). Clearing a stage's value still switches
@@ -129,6 +137,7 @@ export class ApprovalRepository {
         id: data.id,
         jobId: data.jobId,
         stageOrdinal: data.stageOrdinal,
+        stageLabel: data.stageLabel,
         action: data.action,
         actorId: data.actorId,
         onBehalfOfId: data.onBehalfOfId,

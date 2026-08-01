@@ -4,6 +4,7 @@ import {
   markPasswordChangeRequired,
 } from '../auth/password-change-gate';
 import { TransportError } from './transport';
+import { reportPossiblyOutdatedClient } from '../update';
 import { API_BASE } from './config';
 import { uuidv7 } from '../lib/uuidv7';
 import type {
@@ -18,6 +19,8 @@ import type {
   JobActionResponse,
   DelegationActionResponse,
   VerifyJobRequest,
+  SubmitJobRequest,
+  CreateAdhocJobRequest,
   CreateDelegationRequest,
   Problem,
   Attachment,
@@ -71,6 +74,22 @@ export async function authorizedFetch(
       .catch(() => undefined);
     if (isPasswordChangeRequiredProblem(problem)) markPasswordChangeRequired();
   }
+
+  // Slice 22-SELFUPDATE §1 — the HARD signal. A 400/422 is what a client
+  // built against an older contract gets when the server has since started
+  // requiring something that client does not know how to send: slice 18 made
+  // `drawnSignature` required on submit, and the owner's phone, running JS
+  // from before the signature step existed, was refused twice for exactly
+  // that. An honest error message (fbfa000) is a consolation prize; the app
+  // being out of date is the fault, so treat the rejection as evidence and
+  // go check for a newer build.
+  //
+  // Fire-and-forget on purpose: this must not add latency to, or be able to
+  // fail, the request the caller is waiting on. `reportPossiblyOutdatedClient`
+  // is rate-limited so a client retrying in a loop cannot amplify into a
+  // storm of `/sw.js` requests, and is inert when there is no service worker.
+  reportPossiblyOutdatedClient(res.status);
+
   return res;
 }
 
@@ -112,15 +131,33 @@ export class HttpSyncTransport implements SyncTransport {
     return (await res.json()) as DrainOutboxResponse;
   }
 
-  async submitJob(jobId: string, idempotencyKey: string): Promise<SubmitJobResponse> {
+  async submitJob(
+    jobId: string,
+    idempotencyKey: string,
+    request: SubmitJobRequest,
+  ): Promise<SubmitJobResponse> {
     const res = await authorizedFetch(`/jobs/${jobId}/submit`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': idempotencyKey },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(request),
     });
     if (res.ok) {
       return { status: res.status, ok: true, body: await res.json() };
     }
     const problem = await res.json().catch(() => undefined);
+    return { status: res.status, ok: false, problem };
+  }
+
+  async createAdhocJob(request: CreateAdhocJobRequest): Promise<JobActionResponse> {
+    const res = await authorizedFetch('/jobs/adhoc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (res.ok) {
+      return { status: res.status, ok: true, body: (await res.json()) as Job };
+    }
+    const problem: Problem | undefined = await res.json().catch(() => undefined);
     return { status: res.status, ok: false, problem };
   }
 

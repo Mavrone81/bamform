@@ -51,21 +51,21 @@ function stubCanvas(): { toDataURL: ReturnType<typeof vi.fn> } {
   return { toDataURL };
 }
 
-function pointerDown(canvas: Element, x: number, y: number, pointerId = 1) {
+function pointerDown(canvas: Element, x: number, y: number, pointerType = 'mouse', pointerId = 1) {
   act(() => {
-    fireEvent.pointerDown(canvas, { pointerId, clientX: x, clientY: y });
+    fireEvent.pointerDown(canvas, { pointerId, pointerType, clientX: x, clientY: y });
   });
 }
 
-function pointerMove(canvas: Element, x: number, y: number, pointerId = 1) {
+function pointerMove(canvas: Element, x: number, y: number, pointerType = 'mouse', pointerId = 1) {
   act(() => {
-    fireEvent.pointerMove(canvas, { pointerId, clientX: x, clientY: y });
+    fireEvent.pointerMove(canvas, { pointerId, pointerType, clientX: x, clientY: y });
   });
 }
 
-function pointerUp(canvas: Element, pointerId = 1) {
+function pointerUp(canvas: Element, pointerType = 'mouse', pointerId = 1) {
   act(() => {
-    fireEvent.pointerUp(canvas, { pointerId });
+    fireEvent.pointerUp(canvas, { pointerId, pointerType });
   });
 }
 
@@ -124,6 +124,65 @@ describe('SignaturePad', () => {
 
     click(screen.getByRole('button', { name: 'Done' }));
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The owner could not sign with a FINGER on a real iPhone (2026-07-28),
+   * while every existing test above drove the pad with a synthetic mouse-type
+   * pointer — so touch was never exercised and this class of failure was
+   * invisible to the whole suite. Two causes were fixed; both are pinned here.
+   */
+  describe('touch input (iOS)', () => {
+    it('draws from touch-type pointers, not just mouse', () => {
+      const onDone = vi.fn();
+      render(<SignaturePad onDone={onDone} />);
+      const canvas = screen.getByRole('img', { name: /signature pad/i });
+
+      pointerDown(canvas, 12, 12, 'touch');
+      pointerMove(canvas, 60, 50, 'touch');
+      pointerUp(canvas, 'touch');
+
+      click(screen.getByRole('button', { name: 'Done' }));
+      expect(onDone).toHaveBeenCalledTimes(1);
+    });
+
+    it('still draws when setPointerCapture THROWS — WebKit does this for touch pointers', () => {
+      // An uncaught throw aborted handlePointerDown before any ink was laid:
+      // no dot, no stroke, and Done then rejected the signature as blank —
+      // precisely the reported symptom. Capture is an optimisation, never a
+      // precondition.
+      const onDone = vi.fn();
+      render(<SignaturePad onDone={onDone} />);
+      const canvas = screen.getByRole('img', { name: /signature pad/i }) as HTMLCanvasElement;
+      canvas.setPointerCapture = () => {
+        throw new DOMException('InvalidPointerId', 'NotFoundError');
+      };
+
+      pointerDown(canvas, 15, 15, 'touch');
+      pointerMove(canvas, 70, 60, 'touch');
+      pointerUp(canvas, 'touch');
+
+      click(screen.getByRole('button', { name: 'Done' }));
+      expect(onDone).toHaveBeenCalledTimes(1);
+    });
+
+    it('preventDefaults raw touch events so iOS cannot steal the stroke as a scroll', () => {
+      // touch-action:none is not sufficient on iOS: WebKit still runs its own
+      // gesture recognition and, once it claims the drag, fires pointercancel
+      // and stops sending pointermove. The listener must be NON-PASSIVE —
+      // React's onTouchMove prop registers passively and preventDefault there
+      // is silently ignored, which is why this is an explicit addEventListener.
+      render(<SignaturePad onDone={vi.fn()} />);
+      const canvas = screen.getByRole('img', { name: /signature pad/i });
+
+      const move = new Event('touchmove', { bubbles: true, cancelable: true });
+      canvas.dispatchEvent(move);
+      expect(move.defaultPrevented).toBe(true);
+
+      const start = new Event('touchstart', { bubbles: true, cancelable: true });
+      canvas.dispatchEvent(start);
+      expect(start.defaultPrevented).toBe(true);
+    });
   });
 
   it('Clear erases the stroke — Done afterwards is rejected as blank again', () => {

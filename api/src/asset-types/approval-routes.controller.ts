@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Slice 13-TL: `GET /approval-routes` — read-only, seeded reference data
- * (PR-DBD-09: `SINGLE_STAGE_TL_OR_ENG` and its stages arrive by migration;
+ * (PR-DBD-09: `TWO_STAGE_TL_THEN_ENG` and its stages arrive by migration;
  * routes are never created via the API). Exists because
  * `POST /asset-types` requires `approvalRouteId` and there was previously
  * no HTTP endpoint that could supply it — the BAMFORM-TLP-001 template

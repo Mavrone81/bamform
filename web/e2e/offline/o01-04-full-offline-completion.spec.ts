@@ -1,4 +1,4 @@
-import { test, expect } from '../support/fixtures';
+import { test, expect, signAndSubmit } from '../support/fixtures';
 import { FakeServer, type SeedJob } from '../support/fake-server';
 
 /**
@@ -33,8 +33,10 @@ test('O-01: full record completed offline arrives complete and exactly once on r
   await page.context().setOffline(false);
   await page.evaluate(() => window.dispatchEvent(new Event('online'))); // ensure the app's online listener fires deterministically
 
-  await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Submit' }).click();
+  await expect(page.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 10_000,
+  });
+  await signAndSubmit(page);
 
   await expect(page.getByRole('heading', { name: 'Your jobs' })).toBeVisible();
   expect(server.submitCount.get('job-1')).toBe(1);
@@ -92,7 +94,9 @@ test('O-04: three jobs completed during an extended offline period all arrive on
   for (const j of jobs) {
     await expect(async () => {
       await page.getByText(j.jobNumber).click();
-      await expect(page.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+      await expect(page.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+        timeout: 10_000,
+      });
       await page.goBack();
     }).toPass({ timeout: 15_000 });
   }

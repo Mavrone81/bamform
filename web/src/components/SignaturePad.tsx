@@ -62,8 +62,33 @@ export function SignaturePad({ onDone, onCancel, disabled }: SignaturePadProps) 
     resizeCanvasToDisplaySize(canvas);
     const onResize = () => resizeCanvasToDisplaySize(canvas);
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+
+    // iOS FINGER FIX (owner, real iPhone, 2026-07-28: "I cannot sign with
+    // finger"). `touch-action: none` alone is not sufficient on iOS Safari:
+    // WebKit still begins its own scroll/pan gesture recognition, and once it
+    // claims the gesture it dispatches `pointercancel` and stops sending
+    // `pointermove` — the stroke dies after the initial dot. The cure is to
+    // preventDefault the raw touch events, which requires a NON-PASSIVE
+    // listener. React's `onTouchMove` prop cannot do this: React registers
+    // touch handlers passively, so calling preventDefault there is silently
+    // ignored. Hence the manual addEventListener with `{ passive: false }`.
+    //
+    // These listeners only suppress the browser's default gesture — all
+    // drawing still happens in the pointer handlers, so a stylus and a mouse
+    // are unaffected and there is no double-draw.
+    const swallow = (e: TouchEvent) => {
+      if (disabled) return;
+      if (e.cancelable) e.preventDefault();
+    };
+    canvas.addEventListener('touchstart', swallow, { passive: false });
+    canvas.addEventListener('touchmove', swallow, { passive: false });
+
+    return () => {
+      window.removeEventListener('resize', onResize);
+      canvas.removeEventListener('touchstart', swallow);
+      canvas.removeEventListener('touchmove', swallow);
+    };
+  }, [disabled]);
 
   function pointFromEvent(e: React.PointerEvent<HTMLCanvasElement>): { x: number; y: number } {
     const canvas = canvasRef.current;
@@ -74,7 +99,18 @@ export function SignaturePad({ onDone, onCancel, disabled }: SignaturePadProps) 
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (disabled) return;
     const canvas = canvasRef.current;
-    canvas?.setPointerCapture?.(e.pointerId);
+    // Capture keeps the stroke attached to the canvas when a finger or stylus
+    // wanders outside it mid-signature. It is an OPTIMISATION, never a
+    // precondition for drawing: WebKit is documented to throw
+    // NotFoundError/InvalidPointerId for touch pointers in some states, and an
+    // uncaught throw here would abort the whole handler — no dot, no stroke,
+    // exactly the "cannot sign with finger" symptom. Drawing proceeds either
+    // way; without capture we simply rely on pointerleave to end the stroke.
+    try {
+      canvas?.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* capture unavailable for this pointer — drawing continues regardless */
+    }
     const point = pointFromEvent(e);
     drawingRef.current = true;
     lastPointRef.current = point;

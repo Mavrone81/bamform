@@ -34,7 +34,10 @@ export const formTemplateSchema = z.object({
   documentNumber: z.string(),
   title: z.string(),
   active: z.boolean(),
-  assetTypeId: z.string().uuid().nullable().optional(),
+  // Slice 27-ASSETDOC removed `assetTypeId`. It was the reverse of
+  // `asset_type.form_template_id @unique` — "the one machine family this
+  // document belongs to" — and a document no longer belongs to one. Which
+  // machines carry it is read from `GET /assets/{id}/documents`.
   currentRevisionId: z.string().uuid().nullable().optional(),
 });
 export type FormTemplate = z.infer<typeof formTemplateSchema>;

@@ -141,6 +141,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const job = await notificationQueue.getEscalationJob(jobId, 1);
@@ -155,6 +156,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const job = await notificationQueue.getEscalationJob(jobId, 1);
@@ -174,6 +176,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const job = await notificationQueue.getEscalationJob(jobId, 1);
@@ -191,6 +194,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     expect(await notificationQueue.getEscalationJob(jobId, 1)).toBeTruthy();
 
@@ -214,6 +218,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     expect(await notificationQueue.getEscalationJob(jobId, 1)).toBeTruthy();
 
@@ -237,6 +242,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
     expect(await notificationQueue.getEscalationJob(jobId, 1)).toBeTruthy();
 
@@ -263,6 +269,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const tl = await stepUpTeamLeader();
@@ -291,6 +298,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const tl = await stepUpTeamLeader();
@@ -310,6 +318,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const tl = await stepUpTeamLeader();
@@ -352,6 +361,7 @@ describe('Escalation timers — PR-077/UR-050 (E-10)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/jobs/${jobId}/submit`)
       .set(...authHeader(token))
+      .send({ drawnSignature: realPngDataUrl() })
       .expect(200);
 
     const tl = await stepUpTeamLeader();

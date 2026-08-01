@@ -785,6 +785,94 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /assets/{assetId}/documents:
+    parameters:
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      tags: [Assets]
+      operationId: getAssetDocuments
+      summary: The preventive-maintenance documents this machine carries
+      description: |
+        Slice 27-ASSETDOC. The owner's process step 4 — "he will go to his
+        assigned machine and select the form to start" — reads this. Open to
+        every authenticated user who can see the machine (role-gating it would
+        remove read access from MAINTAINER, the role that most needs it);
+        403 (`/errors/out-of-scope`), not a silent 404, when the machine exists
+        but is outside the caller's area scope.
+
+        DEACTIVATED documents are included: a machine's history has to stay
+        visible. It is the scheduler that stops raising work for them.
+      responses:
+        '200':
+          description: The machine's tagged documents
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AssetDocument' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Assets]
+      operationId: tagAssetDocument
+      summary: Tag a preventive-maintenance document to this machine
+      description: |
+        ADMIN only — the owner's process step 2 ("Admin will log in to setup
+        the machine tagged with which preventive Maintenance document").
+
+        409 if this machine already carries that document; a machine may carry
+        any number of DIFFERENT documents, and any number of machines may carry
+        the same one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetDocumentCreate' }
+      responses:
+        '201':
+          description: Tagged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetDocument' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
+  /asset-documents/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Assets]
+      operationId: updateAssetDocument
+      summary: Change a tagged document's form number, or deactivate it
+      description: |
+        ADMIN only. There is deliberately NO DELETE: INV-16 forbids DELETE on
+        record tables, and a document that has already generated jobs must stay
+        resolvable. `active: false` stops future job generation and leaves the
+        history intact.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetDocumentUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetDocument' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /approval-routes:
     get:
       tags: [Asset Types]
@@ -1319,6 +1407,55 @@ paths:
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /jobs/adhoc:
+    post:
+      tags: [Jobs]
+      operationId: createAdhocJob
+      summary: Raise a job against an asset outside the maintenance plan
+      description: |
+        UR-028/PR-058. Roles: PLANNER, TEAM_LEADER, ENGINEER, ADMIN.
+        Area-scoped (PR-API-10) - a caller with `user_area_scope` rows may
+        only raise work on assets inside them.
+
+        The asset type's CURRENT template revision is FROZEN onto the job
+        exactly as a scheduler-generated job's is (DP-3/PR-049), the same
+        `PM-{year}-{sequence}` number is drawn, and the asset type's approval
+        route is attached - so an ad-hoc job travels the identical
+        record/verify/archive path.
+
+        It does NOT touch the plan. An ad-hoc job is created with an EMPTY
+        `frequencyScope`, which is what makes it structurally incapable of
+        advancing `schedule_rule.next_due_on` on completion or of being
+        credited as a prior completion when a planned job is voided; and it is
+        excluded from the schedule-period uniqueness key, so it neither
+        blocks generation of the planned PM for that period nor collides with
+        a second call-out on the same machine the same day.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAdhocJobRequest' }
+      responses:
+        '201':
+          description: Raised
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '403':
+          description: '`/errors/forbidden` - role not permitted; `/errors/out-of-scope` - the asset is outside the caller''s areas'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: |
+            `/errors/validation-failed` - the asset is inactive, its form
+            template has no CURRENT revision, or the assignee cannot work the
+            job; or the mandatory `reason` is shorter than 10 characters.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /jobs/{jobId}/attachments:
     parameters:
       - $ref: '#/components/parameters/JobId'
@@ -1405,6 +1542,54 @@ paths:
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /jobs/{jobId}/parts/{partId}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - name: partId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: Idempotency-Key
+        in: header
+        required: true
+        description: |
+          Client-generated UUIDv7. REQUIRED (PR-API-16) — unlike the `POST`
+          above, this route is reachable from the offline outbox.
+        schema: { type: string, format: uuid }
+    put:
+      tags: [Jobs]
+      operationId: upsertPart
+      summary: Create or update a part consumed on this job, client-keyed
+      description: |
+        Slice 30 — additive to `POST /jobs/{jobId}/parts` above. Unlike that
+        server-assigned id, the CLIENT mints `partId` up front (offline-
+        friendly: a locally-created row and a network retry of the same id
+        are naturally row-idempotent on their own). `Idempotency-Key` is
+        REQUIRED nonetheless (PR-API-16, unlike the `POST` above) — this
+        route is reachable from the offline outbox, and row-idempotency alone
+        would still let a bare retry write a duplicate no-op `audit_event`.
+        `active: false` is the soft-remove path (BUILD_HANDOFF non-negotiable
+        #7 — no physical `DELETE`); a soft-removed part is excluded from
+        reads, canonical serialisation (U-SIG-01) and the PDF.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartUpsertInput' }
+      responses:
+        '200':
+          description: Created or updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PartUsed' }
+        '404':
+          description: '`/errors/not-found` - `partId` is not a UUID, or belongs to a different job'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /jobs/{jobId}/submit:
     parameters:
       - $ref: '#/components/parameters/JobId'
@@ -1412,11 +1597,27 @@ paths:
     post:
       tags: [Jobs]
       operationId: submitJob
-      summary: Submit a completed record for verification
+      summary: Submit a completed record for verification, signed by the performer
       description: |
         Atomic. Rejected if any mandatory item has no result. Never sent as part
         of an outbox batch - all preceding mutations for the job must be
         acknowledged first.
+
+        Slice 18-WORKFLOW: carries the PERFORMER'S DRAWN SIGNATURE
+        (`drawnSignature`, REQUIRED). The plant's process is "completed work -
+        team member will sign and submit to team lead for checks"; the paper
+        forms carry three signatures and the system previously captured two.
+        Produces a stage-0 `approval_step` with `action = SUBMITTED` carrying
+        the encrypted drawn signature PLUS a content-bound Ed25519 signature
+        over the canonical record (ADR-010, the same mechanism
+        `POST /jobs/{jobId}/verify` uses), so the assertion "I did this work"
+        commits to the record that was submitted and is verified by
+        `GET /records/{recordId}/integrity`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitJobRequest' }
       responses:
         '200':
           description: Submitted and routed to the verification queue
@@ -2611,8 +2812,12 @@ components:
 
     RoleCode:
       type: string
-      description: The closed set `role.code` holds — seeded by migration, not created through the API (UR-073).
-      enum: [MAINTAINER, TEAM_LEADER, ENGINEER, DOC_CONTROLLER, ADMIN, AUDITOR]
+      description: |
+        The closed set `role.code` holds — seeded by migration, not created
+        through the API (UR-073). `PLANNER` is the slice-18-WORKFLOW addition
+        (the maintenance planner who plans the PM schedule and raises work);
+        it is ADDITIVE — no member was removed or renamed.
+      enum: [MAINTAINER, PLANNER, TEAM_LEADER, ENGINEER, DOC_CONTROLLER, ADMIN, AUDITOR]
 
     Role:
       type: object
@@ -2694,10 +2899,20 @@ components:
 
     ScheduleRule:
       type: object
-      required: [id, assetId, frequency, intervalMonths, anchorDate, nextDueOn, active]
+      required: [id, assetDocumentId, assetId, frequency, intervalMonths, anchorDate, nextDueOn, active]
       properties:
         id: { type: string, format: uuid }
-        assetId: { type: string, format: uuid }
+        assetDocumentId:
+          type: string
+          format: uuid
+          description: |
+            Slice 27-ASSETDOC. A rule hangs off a DOCUMENT, not a machine —
+            that is what lets one machine carry a monthly pH-meter check AND
+            its monthly preventive maintenance.
+        assetId:
+          type: string
+          format: uuid
+          description: Derived from the document. Kept so every existing reader still works.
         frequency: { $ref: '#/components/schemas/Frequency' }
         intervalMonths: { type: integer, examples: [1, 3, 6, 12] }
         anchorDate: { type: string, format: date }
@@ -2710,6 +2925,15 @@ components:
       type: object
       required: [frequency, nextDueOn, adjustedReason]
       properties:
+        assetDocumentId:
+          type: string
+          format: uuid
+          description: |
+            Slice 27-ASSETDOC. Optional only where there is nothing to choose —
+            a machine carrying one document. Where it carries several, this is
+            REQUIRED: `(assetId, frequency)` no longer identifies a rule, and
+            the server returns 422 rather than adjusting an arbitrary
+            document's schedule.
         frequency: { $ref: '#/components/schemas/Frequency' }
         nextDueOn: { type: string, format: date }
         adjustedReason: { type: string, minLength: 10 }
@@ -2740,26 +2964,30 @@ components:
         active: { type: boolean }
 
     AssetType:
+      # Slice 27-ASSETDOC removed `formTemplateId`. It was UNIQUE, which made
+      # the machine->form relation one-to-one in BOTH directions: a machine
+      # family could hold one document, and a document could serve one machine
+      # family. An asset type is now purely the machine-family grouping (the
+      # approval route and the lead time); the route from a machine to a form
+      # is `asset_document` — see AssetDocument.
       type: object
-      required: [id, code, name, formTemplateId, approvalRouteId, leadTimeDays, active]
+      required: [id, code, name, approvalRouteId, leadTimeDays, active]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
         name: { type: string }
         description: { type: [string, 'null'] }
-        formTemplateId: { type: string, format: uuid, description: One form_template per asset type (1:1) }
         approvalRouteId: { type: string, format: uuid }
         leadTimeDays: { type: integer }
         active: { type: boolean }
 
     AssetTypeCreate:
       type: object
-      required: [code, name, formTemplateId, approvalRouteId]
+      required: [code, name, approvalRouteId]
       properties:
         code: { type: string, minLength: 1, maxLength: 50 }
         name: { type: string, minLength: 1 }
         description: { type: string }
-        formTemplateId: { type: string, format: uuid }
         approvalRouteId: { type: string, format: uuid }
         leadTimeDays: { type: integer, minimum: 1 }
 
@@ -2771,6 +2999,72 @@ components:
         leadTimeDays: { type: integer, minimum: 1 }
         active: { type: boolean }
 
+    AssetDocument:
+      # Slice 27-ASSETDOC. `title`, `resolvedTitle` and `titleHasFillableRun`
+      # are DERIVED per response from the template's current title, never
+      # stored — so a revision that changes the title stays correct. Slice
+      # 23-PDFA freezes the rendered result at archive, so a signed record
+      # keeps the title it was signed under.
+      type: object
+      required:
+        [id, assetId, formTemplateId, documentNumber, title, resolvedTitle,
+         titleHasFillableRun, machineNumber, active]
+      properties:
+        id: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        formTemplateId: { type: string, format: uuid }
+        documentNumber: { type: string, examples: ['CE 95 020 00 03'] }
+        title:
+          type: string
+          description: The template's stored title, blank and all.
+          examples: ['KNS Wire Bond Preventive Maintenance Record KW___']
+        resolvedTitle:
+          type: string
+          description: |
+            The title with `machineNumber` substituted into its blank. With no
+            machineNumber the blank stays intact, exactly as the paper form
+            reads before someone writes on it.
+          examples: ['KNS Wire Bond Preventive Maintenance Record KW13']
+        titleHasFillableRun:
+          type: boolean
+          description: |
+            Whether the title carries a run of two or more underscores. The
+            admin screen keys its form-number field off this, so an admin is
+            never offered a box that does nothing and can never believe they
+            have labelled a form when they have not. True for 8 of the 12 real
+            templates; false for the fixed EP01/PM01 titles and the two with no
+            machine designation at all.
+        machineNumber:
+          type: [string, 'null']
+          description: |
+            Fills the blank. NULL is always valid and never a validation error.
+          examples: ['13']
+        active: { type: boolean }
+
+    AssetDocumentCreate:
+      type: object
+      required: [formTemplateId]
+      properties:
+        formTemplateId: { type: string, format: uuid }
+        machineNumber:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 50
+          description: |
+            Never required, whatever the title looks like. Supplied for a title
+            with no blank it is simply stored and has nothing to substitute
+            into (owner, 2026-07-29: "Is ok some forms are already pre updated
+            just allow user to choose").
+
+    AssetDocumentUpdate:
+      type: object
+      properties:
+        machineNumber: { type: [string, 'null'], minLength: 1, maxLength: 50 }
+        active:
+          type: boolean
+          description: |
+            `false` retires the document — the only removal there is (INV-16).
+
     FormTemplate:
       type: object
       required: [id, documentNumber, title, active]
@@ -2779,7 +3073,10 @@ components:
         documentNumber: { type: string, examples: ['CE 95 020 00 01'] }
         title: { type: string }
         active: { type: boolean }
-        assetTypeId: { type: [string, 'null'], format: uuid }
+        # Slice 27-ASSETDOC removed `assetTypeId` — the reverse of
+        # `asset_type.form_template_id UNIQUE`. A document no longer belongs to
+        # one machine family; which machines carry it is
+        # GET /assets/{assetId}/documents.
         currentRevisionId:
           type: [string, 'null']
           format: uuid
@@ -2797,7 +3094,7 @@ components:
       required: [id, code, name, active]
       properties:
         id: { type: string, format: uuid }
-        code: { type: string, examples: ['SINGLE_STAGE_TL_OR_ENG'] }
+        code: { type: string, examples: ['TWO_STAGE_TL_THEN_ENG'] }
         name: { type: string }
         active: { type: boolean }
 
@@ -2909,6 +3206,13 @@ components:
         jobNumber: { type: string, examples: [PM-2026-000431] }
         assetId: { type: string, format: uuid }
         assetCode: { type: string }
+        assetDocumentId:
+          type: string
+          format: uuid
+          description: |
+            Slice 27-ASSETDOC. WHICH of the machine's documents this job
+            records. A machine may carry several, so `assetId` alone no longer
+            identifies the form the record belongs to.
         documentNumber: { type: string }
         revisionCode: { type: string }
         frequency: { $ref: '#/components/schemas/Frequency' }
@@ -2920,6 +3224,15 @@ components:
         status: { $ref: '#/components/schemas/JobStatus' }
         assignedTo: { type: [string, 'null'], format: uuid }
         assignedToName: { type: [string, 'null'] }
+        isAdhoc:
+          type: boolean
+          description: |
+            UR-028 - raised OFF-PLAN rather than generated from the
+            maintenance schedule (slice 18-WORKFLOW). An ad-hoc job satisfies
+            no schedule period and is EXCLUDED from UR-067 plan compliance;
+            `/reports/overdue` and `/reports/pending` deliberately keep ad-hoc
+            rows (an overdue breakdown is real outstanding work), so this flag
+            is what stops those figures being ambiguous.
 
     Job:
       allOf:
@@ -3003,6 +3316,16 @@ components:
         quantity: { type: number, exclusiveMinimum: 0 }
         remarks: { type: [string, 'null'] }
 
+    PartUpsertInput:
+      type: object
+      required: [description, quantity]
+      properties:
+        partNo: { type: [string, 'null'] }
+        description: { type: string, minLength: 1 }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        remarks: { type: [string, 'null'] }
+        active: { type: boolean, default: true }
+
     PartUsed:
       type: object
       required: [id, description, quantity]
@@ -3074,6 +3397,73 @@ components:
           format: uuid
           description: The user this job is (re)assigned to.
 
+    SubmitJobRequest:
+      # Mirrors shared/src/job.ts `submitJobRequestSchema` exactly (contract
+      # test pins keys + required-ness both directions).
+      type: object
+      required: [drawnSignature]
+      properties:
+        drawnSignature:
+          type: string
+          description: |
+            The PERFORMER's signature (slice 18-WORKFLOW). Base64 PNG
+            data-URL (`data:image/png;base64,...`, or bare base64) captured
+            by the SAME on-system signature pad the verifier stages use -
+            stylus, finger and mouse through one pointer-event path.
+            MANDATORY: 422 (`/errors/validation-failed`) if absent, 422
+            (`/errors/attachment-rejected`) if it is not a valid PNG
+            (magic-byte check, S-30-style). Stored ENCRYPTED on
+            `approval_step.drawn_signature_ct` (field-encryption, PR-106),
+            never returned by any read path and never written to a log or an
+            audit payload.
+          examples: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...']
+
+    CreateAdhocJobRequest:
+      # Mirrors shared/src/job.ts `createAdhocJobRequestSchema` exactly
+      # (contract test pins keys + required-ness both directions).
+      type: object
+      required: [assetId, frequency, reason]
+      properties:
+        assetId:
+          type: string
+          format: uuid
+          description: The machine the work is being raised against.
+        assetDocumentId:
+          type: string
+          format: uuid
+          description: |
+            Slice 27-ASSETDOC. WHICH of the machine's documents this off-plan
+            work is recorded on — the document decides which checklist is
+            frozen onto the job. Optional only where the machine carries
+            exactly one active document; where it carries several the server
+            returns 422 rather than picking one.
+        frequency:
+          $ref: '#/components/schemas/Frequency'
+          description: |
+            Which depth of the frozen checklist is being performed. Labels
+            the record; it does NOT make the job count against the plan (the
+            job is created with an empty `frequencyScope`).
+        reason:
+          type: string
+          minLength: 10
+          description: |
+            Why this work is being raised off-plan. MANDATORY and audited
+            (UR-028), and enforced by the database too
+            (`job_adhoc_reason_length_chk`), the same way void (INV-12) and
+            return (INV-13) reasons are.
+        dueOn:
+          type: string
+          format: date
+          description: '`YYYY-MM-DD`. Defaults to today - the work is being raised now.'
+        assigneeId:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            Optional. When supplied the job is born ASSIGNED to this user,
+            who must satisfy the same rules `POST /jobs/{jobId}/assign`
+            applies (active, holds a result-recording role, can reach the
+            job's area) - otherwise 422.
+
     VerifyJobRequest:
       type: object
       # NOTE (slice 7 code review, finding C): `drawnSignature` is REQUIRED
@@ -3116,7 +3506,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/JobSummary'
         - type: object
-          required: [submittedAt, ageHours, escalated]
+          required: [submittedAt, ageHours, escalated, stageOrdinal, stageCount, stageLabel]
           properties:
             submittedAt: { type: string, format: date-time }
             submittedByName: { type: string }
@@ -3126,6 +3516,20 @@ components:
               type: [string, 'null']
               format: uuid
               description: The delegator's user id (PR-076) when this entry is present because of an active delegation, not the caller's own eligibility.
+            stageOrdinal:
+              type: integer
+              minimum: 1
+              description: The approval stage this record is waiting at (the delivered route is two stages — Team Leader then Engineer).
+              examples: [1]
+            stageCount:
+              type: integer
+              minimum: 1
+              description: How many stages the record's approval route has, so a client can render "stage 1 of 2" without a second lookup.
+              examples: [2]
+            stageLabel:
+              type: string
+              description: The administrator-configured `approval_stage.label` for that stage, verbatim (ADR-011 route-as-data).
+              examples: ['Verified By (Workshop Team Leader)']
 
     Delegation:
       type: object
@@ -3320,7 +3724,7 @@ components:
     ComplianceReportRow:
       type: object
       required:
-        [areaId, areaCode, dueCount, completedOnTimeCount, completedLateCount, notCompletedCount, compliancePercent]
+        [areaId, areaCode, dueCount, completedOnTimeCount, completedLateCount, notCompletedCount, adhocExcludedCount, compliancePercent]
       properties:
         areaId: { type: [string, 'null'], format: uuid }
         areaCode: { type: [string, 'null'] }
@@ -3328,6 +3732,14 @@ components:
         completedOnTimeCount: { type: integer }
         completedLateCount: { type: integer }
         notCompletedCount: { type: integer }
+        adhocExcludedCount:
+          type: integer
+          description: |
+            Slice 18-WORKFLOW. Ad-hoc jobs (UR-028) due in the window that were
+            EXCLUDED from every bucket above - UR-067 measures the maintenance
+            PLAN, and off-plan work was never due under it. Reported so the
+            exclusion is visible and the figure reconciles against a raw job
+            count (AC-18).
         compliancePercent: { type: number }
 
     ComplianceReport:

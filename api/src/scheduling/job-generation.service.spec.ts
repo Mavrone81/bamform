@@ -23,14 +23,22 @@ function makeRule(
     intervalMonths: overrides.intervalMonths ?? 6,
     nextDueOn: overrides.nextDueOn ?? new Date('2020-01-01T00:00:00Z'), // long overdue
     active: true,
-    asset: {
-      id: 'asset-1',
+    // Slice 27-ASSETDOC: a rule reaches its machine THROUGH its document, and
+    // the form template now hangs off the document rather than the asset type.
+    assetDocument: {
+      id: 'doc-1',
+      formTemplateId: 'ft-1',
       active: true,
-      status: 'active',
-      assetType: {
-        formTemplateId: 'ft-1',
-        approvalRouteId: 'route-1',
-        leadTimeDays: overrides.leadTimeDays ?? 30,
+      asset: {
+        id: 'asset-1',
+        active: true,
+        status: 'active',
+        assetType: {
+          // No `formTemplateId` — the approval route and lead time are all the
+          // asset type still contributes.
+          approvalRouteId: 'route-1',
+          leadTimeDays: overrides.leadTimeDays ?? 30,
+        },
       },
     },
   };
@@ -78,7 +86,7 @@ function fakeAudit() {
 }
 
 describe('JobGenerationService — branches not reachable via a single real-Postgres fixture', () => {
-  it('a due rule whose asset type has no CURRENT template revision is skipped, not errored', async () => {
+  it('a due rule whose DOCUMENT has no CURRENT template revision is skipped, not errored', async () => {
     const prisma = fakePrisma({ revision: null });
     const service = new JobGenerationService(prisma as never, fakeAudit() as never);
 

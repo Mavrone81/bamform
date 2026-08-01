@@ -83,6 +83,15 @@ jobs:
       # reasoning as the gate above, higher stakes.
       - name: Android shell — update channel security + release-manifest anti-drift
         run: node scripts/ci/assert-shell-update-contract.mjs
+      # Slice 22-SELFUPDATE / review S-1. The whole self-update mechanism rests
+      # on `sw.js` differing between deploys, and for the whole of that slice
+      # it silently did NOT on the production deployment — VITE_APP_VERSION is
+      # pinned to `local` there, so two builds from different source produced a
+      # byte-identical worker and no deployed client could ever update. Every
+      # other gate in this file passed throughout. This one builds twice, the
+      # way the droplet builds, and fails if the worker does not change.
+      - name: Service worker changes between builds (self-update cannot go inert)
+        run: bash scripts/ci/assert-sw-changes-per-build.sh
 
   # ---------------------------------------------------------------- 2
   secret-scan:
@@ -228,6 +237,17 @@ jobs:
         run: npm run test:route-coverage
       - name: Every collection endpoint applies area scoping (C-08)
         run: npm run test:scope-coverage
+      # Slice 27-ASSETDOC review m-3. `web/src/api/generated/openapi-types.ts` is
+      # generated FROM api/openapi.yaml and committed, but nothing regenerated it
+      # or compared it — so an API change could (and did) land leaving the
+      # committed types silently stale. Stale types are worse than absent ones:
+      # the web build keeps compiling against a contract the server no longer
+      # serves. This fails the build instead.
+      - name: Generated API types match the contract
+        run: |
+          npm run gen:api-types
+          git diff --exit-code web/src/api/generated \
+            || { echo "::error::web/src/api/generated is stale — run 'npm run gen:api-types' and commit the result"; exit 1; }
 
   # ---------------------------------------------------------------- 6
   security:

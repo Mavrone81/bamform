@@ -14,6 +14,11 @@ export const JOB_SUMMARY_INCLUDE = {
 
 export const JOB_FULL_INCLUDE = {
   asset: true,
+  // Slice 29 M-4 — the admin-filled machine number lives on the job's
+  // asset_document; the signed/archived PDF resolves the fillable run in the
+  // template title against it (`pdf-record-assembly.service.ts`). `Job.
+  // assetDocumentId` is a required FK, so `assetDocument` is always present.
+  assetDocument: true,
   templateRevision: {
     include: {
       formTemplate: true,
@@ -23,7 +28,11 @@ export const JOB_FULL_INCLUDE = {
   },
   itemResults: true,
   measurementResults: true,
-  partsUsed: true,
+  // Slice 30 — soft-removed parts (active=false) never reach a read, the
+  // canonical signed record, or the PDF. One filter here covers every
+  // JobFullRow consumer (DRY), same reasoning as the frozen-revision
+  // items/measurements `where: { active: true }` above.
+  partsUsed: { where: { active: true } },
   attachments: true,
   // Slice 7 — never includes the encrypted drawn-signature bytes in a
   // read path; `mappers.ts#toApprovalStep` maps only the non-personal

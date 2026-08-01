@@ -1,0 +1,79 @@
+-- BamForm — slice 26-TWOSTAGE, review fix M1. Forward-only, additive DDL.
+--
+-- Reversal:
+--   ALTER TABLE "approval_step" DROP COLUMN "stage_label";
+--   (Renderers already fall back to their built-in captions when the column
+--   is NULL, so dropping it degrades gracefully rather than breaking a read.)
+--
+-- No audit_event row: this migration adds a column and changes no data. The
+-- UR-076 / DBD §10.1 rule is that migrations which TOUCH RECORDS write one;
+-- asserting a record change that did not happen would be worse than silence.
+--
+-- ============================================================ Why
+--
+-- The caption on a verification signature existed in THREE independent
+-- copies, and they had drifted:
+--
+--   approval_stage.label (stage 2, live)     'Verified By (Supervisor / Engineer)'
+--   web/src/screens/RecordReview.tsx         'Verified By (Engineer)'
+--   api/src/pdf/pdf-html-template.ts         'Verified By (Engineer)'
+--
+-- The paper form being replaced reads "Verified By: (Workshop Supervisor/Engr)"
+-- (scripts/template-load/fixtures/doc4-manual-transcription.json), so the
+-- configured label is the faithful one and both hard-coded copies had drifted
+-- away from it. Slice 26 made the divergence visible by rendering the
+-- configured label on the verifier queue: a verifier would read one caption on
+-- the queue card, a second on the record they open, and a third on the
+-- archived PDF — which is the ISO-13485 controlled record of that signature.
+-- A controlled record must not misname the stage it records.
+--
+-- ---- Why a SNAPSHOT and not a join --------------------------------------
+--
+-- The obvious fix — join `approval_stage.label` at render time — is wrong.
+-- Routes are DATA (ADR-011): an administrator may relabel a stage at any
+-- time, and a live join would retroactively rewrite the caption on records
+-- ALREADY ARCHIVED AND SIGNED. That is exactly the "a template edit rewrites
+-- history" defect slice 23-PDFA exists to remove; re-introducing it on the
+-- signature block would be worse, because the signature block is the part an
+-- auditor reads to learn WHO attested WHAT.
+--
+-- So the label is captured onto the step in the same transaction that writes
+-- the step and its content-bound signature, and never read from the route
+-- again. `approval_step` is append-only (INV-11; bamform_app holds SELECT +
+-- INSERT only, UPDATE revoked in grants.sql) — a write-once-at-insert column
+-- fits that grain exactly, and the existing table-level grants cover it with
+-- no grants.sql change.
+--
+-- ---- Scope of the column -------------------------------------------------
+--
+-- Populated for VERIFICATION signatures only, where the caption IS the
+-- configured stage's label. NULL for every other action: the stage-0
+-- performer submission, and return/recall/void, whose captions are derived
+-- from WHAT THE ACTION IS ("Recalled By Submitter", "Voided By") and depend
+-- on no route configuration. Renderers consult the snapshot only on the
+-- VERIFIED branch, so a stray value can never turn a rejection into something
+-- that reads like an approval.
+--
+-- ---- No backfill ---------------------------------------------------------
+--
+-- Deliberately nullable with no backfill. Production has ZERO archived
+-- records (owner, 2026-07-29: 3 scheduled, 2 voided, 1 in progress), so there
+-- is no history to reconstruct, and inventing a label for a signature taken
+-- before the column existed would be fabricating provenance. Both renderers
+-- fall back to their existing hard-coded map when it is NULL, so pre-existing
+-- and test-fixture rows keep rendering exactly as they do today.
+--
+-- ---- Not part of the signed content -------------------------------------
+--
+-- `canonical-job-record.ts` builds the signed payload from an explicit field
+-- list (id, stageOrdinal, action, actorId, onBehalfOfId, reason, actedAt).
+-- This column is NOT added to it: the signature already binds `stageOrdinal`,
+-- which is what identifies the stage; the label is how that stage is spelled
+-- for a human. Adding it would invalidate every signature ever produced and
+-- change the meaning of GET /records/{id}/integrity, for no gain in what the
+-- signature actually attests.
+
+ALTER TABLE "approval_step" ADD COLUMN "stage_label" TEXT;
+
+COMMENT ON COLUMN "approval_step"."stage_label" IS
+  'Slice 26-TWOSTAGE M1: approval_stage.label as it read WHEN THIS STEP WAS SIGNED, captured in the signing transaction. Write-once (INV-11 append-only). NULL for non-verification actions, whose caption comes from the action itself. Never re-read from approval_stage — an administrator relabelling a stage must not rewrite an archived record.';

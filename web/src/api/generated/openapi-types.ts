@@ -570,6 +570,92 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/assets/{assetId}/documents': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    /**
+     * The preventive-maintenance documents this machine carries
+     * @description Slice 27-ASSETDOC. The owner's process step 4 — "he will go to his
+     *     assigned machine and select the form to start" — reads this. Open to
+     *     every authenticated user who can see the machine (role-gating it would
+     *     remove read access from MAINTAINER, the role that most needs it);
+     *     403 (`/errors/out-of-scope`), not a silent 404, when the machine exists
+     *     but is outside the caller's area scope.
+     *
+     *     DEACTIVATED documents are included: a machine's history has to stay
+     *     visible. It is the scheduler that stops raising work for them.
+     */
+    get: operations['getAssetDocuments'];
+    put?: never;
+    /**
+     * Tag a preventive-maintenance document to this machine
+     * @description ADMIN only — the owner's process step 2 ("Admin will log in to setup
+     *     the machine tagged with which preventive Maintenance document").
+     *
+     *     409 if this machine already carries that document; a machine may carry
+     *     any number of DIFFERENT documents, and any number of machines may carry
+     *     the same one.
+     */
+    post: operations['tagAssetDocument'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/asset-documents/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Change a tagged document's form number, or deactivate it
+     * @description ADMIN only. There is deliberately NO DELETE: INV-16 forbids DELETE on
+     *     record tables, and a document that has already generated jobs must stay
+     *     resolvable. `active: false` stops future job generation and leaves the
+     *     history intact.
+     */
+    patch: operations['updateAssetDocument'];
+    trace?: never;
+  };
+  '/approval-routes': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List approval routes
+     * @description Slice 13-TL. Read-only, seeded reference data (PR-DBD-09) - resolves
+     *     the approvalRouteId that POST /asset-types requires. Routes are
+     *     never created via the API.
+     */
+    get: operations['listApprovalRoutes'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/templates': {
     parameters: {
       query?: never;
@@ -584,7 +670,15 @@ export interface paths {
      */
     get: operations['listTemplates'];
     put?: never;
-    post?: never;
+    /**
+     * Create a form template shell (BAMFORM-TLP-001 template load)
+     * @description ENGINEER or DOC_CONTROLLER. Slice 13-TL - exists solely for the
+     *     TLP-001 load tooling (PR-TLP-07: the load is an authenticated,
+     *     audited operation through the real API, never a DB migration).
+     *     Content (items, measurements, standing content) still arrives only
+     *     through the revision-authoring endpoints below.
+     */
+    post: operations['createTemplate'];
     delete?: never;
     options?: never;
     head?: never;
@@ -930,6 +1024,42 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/jobs/adhoc': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Raise a job against an asset outside the maintenance plan
+     * @description UR-028/PR-058. Roles: PLANNER, TEAM_LEADER, ENGINEER, ADMIN.
+     *     Area-scoped (PR-API-10) - a caller with `user_area_scope` rows may
+     *     only raise work on assets inside them.
+     *
+     *     The asset type's CURRENT template revision is FROZEN onto the job
+     *     exactly as a scheduler-generated job's is (DP-3/PR-049), the same
+     *     `PM-{year}-{sequence}` number is drawn, and the asset type's approval
+     *     route is attached - so an ad-hoc job travels the identical
+     *     record/verify/archive path.
+     *
+     *     It does NOT touch the plan. An ad-hoc job is created with an EMPTY
+     *     `frequencyScope`, which is what makes it structurally incapable of
+     *     advancing `schedule_rule.next_due_on` on completion or of being
+     *     credited as a prior completion when a planned job is voided; and it is
+     *     excluded from the schedule-period uniqueness key, so it neither
+     *     blocks generation of the planned PM for that period nor collides with
+     *     a second call-out on the same machine the same day.
+     */
+    post: operations['createAdhocJob'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/jobs/{jobId}/attachments': {
     parameters: {
       query?: never;
@@ -1014,6 +1144,44 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/jobs/{jobId}/parts/{partId}': {
+    parameters: {
+      query?: never;
+      header: {
+        /**
+         * @description Client-generated UUIDv7. REQUIRED (PR-API-16) — unlike the `POST`
+         *     above, this route is reachable from the offline outbox.
+         */
+        'Idempotency-Key': string;
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+        partId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Create or update a part consumed on this job, client-keyed
+     * @description Slice 30 — additive to `POST /jobs/{jobId}/parts` above. Unlike that
+     *     server-assigned id, the CLIENT mints `partId` up front (offline-
+     *     friendly: a locally-created row and a network retry of the same id
+     *     are naturally row-idempotent on their own). `Idempotency-Key` is
+     *     REQUIRED nonetheless (PR-API-16, unlike the `POST` above) — this
+     *     route is reachable from the offline outbox, and row-idempotency alone
+     *     would still let a bare retry write a duplicate no-op `audit_event`.
+     *     `active: false` is the soft-remove path (BUILD_HANDOFF non-negotiable
+     *     #7 — no physical `DELETE`); a soft-removed part is excluded from
+     *     reads, canonical serialisation (U-SIG-01) and the PDF.
+     */
+    put: operations['upsertPart'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/jobs/{jobId}/submit': {
     parameters: {
       query?: never;
@@ -1029,10 +1197,21 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Submit a completed record for verification
+     * Submit a completed record for verification, signed by the performer
      * @description Atomic. Rejected if any mandatory item has no result. Never sent as part
      *     of an outbox batch - all preceding mutations for the job must be
      *     acknowledged first.
+     *
+     *     Slice 18-WORKFLOW: carries the PERFORMER'S DRAWN SIGNATURE
+     *     (`drawnSignature`, REQUIRED). The plant's process is "completed work -
+     *     team member will sign and submit to team lead for checks"; the paper
+     *     forms carry three signatures and the system previously captured two.
+     *     Produces a stage-0 `approval_step` with `action = SUBMITTED` carrying
+     *     the encrypted drawn signature PLUS a content-bound Ed25519 signature
+     *     over the canonical record (ADR-010, the same mechanism
+     *     `POST /jobs/{jobId}/verify` uses), so the assertion "I did this work"
+     *     commits to the record that was submitted and is verified by
+     *     `GET /records/{recordId}/integrity`.
      */
     post: operations['submitJob'];
     delete?: never;
@@ -1928,10 +2107,20 @@ export interface components {
       active?: boolean;
     };
     /**
-     * @description The closed set `role.code` holds — seeded by migration, not created through the API (UR-073).
+     * @description The closed set `role.code` holds — seeded by migration, not created
+     *     through the API (UR-073). `PLANNER` is the slice-18-WORKFLOW addition
+     *     (the maintenance planner who plans the PM schedule and raises work);
+     *     it is ADDITIVE — no member was removed or renamed.
      * @enum {string}
      */
-    RoleCode: 'MAINTAINER' | 'TEAM_LEADER' | 'ENGINEER' | 'DOC_CONTROLLER' | 'ADMIN' | 'AUDITOR';
+    RoleCode:
+      | 'MAINTAINER'
+      | 'PLANNER'
+      | 'TEAM_LEADER'
+      | 'ENGINEER'
+      | 'DOC_CONTROLLER'
+      | 'ADMIN'
+      | 'AUDITOR';
     Role: {
       /** Format: uuid */
       id: string;
@@ -1992,7 +2181,17 @@ export interface components {
     ScheduleRule: {
       /** Format: uuid */
       id: string;
-      /** Format: uuid */
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. A rule hangs off a DOCUMENT, not a machine —
+       *     that is what lets one machine carry a monthly pH-meter check AND
+       *     its monthly preventive maintenance.
+       */
+      assetDocumentId: string;
+      /**
+       * Format: uuid
+       * @description Derived from the document. Kept so every existing reader still works.
+       */
       assetId: string;
       frequency: components['schemas']['Frequency'];
       /**
@@ -2012,6 +2211,15 @@ export interface components {
       active: boolean;
     };
     ScheduleAdjust: {
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. Optional only where there is nothing to choose —
+       *     a machine carrying one document. Where it carries several, this is
+       *     REQUIRED: `(assetId, frequency)` no longer identifies a rule, and
+       *     the server returns 422 rather than adjusting an arbitrary
+       *     document's schedule.
+       */
+      assetDocumentId?: string;
       frequency: components['schemas']['Frequency'];
       /** Format: date */
       nextDueOn: string;
@@ -2044,11 +2252,6 @@ export interface components {
       code: string;
       name: string;
       description?: string | null;
-      /**
-       * Format: uuid
-       * @description One form_template per asset type (1:1)
-       */
-      formTemplateId: string;
       /** Format: uuid */
       approvalRouteId: string;
       leadTimeDays: number;
@@ -2059,8 +2262,6 @@ export interface components {
       name: string;
       description?: string;
       /** Format: uuid */
-      formTemplateId: string;
-      /** Format: uuid */
       approvalRouteId: string;
       leadTimeDays?: number;
     };
@@ -2070,6 +2271,59 @@ export interface components {
       leadTimeDays?: number;
       active?: boolean;
     };
+    AssetDocument: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      assetId: string;
+      /** Format: uuid */
+      formTemplateId: string;
+      /** @example CE 95 020 00 03 */
+      documentNumber: string;
+      /**
+       * @description The template's stored title, blank and all.
+       * @example KNS Wire Bond Preventive Maintenance Record KW___
+       */
+      title: string;
+      /**
+       * @description The title with `machineNumber` substituted into its blank. With no
+       *     machineNumber the blank stays intact, exactly as the paper form
+       *     reads before someone writes on it.
+       * @example KNS Wire Bond Preventive Maintenance Record KW13
+       */
+      resolvedTitle: string;
+      /**
+       * @description Whether the title carries a run of two or more underscores. The
+       *     admin screen keys its form-number field off this, so an admin is
+       *     never offered a box that does nothing and can never believe they
+       *     have labelled a form when they have not. True for 8 of the 12 real
+       *     templates; false for the fixed EP01/PM01 titles and the two with no
+       *     machine designation at all.
+       */
+      titleHasFillableRun: boolean;
+      /**
+       * @description Fills the blank. NULL is always valid and never a validation error.
+       * @example 13
+       */
+      machineNumber: string | null;
+      active: boolean;
+    };
+    AssetDocumentCreate: {
+      /** Format: uuid */
+      formTemplateId: string;
+      /**
+       * @description Never required, whatever the title looks like. Supplied for a title
+       *     with no blank it is simply stored and has nothing to substitute
+       *     into (owner, 2026-07-29: "Is ok some forms are already pre updated
+       *     just allow user to choose").
+       */
+      machineNumber?: string | null;
+    };
+    AssetDocumentUpdate: {
+      machineNumber?: string | null;
+      /** @description `false` retires the document — the only removal there is (INV-16). */
+      active?: boolean;
+    };
     FormTemplate: {
       /** Format: uuid */
       id: string;
@@ -2077,13 +2331,24 @@ export interface components {
       documentNumber: string;
       title: string;
       active: boolean;
-      /** Format: uuid */
-      assetTypeId?: string | null;
       /**
        * Format: uuid
        * @description Resolves to null if no revision has ever been approved
        */
       currentRevisionId?: string | null;
+    };
+    CreateTemplateRequest: {
+      /** @example CE 95 020 00 01 */
+      documentNumber: string;
+      title: string;
+    };
+    ApprovalRoute: {
+      /** Format: uuid */
+      id: string;
+      /** @example TWO_STAGE_TL_THEN_ENG */
+      code: string;
+      name: string;
+      active: boolean;
     };
     TemplateRevision: {
       /** Format: uuid */
@@ -2186,6 +2451,13 @@ export interface components {
       /** Format: uuid */
       assetId?: string;
       assetCode: string;
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. WHICH of the machine's documents this job
+       *     records. A machine may carry several, so `assetId` alone no longer
+       *     identifies the form the record belongs to.
+       */
+      assetDocumentId?: string;
       documentNumber?: string;
       revisionCode?: string;
       frequency: components['schemas']['Frequency'];
@@ -2197,6 +2469,15 @@ export interface components {
       /** Format: uuid */
       assignedTo?: string | null;
       assignedToName?: string | null;
+      /**
+       * @description UR-028 - raised OFF-PLAN rather than generated from the
+       *     maintenance schedule (slice 18-WORKFLOW). An ad-hoc job satisfies
+       *     no schedule period and is EXCLUDED from UR-067 plan compliance;
+       *     `/reports/overdue` and `/reports/pending` deliberately keep ad-hoc
+       *     rows (an overdue breakdown is real outstanding work), so this flag
+       *     is what stops those figures being ambiguous.
+       */
+      isAdhoc?: boolean;
     };
     Job: components['schemas']['JobSummary'] & {
       draftVersion?: number;
@@ -2263,6 +2544,14 @@ export interface components {
       quantity: number;
       remarks?: string | null;
     };
+    PartUpsertInput: {
+      partNo?: string | null;
+      description: string;
+      quantity: number;
+      remarks?: string | null;
+      /** @default true */
+      active: boolean;
+    };
     PartUsed: {
       /** Format: uuid */
       id: string;
@@ -2315,6 +2604,64 @@ export interface components {
        */
       assigneeId: string;
     };
+    SubmitJobRequest: {
+      /**
+       * @description The PERFORMER's signature (slice 18-WORKFLOW). Base64 PNG
+       *     data-URL (`data:image/png;base64,...`, or bare base64) captured
+       *     by the SAME on-system signature pad the verifier stages use -
+       *     stylus, finger and mouse through one pointer-event path.
+       *     MANDATORY: 422 (`/errors/validation-failed`) if absent, 422
+       *     (`/errors/attachment-rejected`) if it is not a valid PNG
+       *     (magic-byte check, S-30-style). Stored ENCRYPTED on
+       *     `approval_step.drawn_signature_ct` (field-encryption, PR-106),
+       *     never returned by any read path and never written to a log or an
+       *     audit payload.
+       * @example data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...
+       */
+      drawnSignature: string;
+    };
+    CreateAdhocJobRequest: {
+      /**
+       * Format: uuid
+       * @description The machine the work is being raised against.
+       */
+      assetId: string;
+      /**
+       * Format: uuid
+       * @description Slice 27-ASSETDOC. WHICH of the machine's documents this off-plan
+       *     work is recorded on — the document decides which checklist is
+       *     frozen onto the job. Optional only where the machine carries
+       *     exactly one active document; where it carries several the server
+       *     returns 422 rather than picking one.
+       */
+      assetDocumentId?: string;
+      /**
+       * @description Which depth of the frozen checklist is being performed. Labels
+       *     the record; it does NOT make the job count against the plan (the
+       *     job is created with an empty `frequencyScope`).
+       */
+      frequency: components['schemas']['Frequency'];
+      /**
+       * @description Why this work is being raised off-plan. MANDATORY and audited
+       *     (UR-028), and enforced by the database too
+       *     (`job_adhoc_reason_length_chk`), the same way void (INV-12) and
+       *     return (INV-13) reasons are.
+       */
+      reason: string;
+      /**
+       * Format: date
+       * @description `YYYY-MM-DD`. Defaults to today - the work is being raised now.
+       */
+      dueOn?: string;
+      /**
+       * Format: uuid
+       * @description Optional. When supplied the job is born ASSIGNED to this user,
+       *     who must satisfy the same rules `POST /jobs/{jobId}/assign`
+       *     applies (active, holds a result-recording role, can reach the
+       *     job's area) - otherwise 422.
+       */
+      assigneeId?: string | null;
+    };
     VerifyJobRequest: {
       /**
        * @description Base64 PNG data-URL (`data:image/png;base64,...`, or bare
@@ -2346,6 +2693,21 @@ export interface components {
        * @description The delegator's user id (PR-076) when this entry is present because of an active delegation, not the caller's own eligibility.
        */
       onBehalfOf?: string | null;
+      /**
+       * @description The approval stage this record is waiting at (the delivered route is two stages — Team Leader then Engineer).
+       * @example 1
+       */
+      stageOrdinal: number;
+      /**
+       * @description How many stages the record's approval route has, so a client can render "stage 1 of 2" without a second lookup.
+       * @example 2
+       */
+      stageCount: number;
+      /**
+       * @description The administrator-configured `approval_stage.label` for that stage, verbatim (ADR-011 route-as-data).
+       * @example Verified By (Workshop Team Leader)
+       */
+      stageLabel: string;
     };
     Delegation: {
       /** Format: uuid */
@@ -2528,6 +2890,14 @@ export interface components {
       completedOnTimeCount: number;
       completedLateCount: number;
       notCompletedCount: number;
+      /**
+       * @description Slice 18-WORKFLOW. Ad-hoc jobs (UR-028) due in the window that were
+       *     EXCLUDED from every bucket above - UR-067 measures the maintenance
+       *     PLAN, and off-plan work was never due under it. Reported so the
+       *     exclusion is visible and the figure reconciles against a raw job
+       *     count (AC-18).
+       */
+      adhocExcludedCount: number;
       compliancePercent: number;
     };
     ComplianceReport: {
@@ -3439,6 +3809,112 @@ export interface operations {
       422: components['responses']['Problem'];
     };
   };
+  getAssetDocuments: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The machine's tagged documents */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: components['schemas']['AssetDocument'][];
+          };
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  tagAssetDocument: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        assetId: components['parameters']['AssetId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AssetDocumentCreate'];
+      };
+    };
+    responses: {
+      /** @description Tagged */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AssetDocument'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      409: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  updateAssetDocument: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AssetDocumentUpdate'];
+      };
+    };
+    responses: {
+      /** @description Updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AssetDocument'];
+        };
+      };
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  listApprovalRoutes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Active approval routes */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalRoute'][];
+        };
+      };
+      401: components['responses']['Problem'];
+    };
+  };
   listTemplates: {
     parameters: {
       query?: {
@@ -3464,6 +3940,42 @@ export interface operations {
         };
       };
       401: components['responses']['Problem'];
+    };
+  };
+  createTemplate: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateTemplateRequest'];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['FormTemplate'];
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      /** @description Document number already exists (INV-07) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      422: components['responses']['Problem'];
     };
   };
   getTemplate: {
@@ -4011,6 +4523,53 @@ export interface operations {
       422: components['responses']['Problem'];
     };
   };
+  createAdhocJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateAdhocJobRequest'];
+      };
+    };
+    responses: {
+      /** @description Raised */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Job'];
+        };
+      };
+      /** @description `/errors/forbidden` - role not permitted; `/errors/out-of-scope` - the asset is outside the caller's areas */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      404: components['responses']['Problem'];
+      /**
+       * @description `/errors/validation-failed` - the asset is inactive, its form
+       *     template has no CURRENT revision, or the assignee cannot work the
+       *     job; or the mandatory `reason` is shorter than 10 characters.
+       */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+    };
+  };
   uploadAttachment: {
     parameters: {
       query?: never;
@@ -4104,6 +4663,50 @@ export interface operations {
       422: components['responses']['Problem'];
     };
   };
+  upsertPart: {
+    parameters: {
+      query?: never;
+      header: {
+        /**
+         * @description Client-generated UUIDv7. REQUIRED (PR-API-16) — unlike the `POST`
+         *     above, this route is reachable from the offline outbox.
+         */
+        'Idempotency-Key': string;
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+        partId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PartUpsertInput'];
+      };
+    };
+    responses: {
+      /** @description Created or updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PartUsed'];
+        };
+      };
+      /** @description `/errors/not-found` - `partId` is not a UUID, or belongs to a different job */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      409: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
   submitJob: {
     parameters: {
       query?: never;
@@ -4116,7 +4719,11 @@ export interface operations {
       };
       cookie?: never;
     };
-    requestBody?: never;
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SubmitJobRequest'];
+      };
+    };
     responses: {
       /** @description Submitted and routed to the verification queue */
       200: {

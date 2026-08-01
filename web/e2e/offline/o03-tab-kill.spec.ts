@@ -82,7 +82,9 @@ test('O-03: outbox survives the tab being killed mid-drain and resumes on reopen
   );
 
   await page2.getByText('PM-2026-000431').click();
-  await expect(page2.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  await expect(page2.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 10_000,
+  });
   expect(server.appliedCount.get(mutationId)).toBe(1); // still exactly once
 });
 
@@ -144,6 +146,8 @@ test('O-03 (true mid-send window): tab killed while the request is still in flig
   const mutationId = (retry.postDataJSON() as { mutations: { id: string }[] }).mutations[0].id;
 
   await page2.getByText('PM-2026-000431').click();
-  await expect(page2.getByRole('button', { name: 'Submit' })).toBeEnabled({ timeout: 10_000 });
+  await expect(page2.getByRole('button', { name: 'Sign and submit' })).toBeEnabled({
+    timeout: 10_000,
+  });
   expect(server.appliedCount.get(mutationId)).toBe(1); // applied exactly once, no duplicate
 });

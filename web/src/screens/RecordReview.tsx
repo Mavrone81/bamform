@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getServices } from '../state/services';
 import { useRouter } from '../router';
 import { stepUp } from '../auth';
+import { useCriticalWork } from '../lib/use-critical-work';
 import { SignaturePad } from '../components/SignaturePad';
 import { StatusBadge } from '../components/StatusBadge';
 import type { components } from '../api/generated/openapi-types';
@@ -10,12 +11,64 @@ type Job = components['schemas']['Job'];
 type ApprovalStep = components['schemas']['ApprovalStep'];
 
 const STAGE_LABELS: Record<number, string> = {
+  // Slice 18-WORKFLOW §1 — stage 0 is the PERFORMER's own signature, not a
+  // verification stage. Without this entry the approval history rendered a
+  // bare "Stage 0", which means nothing to anyone in the plant; this is the
+  // paper form's own wording.
+  0: 'Maintenance Performed By',
   1: 'Verified By (Workshop Team Leader)',
   2: 'Verified By (Engineer)',
 };
 
+/**
+ * Slice 26-TWOSTAGE review fix M1. This map had DRIFTED from the configured
+ * route: `approval_stage.label` for stage 2 reads "Verified By (Supervisor /
+ * Engineer)" — faithful to the paper form's "Verified By: (Workshop
+ * Supervisor/Engr)" — while this file, and the PDF template, said "Verified
+ * By (Engineer)". Slice 26 made that visible by rendering the configured
+ * label on the verifier queue, so a verifier would read one caption on the
+ * queue card and a different one here, one tap later.
+ *
+ * The step now carries the label SNAPSHOTTED when it was signed, and that
+ * wins. The map stays as the fallback for steps with no snapshot (the
+ * performer's stage-0 signature, return/recall/void, and any row written
+ * before the column existed) — a record must never lose its caption.
+ *
+ * Deliberately NOT a live lookup of the current route configuration: an
+ * administrator relabelling a stage must not rewrite what an archived record
+ * says was attested.
+ */
+export function approvalStepCaption(step: ApprovalStep): string {
+  return step.stageLabel ?? STAGE_LABELS[step.stageOrdinal] ?? `Stage ${step.stageOrdinal}`;
+}
+
 function isStepUpRequired(problem: { type?: string } | undefined): boolean {
   return Boolean(problem?.type?.includes('step-up-required'));
+}
+
+/**
+ * Which verification stage this record is awaiting.
+ *
+ * Counts VERIFIED steps only, and only those in the CURRENT submission cycle
+ * — a `RETURNED`/`RECALLED` step supersedes every earlier verification (the
+ * content they signed is about to change), exactly the cycle rule the server
+ * applies in `verification.service.ts` (SYS-8) and its
+ * `approval_step_distinct_stage_verifiers_trg` backstop.
+ *
+ * The previous derivation was `max(stageOrdinal) + 1` over ALL steps, which
+ * read a stage-1 RETURNED step as "stage 1 is complete" and announced
+ * "Stage 2 — needs Engineer" to a reworked record that still needed the team
+ * leader. Slice 18-WORKFLOW's stage-0 performer signature would have been
+ * harmless to that formula, but the formula was already wrong; it is fixed
+ * here rather than built on.
+ */
+export function currentVerificationStage(steps: ApprovalStep[] | undefined): number {
+  const list = steps ?? [];
+  let lastBreak = -1;
+  list.forEach((step, index) => {
+    if (step.action === 'RETURNED' || step.action === 'RECALLED') lastBreak = index;
+  });
+  return list.slice(lastBreak + 1).filter((s) => s.action === 'VERIFIED').length + 1;
 }
 
 const ITEM_RESULT_META: Record<string, { icon: string; tone: 'good' | 'bad' | 'neutral' }> = {
@@ -57,6 +110,18 @@ export function RecordReview({ jobId }: { jobId: string }) {
   const [awaitingStepUp, setAwaitingStepUp] = useState(false);
   const pendingSignatureRef = useRef<string | null>(null);
   const stepUpDialogRef = useRef<HTMLDialogElement | null>(null);
+
+  /**
+   * Slice 22-SELFUPDATE: the verifier's equivalent of the capture screen's
+   * gate. The signature pad, a verify/return in flight, the step-up password
+   * dialog and a typed return reason are all in-memory only — a reload
+   * during any of them makes the verifier do it again, and a reload during
+   * the step-up dialog would discard a password mid-entry.
+   */
+  useCriticalWork(
+    mode !== 'view' || submitting || awaitingStepUp || returnReason.length > 0,
+    'record-review',
+  );
 
   // The step-up panel is a NATIVE modal dialog (review D-3): `showModal()`
   // puts it in the top layer, traps focus inside and makes everything
@@ -189,9 +254,16 @@ export function RecordReview({ jobId }: { jobId: string }) {
   const measurementResultsByMeasurement = new Map(
     (job.measurementResults ?? []).map((r) => [r.templateMeasurementId, r]),
   );
-  const stage = job.approvalSteps?.length
-    ? Math.max(...job.approvalSteps.map((s) => s.stageOrdinal)) + 1
-    : 1;
+  /**
+   * Which verification stage this record is awaiting. Derived from the
+   * VERIFIED steps only — a `SUBMITTED` (stage-0 performer signature, slice
+   * 18-WORKFLOW) or `RETURNED` step is not a completed verification stage
+   * and must not advance the counter. The previous `max(stageOrdinal) + 1`
+   * over ALL steps read a stage-1 RETURNED step as "stage 1 is done" and
+   * announced stage 2 to a reworked record that still needs stage 1 — a
+   * pre-existing defect this slice's stage-0 step would have compounded.
+   */
+  const stage = currentVerificationStage(job.approvalSteps);
   const canAct = job.status === 'SUBMITTED';
 
   return (
@@ -298,8 +370,7 @@ export function RecordReview({ jobId }: { jobId: string }) {
           {job.approvalSteps?.map((step: ApprovalStep) => (
             <div className="approval-step" key={step.id}>
               <p>
-                <strong>{step.action}</strong> —{' '}
-                {STAGE_LABELS[step.stageOrdinal] ?? `Stage ${step.stageOrdinal}`}
+                <strong>{step.action}</strong> — {approvalStepCaption(step)}
               </p>
               <p className="approval-step-when">{new Date(step.actedAt).toLocaleString()}</p>
               {step.onBehalfOfName && (

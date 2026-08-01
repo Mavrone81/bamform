@@ -22,6 +22,7 @@
 | Revision | Date | Details of revision | Revised by | Approved by |
 |---|---|---|---|---|
 | 0.1 | 24 Jul 2026 | Initial draft derived from BAMFORM-PRD-001 §4 | Lead Engineer | _(pending)_ |
+| 0.2 | 29 Jul 2026 | Slice 27-ASSETDOC — §6.8a `asset_document` added; §6.7 `asset_type.form_template_id` removed; §6.14 `schedule_rule` re-keyed to `asset_document_id`; §6.15 `job` gains `asset_document_id` and a composite FK; ERD and §8 index inventory updated | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -116,7 +117,6 @@ erDiagram
     APP_USER ||--o{ DELEGATION : "delegates"
     APP_USER ||--o{ REFRESH_TOKEN : "authenticates"
 
-    ASSET_TYPE ||--|| FORM_TEMPLATE : "governed by"
     ASSET_TYPE ||--o{ ASSET : "classifies"
     ASSET_TYPE ||--o{ APPROVAL_ROUTE : "routed by"
 
@@ -128,7 +128,10 @@ erDiagram
     TEMPLATE_REVISION ||--o{ TEMPLATE_ITEM : "checklist"
     TEMPLATE_REVISION ||--o{ TEMPLATE_MEASUREMENT : "measurements"
 
-    ASSET ||--o{ SCHEDULE_RULE : "scheduled by"
+    ASSET ||--o{ ASSET_DOCUMENT : "carries"
+    FORM_TEMPLATE ||--o{ ASSET_DOCUMENT : "tagged to"
+    ASSET_DOCUMENT ||--o{ SCHEDULE_RULE : "scheduled by"
+    ASSET_DOCUMENT ||--o{ JOB : "satisfied by"
     ASSET ||--o{ JOB : "subject of"
     TEMPLATE_REVISION ||--o{ JOB : "frozen into"
     APP_USER ||--o{ JOB : "assigned to"
@@ -306,10 +309,19 @@ PR-084.
 | `code` | text | N | INT | Unique, e.g. `ASM_WIRE_BOND` |
 | `name` | text | N | INT | e.g. "ASM Wire Bond" |
 | `description` | text | Y | INT | |
-| `form_template_id` | uuid | N | INT | FK → `form_template`; one template per type |
 | `approval_route_id` | uuid | N | INT | FK → `approval_route` |
 | `lead_time_days` | integer | N | INT | Default 30 (PR-057) |
 | `active` | boolean | N | INT | Default `true` |
+
+**Slice 27-ASSETDOC removed `form_template_id`.** It was NOT NULL and **UNIQUE**, which
+made the machine→form relation one-to-one in *both* directions: a machine family could
+hold exactly one document, and a document could serve exactly one machine family. Both are
+contradicted by the owner's 2026 schedule workbook — TE7 needs a monthly pH-meter check
+*and* its monthly preventive maintenance, and CM02/CM03 share `CE 95 030 00 01`.
+
+An `asset_type` is now purely the **machine-family grouping**: the approval route and the
+lead time, which genuinely are family-wide properties. The route from a machine to a form
+is §6.8a `asset_document`.
 
 ---
 
@@ -334,6 +346,47 @@ PR-084.
 
 ---
 
+## 6.8a `asset_document`
+
+*Added by slice 27-ASSETDOC.* The route from a machine to a form, replacing
+`asset_type.form_template_id`.
+
+| Column | Type | Null | Class | Description |
+|---|---|---|---|---|
+| `id` | uuid | N | INT | PK |
+| `asset_id` | uuid | N | INT | FK → `asset` |
+| `form_template_id` | uuid | N | INT | FK → `form_template` |
+| `machine_number` | text | Y | CON | Fills the blank in the template title — "…Record KW___" + "13" → "…Record KW13" |
+| `active` | boolean | N | INT | Deactivation, not deletion (INV-16) |
+
+Unique on `(asset_id, form_template_id)` — the same document is tagged to one machine
+once. Also unique on `(id, asset_id)`, which backs §6.15 `job`'s composite FK.
+
+**Why it exists.** The owner's process step 2 is *"Admin will log in to setup the machine
+tagged with which preventive Maintenance document"*, and step 4 is *"he will go to his
+assigned machine and select the form to start"*. Neither was possible: `asset.asset_type_id
+→ asset_type.form_template_id UNIQUE` gave a machine exactly one form and a form exactly
+one machine family. Measured from the owner's 2026 schedule workbook, **12 machines carry
+more than one document**, and CM02/CM03 — and T8/T69/ST01 — share one.
+
+**Cardinality.** A machine may carry any number of documents; a document may be tagged to
+any number of machines. Both directions were previously forbidden.
+
+**`machine_number` is optional in every case and is never a validation error** (owner,
+2026-07-29: *"Is ok some forms are already pre updated just allow user to choose"*). Left
+NULL, the title renders with its blank intact, exactly as the paper form reads before
+someone writes on it. Supplied for a title with no blank, it is stored and simply has
+nothing to substitute into. Substitution happens **at render, never stored resolved**, so a
+revision that changes the title stays correct; slice 23-PDFA freezes the rendered result at
+archive, so an archived record keeps the title it was signed under.
+
+**Deactivation, never deletion.** INV-16 forbids DELETE on record tables, and a document
+that has generated jobs must remain resolvable. `active = false` stops future job
+generation (`schedule-rule-bootstrap` and `job-generation` both filter on it) and leaves
+every historical record intact.
+
+---
+
 ## 6.9 `form_template`
 
 | Column | Type | Null | Class | Description |
@@ -341,8 +394,19 @@ PR-084.
 | `id` | uuid | N | INT | PK |
 | `document_number` | text | N | CON | **Unique** — `CE 95 020 00 01` (UR-009) |
 | `title` | text | N | CON | e.g. "ASM Wire Bond Preventive Maintenance Record" |
-| `asset_type_id` | uuid | N | INT | FK → `asset_type` |
 | `active` | boolean | N | INT | |
+
+`asset_type_id` is **not implemented**: as slice 1 recorded, DBD §6.9's NOT NULL
+`form_template.asset_type_id` together with §6.7's NOT NULL `asset_type.form_template_id`
+would have been a circular FK with no satisfiable insert order, so `asset_type` was made
+the owning side. Slice 27-ASSETDOC then removed that side too — a document belongs to no
+machine family at all. Which machines carry it is §6.8a `asset_document`.
+
+The `title` may carry a **fillable run** — two or more consecutive underscores, e.g.
+"…Record KW___" — into which `asset_document.machine_number` is substituted **at render**.
+8 of the 12 controlled documents carry one; `EP01` and `PM01` have the number printed
+already, and two have no machine designation at all. Never stored resolved, so a revision
+that changes the title stays correct; slice 23-PDFA freezes the rendered result at archive.
 
 ---
 
@@ -429,7 +493,7 @@ The approval route is data, which is what makes OI-04 a configuration change (PR
 | Column | Type | Null | Class | Description |
 |---|---|---|---|---|
 | `id` | uuid | N | INT | PK |
-| `code` | text | N | INT | e.g. `SINGLE_STAGE_TL_OR_ENG` |
+| `code` | text | N | INT | e.g. `TWO_STAGE_TL_THEN_ENG` |
 | `name` | text | N | INT | |
 | `active` | boolean | N | INT | |
 
@@ -462,16 +526,25 @@ second `approval_stage` row.
 | Column | Type | Null | Class | Description |
 |---|---|---|---|---|
 | `id` | uuid | N | INT | PK |
-| `asset_id` | uuid | N | INT | FK → `asset` |
+| `asset_document_id` | uuid | N | INT | FK → `asset_document` (slice 27; was `asset_id`) |
 | `frequency` | frequency_t | N | INT | |
 | `interval_months` | integer | N | INT | 1, 3, 6, 12 |
-| `anchor_date` | date | N | INT | |
+| `anchor_date` | date | N | INT | From the MACHINE's `schedule_anchor_date` — several documents on one machine share it |
 | `last_completed_on` | date | Y | INT | Updated by PR-055 cascade |
 | `next_due_on` | date | N | INT | Computed by PR-056 |
 | `adjusted_reason` | text | Y | INT | Mandatory when manually moved (UR-025) |
 | `active` | boolean | N | INT | |
 
-Unique on `(asset_id, frequency)`.
+Unique on `(asset_document_id, frequency)`.
+
+**Slice 27-ASSETDOC re-keyed this table** from `asset_id` and `(asset_id, frequency)`. The
+old key meant one schedule per MACHINE per frequency, which was a second, independent
+blocker on the owner's process: even once a machine could carry several documents, TE7's
+monthly pH check and its monthly PM could not both exist. Measured from the 2026 workbook,
+**9 machine+frequency combinations need two or more documents at the same interval**.
+
+Frequencies still derive from each document's own current revision's distinct active
+`template_item` rows, so each document naturally brings its own set.
 
 ---
 
@@ -482,6 +555,7 @@ Unique on `(asset_id, frequency)`.
 | `id` | uuid | N | INT | PK |
 | `job_number` | text | N | INT | Human-readable, **unique**, e.g. `PM-2026-000431` |
 | `asset_id` | uuid | N | INT | FK → `asset` (UR-041) |
+| `asset_document_id` | uuid | N | INT | FK → `asset_document` (slice 27) — WHICH document this job satisfies |
 | `template_revision_id` | uuid | N | INT | FK → `template_revision`; frozen (DP-3, UR-040) |
 | `approval_route_id` | uuid | N | INT | Frozen at generation, as the route may change later |
 | `frequency` | frequency_t | N | INT | The job's own frequency |
@@ -502,6 +576,18 @@ Unique on `(asset_id, frequency)`.
 | `void_reason` | text | Y | INT | Min 10 chars (PR-046) |
 | `voided_by` | uuid | Y | INT | |
 | `draft_version` | integer | N | INT | Optimistic concurrency for offline sync (PR-064) |
+
+**`asset_document_id` (slice 27-ASSETDOC).** `asset_id` alone was sufficient while a machine
+carried one document. With several it is not: `CompletionCascadeService` and
+`VoidScheduleRecomputeService` both walk backwards from a completed job to the schedule
+rules it satisfies, and resolving those by machine advances (or reverses) **sibling
+documents'** schedules from one completion — a machine's PM completion would silently mark
+its pH check as done, with no error and nothing to see until an audit. Both services
+therefore resolve by `asset_document_id`, never by `asset_id`.
+
+A **composite foreign key** `(asset_document_id, asset_id)` → `asset_document (id, asset_id)`
+ties the two together, so a job can never point at another machine's document. This is
+defence in depth — every write path was reviewed and is safe — but it forecloses the class.
 
 ---
 
@@ -732,6 +818,7 @@ Indexes are specified against the actual query shapes, not added speculatively.
 | `job` | `(current_stage_ordinal, submitted_at) WHERE status='submitted'` | Partial B-tree | Verifier queue (UR-049) |
 | `job` | `(archived_at DESC) WHERE status='archived'` | Partial B-tree | Archive browsing |
 | `job` | `job_number` | Unique | Lookup by reference |
+| `job` | `(asset_document_id, frequency_scope, due_on) WHERE status <> 'voided' AND is_adhoc = false` | **Partial unique** | I-INV-14 generation idempotency (PR-052). Slice 27 re-keyed it from `asset_id`: two documents on one machine due the same day at the same frequency collided, and job generation reports the resulting P2002 as an "already exists" no-op — so the second document was **silently never raised** |
 | `item_result` | `(job_id)` | B-tree | Record assembly |
 | `measurement_result` | `(template_measurement_id, recorded_at)` | B-tree | **Measurement trending (UR-070)** |
 | `measurement_result` | `(job_id)` | B-tree | Record assembly |
@@ -742,7 +829,10 @@ Indexes are specified against the actual query shapes, not added speculatively.
 | `template_revision` | `(form_template_id) WHERE status='current'` | **Partial unique** | INV-01 |
 | `template_revision` | `(form_template_id, sequence_ordinal)` | Unique | INV-02 |
 | `schedule_rule` | `(next_due_on) WHERE active` | Partial B-tree | Scheduler sweep (PR-050) |
-| `schedule_rule` | `(asset_id, frequency)` | Unique | |
+| `schedule_rule` | `(asset_document_id, frequency)` | Unique | Slice 27 — one schedule per DOCUMENT per frequency (was `(asset_id, frequency)`) |
+| `asset_document` | `(asset_id, form_template_id)` | Unique | A document is tagged to a machine once |
+| `asset_document` | `(asset_id) WHERE active` | Partial B-tree | The machine's form picker; the scheduler bootstrap sweep |
+| `asset_document` | `(id, asset_id)` | Unique | Backs job's composite FK (slice 27, m-2) |
 | `asset` | `code` | Unique | INV-06 |
 | `asset` | `(asset_type_id, status)` | B-tree | Asset listing and filtering |
 | `asset` | `(area_id) WHERE active` | Partial | Area-scoped access (PR-073) |
@@ -847,7 +937,7 @@ must succeed.
 | Data | Content |
 |---|---|
 | `role` | The six roles in §6.3 |
-| `approval_route` | `SINGLE_STAGE_TL_OR_ENG` with one stage satisfied by `TEAM_LEADER` or `ENGINEER` (PR-071) |
+| `approval_route` | `TWO_STAGE_TL_THEN_ENG` — stage 1 satisfied by `TEAM_LEADER`, stage 2 by `ENGINEER` (PR-071 as revised by Samuel's confirmed two-stage decision; the seed migration 20260723180100 delivers one `TEAM_LEADER`-or-`ENGINEER` stage under the old code `SINGLE_STAGE_TL_OR_ENG`, 20260725000000 splits it into the two stages, and 20260729000000 renames the code to match) |
 | Enumerations | All values in §5 |
 
 **PR-DBD-10** The twelve source templates are **not** seeded by migration. They are loaded by a

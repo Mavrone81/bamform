@@ -66,6 +66,26 @@ export async function drawSignature(page: Page): Promise<void> {
   await page.mouse.up();
 }
 
+/**
+ * Slice 18-WORKFLOW §1 — the technician's submit is now a two-step act:
+ * "Sign and submit" opens the pad, they draw, "Done" sends the record with
+ * the PNG attached. Every journey/offline spec that submits goes through
+ * this helper so the flow lives in ONE place, and so a change to it fails
+ * loudly rather than being re-derived nine times.
+ *
+ * It uses the SAME real mouse-driven pointer events `drawSignature` uses —
+ * no stub, no injected data-URL: the canvas really is drawn on.
+ */
+export async function signAndSubmit(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Sign and submit' }).click();
+  const pad = page.getByTestId('performer-signature');
+  await expect(pad).toBeVisible();
+  await drawSignature(page);
+  // Scoped to the pad: the capture screen's per-item status controls also
+  // offer a "Done" button, so an unscoped lookup is a strict-mode violation.
+  await pad.getByRole('button', { name: 'Done' }).click();
+}
+
 interface Fixtures {
   server: FakeServer;
   signedInPage: Page;

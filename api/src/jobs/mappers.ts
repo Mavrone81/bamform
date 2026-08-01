@@ -41,6 +41,7 @@ export function toJobSummary(row: JobSummaryRow, today: Date = new Date()): JobS
     jobNumber: row.jobNumber,
     assetId: row.assetId,
     assetCode: row.asset.code,
+    assetDocumentId: row.assetDocumentId,
     documentNumber: row.templateRevision.formTemplate.documentNumber,
     revisionCode: row.templateRevision.revisionCode,
     frequency: row.frequency,
@@ -49,6 +50,10 @@ export function toJobSummary(row: JobSummaryRow, today: Date = new Date()): JobS
     overdue: isOverdue(row.dueOn, row.status, today),
     status: JOB_STATUS_FROM_DB[row.status],
     assignedTo: row.assignedTo,
+    // UR-028 (slice 18-WORKFLOW, review X-4) — off-plan work is visibly
+    // different from planned work in every list that shows jobs, including
+    // the `/reports/overdue` and `/reports/pending` worklists.
+    isAdhoc: row.isAdhoc,
   };
 }
 
@@ -118,6 +123,13 @@ export function toApprovalStep(row: ApprovalStepRow): ApprovalStep {
   return {
     id: row.id,
     stageOrdinal: row.stageOrdinal,
+    // Slice 26-TWOSTAGE M1: the caption snapshotted at signing time. The
+    // contract has carried `stageLabel` since slice 1 but nothing ever
+    // populated it, which is why three hard-coded copies drifted apart.
+    // `?? undefined` keeps it OFF the JSON entirely for the rows that have
+    // no snapshot, rather than emitting a null the clients would have to
+    // distinguish from "not applicable".
+    stageLabel: row.stageLabel ?? undefined,
     action: approvalActionFromDb(row.action),
     actorId: row.actorId,
     actorRoleCode: row.actorRoleCode,

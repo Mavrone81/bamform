@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from '../router';
+import { MachineDocuments } from '../components/MachineDocuments';
 import {
   getAsset,
   listAreas,
@@ -282,6 +283,12 @@ export function AdminMachineDetail({ assetId }: { assetId: string }) {
           </form>
         </section>
       )}
+
+      {/* ---- Documents (slice 28-ASSETDOC-UI) ----
+          Placed ABOVE Details deliberately: the owner's process step 2 is
+          tagging documents, and a machine carrying none is inert. The one
+          thing an admin must not scroll past is the alarm that says so. */}
+      <MachineDocuments assetId={assetId} />
 
       {/* ---- Details ---- */}
       <section aria-labelledby="machine-details-heading" className="card">
