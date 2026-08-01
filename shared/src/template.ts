@@ -71,6 +71,16 @@ export const standingContentSchema = z.object({
   safety: z.string().nullable().optional(),
   procedure: z.string().nullable().optional(),
   remarks: z.string().nullable().optional(),
+  /**
+   * The form's printed frequency banner, VERBATIM (e.g. "Monthly (1M) Three
+   * Monthly (3M) Six Monthly (6M) Yearly (Y)"). Loaded from the workbook so
+   * the printed record can reproduce the paper's selection band.
+   *
+   * NOT derivable from the template's item frequencies: 5 of the 12 loaded
+   * forms print options they have no items for — CE-95-012-00-02 has monthly
+   * items only and prints all four.
+   */
+  frequencyBanner: z.string().nullable().optional(),
   cascadeOverride: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 export type StandingContent = z.infer<typeof standingContentSchema>;

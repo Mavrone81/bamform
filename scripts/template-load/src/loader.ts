@@ -413,6 +413,7 @@ function standingContentPayload(doc: ParsedDocument): Record<string, unknown> {
     safety: sc.safety,
     procedure: sc.procedure,
     remarks: sc.remarks,
+    frequencyBanner: doc.frequencyBanner,
     // No cascadeOverride: OI-08 stands unresolved, so the uniform cascade
     // applies to every document (TLP §5.2 disposition).
   };
