@@ -732,9 +732,21 @@ Delete the `<h2>Special Tools</h2>`, `<h2>Parts Required</h2>`, `<h2>PPE</h2>`, 
   ${renderAttachments(input.attachments)}
   <div class="p-foot">
     <span>${esc(input.documentNumber)} Rev ${esc(input.revisionCode)} · ${esc(input.machineCode)} · ${esc(input.jobNumber)}</span>
+    <span>Status: ${esc(input.status)}</span>
     <span>SHA-256 ${esc(input.footer.integrityDigestHex)}</span>
   </div>
 ```
+
+**`Status:` is required and must not be dropped.** Owner ruling, 2026-08-01,
+after Task 3's review: the new header no longer prints it, and
+`pdf-coordinator.service.ts:14-16` confirms a PDF can be pulled for a
+`SUBMITTED`-but-unverified job — so without this line an unverified record
+prints header-identical to an archived one, and the only remaining signal is a
+missing signature block. The footer is its home because the footer already
+carries the record metadata the Excel never had (integrity digest, page
+numbers), leaving the sheet's body untouched. Task 3 adds it to the outgoing
+footer; this task must carry it across into `.p-foot`. A test asserting the
+printed status must survive into this task.
 
 - [ ] **Step 6: Add the styles**
 
