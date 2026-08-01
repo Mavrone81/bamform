@@ -147,21 +147,28 @@ The new layout needs three things the input does not carry: each checklist row's
   - `PdfRecordInput` gains `machineCode: string` and `frequencyScope: string[]`.
   - `PdfStandingContentInput` gains `frequencyBanner?: string | null`.
 
+This task ends green. It delivers the shape plus the one piece of logic that
+shape implies — `itemInScope` — and does **not** assert markup that later tasks
+render. Do not commit a failing test here.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 // append to api/src/pdf/pdf-html-template.spec.ts
-it('renders the Freq column value for every checklist row', () => {
-  const html = renderRecordHtml(
-    baseInput({
-      checklist: [
-        { itemNo: 1, frequency: 'M3', inScope: true, instruction: 'Clean', status: 'DONE', remark: null },
-        { itemNo: 13, frequency: 'Y', inScope: false, instruction: 'Calibrate', status: 'NOT_EVALUATED', remark: null },
-      ],
-    }),
-  );
-  expect(html).toContain('<td class="p-fq">M3</td>');
-  expect(html).toContain('<td class="p-fq">Y</td>');
+// (add `itemInScope` to the import list at the top of the file)
+describe('itemInScope', () => {
+  it('is true when the row frequency is in the visit scope', () => {
+    expect(itemInScope('M3', ['M3', 'M6'])).toBe(true);
+    expect(itemInScope('M6', ['M3', 'M6'])).toBe(true);
+  });
+
+  it('is false for a yearly row on a six-monthly visit', () => {
+    expect(itemInScope('Y', ['M3', 'M6'])).toBe(false);
+  });
+
+  it('is false against an empty scope rather than throwing', () => {
+    expect(itemInScope('M3', [])).toBe(false);
+  });
 });
 ```
 
@@ -170,7 +177,7 @@ it('renders the Freq column value for every checklist row', () => {
 - [ ] **Step 2: Run it and confirm it fails**
 
 Run: `cd api && npx jest --config jest.unit.config.js pdf-html-template`
-Expected: FAIL — TypeScript rejects the unknown properties before the assertion runs.
+Expected: FAIL — `itemInScope` is not exported.
 
 - [ ] **Step 3: Widen the interfaces**
 
@@ -209,13 +216,31 @@ Add to `PdfRecordInput`, after `assetCode`:
   frequencyScope: string[];
 ```
 
-- [ ] **Step 4: Populate them in the assembly service**
+- [ ] **Step 4: Add the scope helper**
+
+In `api/src/pdf/pdf-html-template.ts`, exported so the assembly service computes
+`inScope` from one shared definition and the rule stays unit-testable without a
+database:
+
+```ts
+/**
+ * Whether a checklist row applies to this visit. A Y row on a 6M visit is out
+ * of scope: it still PRINTS, still numbered, but its cell is closed.
+ * `job.frequency_scope` already carries the cascade — a Y visit arrives as
+ * `['M3','M6','Y']` — so plain membership is the whole rule.
+ */
+export function itemInScope(frequency: string, scope: readonly string[]): boolean {
+  return scope.includes(frequency);
+}
+```
+
+- [ ] **Step 5: Populate them in the assembly service**
 
 In `api/src/pdf/pdf-record-assembly.service.ts`, where the checklist array is built, add to each row:
 
 ```ts
         frequency: item.templateItem.frequency,
-        inScope: job.frequencyScope.includes(item.templateItem.frequency),
+        inScope: itemInScope(item.templateItem.frequency, job.frequencyScope),
 ```
 
 and on the record object:
@@ -225,14 +250,17 @@ and on the record object:
       frequencyScope: job.frequencyScope,
 ```
 
-Confirm the template item's `frequency` is selected by the query — if the include omits it, add it. Run `npm run typecheck` to find out.
+Import `itemInScope` from `./pdf-html-template`. Confirm the template item's
+`frequency` is selected by the query — if the include omits it, add it. Run
+`npm run typecheck` to find out.
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 6: Run the tests**
 
 Run: `cd api && npx jest --config jest.unit.config.js pdf-html-template && npm run typecheck`
-Expected: the new test PASSES once Task 3 lands the markup; until then it fails on the missing `<td class="p-fq">`. That is correct — keep it failing and let Task 3 turn it green. Typecheck must be clean now.
+Expected: PASS — all three `itemInScope` cases green, typecheck clean. Nothing
+in this task asserts markup, so the suite must be fully green before you commit.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add api/src/pdf/pdf-html-template.ts api/src/pdf/pdf-record-assembly.service.ts api/src/pdf/pdf-html-template.spec.ts
@@ -402,6 +430,19 @@ it('prints No, Freq, Instruction, Status and Remark in that order', () => {
   expect(head.indexOf('Freq')).toBeLessThan(head.indexOf('Maintenance Instruction'));
   expect(head.indexOf('Maintenance Instruction')).toBeLessThan(head.indexOf('Status'));
   expect(head.indexOf('Status')).toBeLessThan(head.indexOf('Remark'));
+});
+
+it('prints each row\'s frequency in the Freq column', () => {
+  const html = renderRecordHtml(
+    baseInput({
+      checklist: [
+        { itemNo: 1, frequency: 'M3', inScope: true, instruction: 'Clean', status: 'DONE', remark: null },
+        { itemNo: 9, frequency: 'M6', inScope: true, instruction: 'Fans', status: 'DONE', remark: null },
+      ],
+    }),
+  );
+  expect(html).toContain('<td class="p-fq">M3</td>');
+  expect(html).toContain('<td class="p-fq">M6</td>');
 });
 
 it('prints an out-of-scope row, numbered, with an em dash and a reason', () => {
