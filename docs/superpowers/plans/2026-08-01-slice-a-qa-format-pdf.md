@@ -746,16 +746,32 @@ function renderSignatures(signatures: PdfSignatureInput[]): string {
       const img = s.drawnSignatureBase64
         ? `<img class="drawn-signature" src="data:image/png;base64,${s.drawnSignatureBase64}" alt="" />`
         : '<div class="p-sigline"></div>';
+      // UR-057 (Mandatory): every signature prints name, ROLE and datetime.
+      // UR-052 + URD Journey D: a delegated action must read "on behalf of",
+      // never as a personal signature. Journey C / AC-06: a RETURNED step's
+      // reason must survive into the archive — this loop runs over EVERY
+      // approval action, so a returned step gets its own cell and carries it.
+      const onBehalf = s.onBehalfOfName
+        ? `<div class="p-signm">on behalf of ${esc(s.onBehalfOfName)}</div>`
+        : '';
+      const reason = s.reason ? `<div class="p-signm">Reason: ${esc(s.reason)}</div>` : '';
       return `<div>
         <div class="lbl">${esc(signatureBlockLabel(s.stageOrdinal, s.action, s.stageLabel))}</div>
         ${img}
-        <div class="p-signm">${esc(s.actorName)} · ${esc(s.actedAt)}</div>
+        <div class="p-signm">${esc(s.actorName)} · ${esc(s.actorRoleCode)} · ${esc(s.actedAt)}</div>
+        ${onBehalf}${reason}
       </div>`;
     })
     .join('');
   return `<div class="p-sign">${cells}</div>`;
 }
 ```
+
+**Do not drop any of these fields.** Owner ruling 2026-08-01 after Task 5's
+review found the earlier markup violated UR-057 (Mandatory — role), UR-052 and
+Journey D (delegation printed as a personal signature), and Journey C / AC-06
+(returned reason unrecoverable from the record). The file's header comment must
+also keep claiming role — do not edit it to match a reduced output.
 
 - [ ] **Step 5: Replace the body's tail**
 
@@ -768,9 +784,24 @@ Delete the `<h2>Special Tools</h2>`, `<h2>Parts Required</h2>`, `<h2>PPE</h2>`, 
   <div class="p-foot">
     <span>${esc(input.documentNumber)} Rev ${esc(input.revisionCode)} · ${esc(input.machineCode)} · ${esc(input.jobNumber)}</span>
     <span>Status: ${esc(input.status)}</span>
+    <span>Record ${esc(input.footer.recordId)}</span>
     <span>SHA-256 ${esc(input.footer.integrityDigestHex)}</span>
   </div>
+  ${input.voidNotice ? `<div class="p-foot-void">${voidLine(input.voidNotice)}</div>` : ''}
 ```
+
+Two things here are not optional:
+
+**`Record <recordId>`** — PR-118, stated in this file's own header comment: "the
+page footer ALSO carries the record id and integrity digest". Dropping it also
+breaks `api/test/integration/records-pdf.spec.ts:531` and `:599`, which assert
+the job id appears in the extracted PDF text (`footer.recordId` IS `job.id`).
+
+**The void line** — owner ruling 2026-08-01. `.void-banner` is not
+`position: fixed`, so the void REASON prints on page 1 only; the repeating
+watermark carries the word VOID but no reason. A last-page-only print of a
+voided record would say that it is void without saying why, which is what the
+removed footer line existed to prevent. `voidLine()` escapes internally.
 
 **`Status:` is required and must not be dropped.** Owner ruling, 2026-08-01,
 after Task 3's review: the new header no longer prints it, and
