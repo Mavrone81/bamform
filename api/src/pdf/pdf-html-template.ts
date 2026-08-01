@@ -175,6 +175,17 @@ function esc(value: string | null | undefined): string {
 }
 
 /**
+ * The stored enum (`M1`/`M3`/`M6`/`Y` — `FREQUENCY_MAP`'s VALUES in
+ * `scripts/template-load/src/parse.ts`) to the sheet's own printed form
+ * (`1M`/`3M`/`6M`/`Y` — that map's KEYS, column B of the workbook). The
+ * printed record must show the sheet's form everywhere, never the storage
+ * enum.
+ */
+function toSheetFreq(code: string): string {
+  return code === 'Y' ? 'Y' : code.replace('M', '') + 'M';
+}
+
+/**
  * The sheet's frequency band. The banner is printed VERBATIM and split on its
  * "(3M)"-style tokens so each option can be marked or greyed; a token is
  * "on" when its code is in this visit's scope.
@@ -190,9 +201,18 @@ function renderFrequencyBand(banner: string | null | undefined, scope: string[])
     return raw === 'Y' ? 'Y' : `M${raw.replace('M', '')}`;
   };
 
+  // Owner ruling 2026-08-01: an empty scope is an AD-HOC job (`itemInScope`'s
+  // own doc comment — "THE EMPTY SCOPE IS THE WHOLE POINT") where every
+  // checklist item is in scope, not "nothing applies". That ruling applies to
+  // this band too: without it an ad-hoc record's band marked nothing on, and
+  // with no banner loaded that produced an EMPTY grey box above a full page
+  // of completed work.
+  const allOn = scope.length === 0;
+
   if (!banner) {
-    const spans = scope
-      .map((f) => `<span class="on">${esc(f === 'Y' ? 'Y' : f.replace('M', '') + 'M')}</span>`)
+    const codes = allOn ? ['M1', 'M3', 'M6', 'Y'] : scope;
+    const spans = codes
+      .map((f) => `<span class="on">${esc(toSheetFreq(f))}</span>`)
       .join(' &nbsp; ');
     return `<div class="p-band">${spans}</div>`;
   }
@@ -202,7 +222,7 @@ function renderFrequencyBand(banner: string | null | undefined, scope: string[])
   const spans = tokens
     .map((token) => {
       const code = codeOf(token);
-      const on = code !== null && scope.includes(code);
+      const on = allOn || (code !== null && scope.includes(code));
       return `<span class="${on ? 'on' : 'off'}">${esc(token.trim())}</span>`;
     })
     .join(' &nbsp; ');
@@ -230,7 +250,7 @@ function scopeLabel(scope: string[]): string {
   if (scope.length === 0) return '';
   const order = ['M1', 'M3', 'M6', 'Y'];
   const widest = [...scope].sort((a, b) => order.indexOf(b) - order.indexOf(a))[0] ?? '';
-  return widest === 'Y' ? 'Y' : widest.replace('M', '') + 'M';
+  return toSheetFreq(widest);
 }
 
 /** "Not in scope (6M)" — or bare "Not in scope" when `scopeLabel` has nothing to say. */
@@ -246,9 +266,13 @@ function notInScopeReason(scope: string[]): string {
  * member). But a bare blank cell is visually indistinguishable from a
  * rendering defect if a viewer doesn't also read the instruction column, so
  * the Freq column prints a visible placeholder instead of nothing.
+ *
+ * Prints the sheet's own form (`3M`, `6M`, ...), not the stored enum (`M3`,
+ * `M6`, ...) — column B of the workbook reads the sheet's form; see
+ * `toSheetFreq`.
  */
 function freqCell(frequency: string): string {
-  return frequency === '' ? '—' : esc(frequency);
+  return frequency === '' ? '—' : esc(toSheetFreq(frequency));
 }
 
 function renderChecklist(items: PdfChecklistItemInput[], scope: string[]): string {

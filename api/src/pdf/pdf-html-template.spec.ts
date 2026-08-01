@@ -118,6 +118,43 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('<span class="on">3M</span>');
   });
 
+  /**
+   * I3 fix (final review, Important finding): the owner ruling that an empty
+   * `frequencyScope` is an AD-HOC job where every checklist item is in scope
+   * (`itemInScope`'s doc comment — "THE EMPTY SCOPE IS THE WHOLE POINT") had
+   * been applied to `itemInScope` only. `renderFrequencyBand` still marked a
+   * token on only when `scope.includes(code)`, so an ad-hoc record printed
+   * every option greyed off above a full page of completed work — and with
+   * no banner loaded, an EMPTY grey box. Pinned in both the banner and
+   * no-banner (fallback) shapes.
+   */
+  it('marks every option on in the frequency band for an ad-hoc job (frequencyScope: []), with and without a loaded banner', () => {
+    const withBanner = renderRecordHtml(
+      baseInput({
+        frequencyScope: [],
+        standingContent: {
+          frequencyBanner: 'Monthly (1M) Three Monthly (3M) Six Monthly (6M) Yearly (Y)',
+        },
+      }),
+    );
+    expect(withBanner).not.toContain('class="off"');
+    expect(withBanner).toContain('<span class="on">Monthly (1M)</span>');
+    expect(withBanner).toContain('<span class="on">Three Monthly (3M)</span>');
+    expect(withBanner).toContain('<span class="on">Six Monthly (6M)</span>');
+    expect(withBanner).toContain('<span class="on">Yearly (Y)</span>');
+
+    const withoutBanner = renderRecordHtml(
+      baseInput({ frequencyScope: [], standingContent: { frequencyBanner: null } }),
+    );
+    // Never an empty band — the no-banner fallback must also mark ad-hoc as
+    // fully in scope, not degrade to rendering nothing.
+    expect(withoutBanner).not.toMatch(/class="p-band">\s*<\/div>/);
+    expect(withoutBanner).toContain('<span class="on">1M</span>');
+    expect(withoutBanner).toContain('<span class="on">3M</span>');
+    expect(withoutBanner).toContain('<span class="on">6M</span>');
+    expect(withoutBanner).toContain('<span class="on">Y</span>');
+  });
+
   it('escapes a banner containing markup', () => {
     const html = renderRecordHtml(
       baseInput({ standingContent: { frequencyBanner: '<script>x</script> (3M)' } }),
@@ -203,7 +240,15 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
       expect(head.indexOf('Status')).toBeLessThan(head.indexOf('Remark'));
     });
 
-    it("prints each row's frequency in the Freq column", () => {
+    /**
+     * I2 fix (final review): `frequency` arrives as the stored enum (`M3`,
+     * `M6`) but column B of the workbook — and the frequency band and the
+     * out-of-scope reason right next to it — print the SHEET's form (`3M`,
+     * `6M`). Three notations for one frequency on one page would read as a
+     * defect on a controlled record; the Freq column must convert like the
+     * other two.
+     */
+    it("prints each row's frequency in the Freq column in the sheet's own form, not the stored enum", () => {
       const html = renderRecordHtml(
         baseInput({
           frequencyScope: ['M3', 'M6'],
@@ -227,8 +272,10 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
           ],
         }),
       );
-      expect(html).toContain('<td class="p-fq">M3</td>');
-      expect(html).toContain('<td class="p-fq">M6</td>');
+      expect(html).toContain('<td class="p-fq">3M</td>');
+      expect(html).toContain('<td class="p-fq">6M</td>');
+      expect(html).not.toContain('<td class="p-fq">M3</td>');
+      expect(html).not.toContain('<td class="p-fq">M6</td>');
     });
 
     it('prints an out-of-scope row, numbered, with an em dash and a reason', () => {
@@ -347,7 +394,7 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
       );
       expect(html).not.toContain('Not in scope');
       expect(html).not.toContain('class="p-out"');
-      expect(html).toContain('<td class="p-fq">M3</td>');
+      expect(html).toContain('<td class="p-fq">3M</td>');
       expect(html).toContain('<td class="p-fq">Y</td>');
     });
 
