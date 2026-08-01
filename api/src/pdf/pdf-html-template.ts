@@ -486,7 +486,7 @@ export function renderRecordHtml(input: PdfRecordInput): string {
             padding: 4px; background: #ececec; font-weight: 700; }
   .p-band .off { color: #999; font-weight: 400; }
   .p-band .on { text-decoration: underline; text-underline-offset: 2px; }
-  table.p { width: 100%; border-collapse: collapse; }
+  table.p { width: 100%; border-collapse: collapse; margin-bottom: 0; }
   table.p th, table.p td { border: 1px solid #8a8a8a; padding: 3px 5px; text-align: left; vertical-align: middle; }
   table.p thead th { background: #ececec; font-size: 9px; text-align: center; font-weight: 700; }
   table.p thead th.l { text-align: left; }
@@ -515,7 +515,9 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
   .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
   .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
-            display: flex; justify-content: space-between; font-size: 8px; color: #555; }
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px;
+            font-size: 8px; color: #555; }
+  .p-foot span { white-space: nowrap; }
   .p-foot-void { margin-top: 3px; font-size: 8px; font-weight: 700; color: #b00020; }
 </style>
 </head>
