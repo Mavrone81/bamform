@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BamForm for Android</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0c0e11">
+<meta name="description" content="Preventive-maintenance records for the plant floor. Install BamForm on an Android tablet or phone.">
+<style>
+  :root{
+    --void:#0c0e11;
+    --panel:#14171c;
+    --panel-2:#191d23;
+    --edge:#242930;
+    --ink:#f2f4f7;
+    --ink-2:#c3cad4;
+    --muted:#7f8896;
+    --amber:#f0a12e;
+    --amber-dim:#8a5c14;
+    --steel:#5aa9e6;
+    --green:#3ddc84;
+    --display:"Bahnschrift","DIN Alternate","Avenir Next Condensed","Roboto Condensed","Arial Narrow",system-ui,sans-serif;
+    --body:"Avenir Next","Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --shell:min(1180px,100%);
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--void); color:var(--ink); font-family:var(--body);
+    font-size:16px; line-height:1.6; overflow-x:hidden;
+  }
+
+  /* ---- atmosphere: engineered lattice + wafer glow + grain ---- */
+  .field{position:fixed; inset:0; pointer-events:none; z-index:0}
+  .field::before{
+    content:""; position:absolute; inset:0;
+    background:
+      linear-gradient(rgba(90,169,230,.055) 1px, transparent 1px) 0 0/100% 88px,
+      linear-gradient(90deg, rgba(90,169,230,.055) 1px, transparent 1px) 0 0/88px 100%;
+    mask-image:radial-gradient(120% 70% at 70% 0%, #000 20%, transparent 78%);
+    -webkit-mask-image:radial-gradient(120% 70% at 70% 0%, #000 20%, transparent 78%);
+  }
+  .field::after{
+    content:""; position:absolute; top:-28vh; right:-18vw; width:78vw; height:78vw; max-width:900px; max-height:900px;
+    background:radial-gradient(circle, rgba(240,161,46,.13), rgba(240,161,46,.04) 42%, transparent 68%);
+    filter:blur(14px);
+  }
+  .grain{
+    position:fixed; inset:0; z-index:1; pointer-events:none; opacity:.16; mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/></filter><rect width='160' height='160' filter='url(%23n)' opacity='.5'/></svg>");
+  }
+
+  .wrap{position:relative; z-index:2; width:var(--shell); margin:0 auto; padding:0 22px}
+
+  /* ---- masthead ---- */
+  .mast{display:flex; align-items:center; gap:11px; padding:26px 0 0; font-family:var(--display);
+        font-weight:700; letter-spacing:.16em; font-size:.82rem; color:var(--ink-2)}
+  .mast svg{width:24px;height:24px;flex:none}
+  .mast span{color:var(--muted)}
+
+  /* ---- hero ---- */
+  .hero{display:grid; grid-template-columns:1fr; gap:44px; padding:52px 0 70px; align-items:center}
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:.7rem;
+    letter-spacing:.2em; text-transform:uppercase; color:var(--amber);
+    border:1px solid var(--amber-dim); border-radius:999px; padding:6px 14px; margin-bottom:26px;
+    background:rgba(240,161,46,.06);
+  }
+  .eyebrow i{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);font-style:normal}
+  h1{
+    font-family:var(--display); font-weight:700;
+    font-size:clamp(3.1rem, 11vw, 6.4rem); line-height:.9; letter-spacing:-.022em;
+    margin:0 0 22px; text-wrap:balance;
+  }
+  h1 em{font-style:normal; color:var(--amber); position:relative; white-space:nowrap}
+  h1 em::after{
+    content:""; position:absolute; left:0; right:0; bottom:.06em; height:.075em;
+    background:var(--amber); opacity:.32; border-radius:2px;
+  }
+  .lede{font-size:clamp(1.02rem,2.4vw,1.2rem); color:var(--ink-2); max-width:34ch; margin:0 0 34px}
+
+  .cta-row{display:flex; flex-wrap:wrap; gap:14px; align-items:center}
+  .cta{
+    display:inline-flex; align-items:center; justify-content:center; gap:13px;
+    background:var(--amber); color:#1a1204; text-decoration:none;
+    font-family:var(--display); font-weight:700; letter-spacing:.055em;
+    font-size:1.12rem; padding:19px 32px; min-height:60px; border-radius:5px;
+    box-shadow:0 14px 34px -14px rgba(240,161,46,.7), inset 0 1px 0 rgba(255,255,255,.28);
+    transition:transform .16s ease, box-shadow .16s ease, background .16s ease;
+  }
+  .cta:hover{transform:translateY(-2px); background:#f7ae42; box-shadow:0 20px 42px -14px rgba(240,161,46,.8), inset 0 1px 0 rgba(255,255,255,.3)}
+  .cta:active{transform:translateY(0)}
+  .cta:focus-visible{outline:3px solid var(--steel); outline-offset:4px}
+  .cta svg{width:19px;height:19px}
+  .specs{display:flex; flex-wrap:wrap; gap:5px 20px; font-family:var(--mono); font-size:.74rem; color:var(--muted); margin-top:20px}
+  .specs b{color:var(--ink-2); font-weight:500}
+
+  /* ---- device ---- */
+  .device-stage{position:relative; display:flex; justify-content:center; align-items:flex-end; gap:0}
+  .device{
+    position:relative; width:min(268px,74vw); border-radius:30px; padding:9px;
+    background:linear-gradient(160deg,#2c323b,#15181d 55%);
+    box-shadow:0 46px 90px -30px rgba(0,0,0,.92), 0 0 0 1px rgba(255,255,255,.055), inset 0 1px 0 rgba(255,255,255,.09);
+  }
+  .device img{display:block; width:100%; border-radius:22px}
+  .device::after{
+    content:""; position:absolute; left:50%; transform:translateX(-50%); top:15px;
+    width:58px; height:5px; border-radius:99px; background:#0a0c0f; opacity:.85;
+  }
+  .device.back{
+    width:min(200px,54vw); margin-right:-64px; margin-bottom:42px; opacity:.5;
+    transform:rotate(-7deg) scale(.94); filter:saturate(.55) blur(.4px); z-index:0;
+  }
+  .device.front{z-index:1; transform:rotate(1.5deg)}
+
+  /* ---- sections ---- */
+  section{padding:62px 0; border-top:1px solid var(--edge)}
+  .sec-label{
+    font-family:var(--mono); font-size:.7rem; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--muted); margin:0 0 30px; display:flex; align-items:center; gap:14px;
+  }
+  .sec-label::after{content:""; flex:1; height:1px; background:var(--edge)}
+  h2{font-family:var(--display); font-weight:700; font-size:clamp(1.8rem,4.4vw,2.5rem); line-height:1.05; letter-spacing:-.012em; margin:0 0 16px; text-wrap:balance}
+  p{margin:0 0 14px}
+  .dim{color:var(--muted)}
+
+  .steps{display:grid; gap:2px; background:var(--edge); border:1px solid var(--edge); border-radius:8px; overflow:hidden}
+  .step{background:var(--panel); padding:26px 24px; display:flex; gap:20px; align-items:flex-start}
+  .step .n{
+    font-family:var(--display); font-size:2.5rem; line-height:.8; font-weight:700;
+    color:transparent; -webkit-text-stroke:1.4px var(--amber-dim); flex:none; width:52px;
+  }
+  .step h3{font-family:var(--display); font-size:1.16rem; letter-spacing:.012em; margin:0 0 5px; font-weight:700}
+  .step p{margin:0; color:var(--ink-2); font-size:.95rem}
+
+  .note{
+    border:1px solid var(--amber-dim); border-left:3px solid var(--amber); border-radius:7px;
+    background:linear-gradient(100deg, rgba(240,161,46,.09), rgba(240,161,46,.02));
+    padding:20px 24px; margin-top:26px;
+  }
+  .note b{display:block; font-family:var(--mono); font-size:.7rem; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); margin-bottom:7px}
+  .note p{margin:0; color:var(--ink-2); font-size:.95rem}
+
+  .cards{display:grid; gap:20px; grid-template-columns:1fr}
+  .card{background:var(--panel); border:1px solid var(--edge); border-radius:8px; padding:28px 26px; position:relative; overflow:hidden}
+  .card::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--steel); opacity:.5}
+  .card h3{font-family:var(--display); font-size:1.3rem; margin:0 0 11px; font-weight:700}
+  .card p:last-child{margin:0}
+  code{font-family:var(--mono); font-size:.85em; background:#0a0c0f; border:1px solid var(--edge); padding:2px 7px; border-radius:4px; color:var(--amber)}
+  .hash{font-family:var(--mono); font-size:.66rem; color:#5d6570; word-break:break-all; line-height:1.5}
+
+  footer{border-top:1px solid var(--edge); padding:30px 0 46px; color:var(--muted); font-size:.82rem;
+         display:flex; flex-wrap:wrap; gap:8px 22px; align-items:baseline}
+  footer .mono{font-family:var(--mono); font-size:.72rem}
+
+  /* ---- entrance ---- */
+  @media (prefers-reduced-motion:no-preference){
+    .rise{opacity:0; transform:translateY(20px); animation:rise .78s cubic-bezier(.16,.84,.44,1) forwards}
+    .d1{animation-delay:.06s} .d2{animation-delay:.14s} .d3{animation-delay:.22s}
+    .d4{animation-delay:.30s} .d5{animation-delay:.40s}
+    @keyframes rise{to{opacity:1; transform:none}}
+  }
+
+  @media (min-width:900px){
+    .hero{grid-template-columns:1.08fr .92fr; gap:56px; padding:74px 0 96px}
+    .cards{grid-template-columns:1fr 1fr}
+    .steps{grid-template-columns:repeat(4,1fr)}
+    .step{flex-direction:column; gap:16px}
+    .step .n{font-size:2.9rem}
+  }
+</style>
+</head>
+<body>
+<div class="field" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<div class="wrap">
+  <div class="mast">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2.2 20.5 7v10L12 21.8 3.5 17V7z" fill="none" stroke="#f0a12e" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="m8.2 12 2.7 2.7 5-5.4" fill="none" stroke="#f2f4f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    BAMFORM <span>/ ANDROID</span>
+  </div>
+
+  <div class="hero">
+    <div>
+      <div class="eyebrow rise d1"><i></i> <span id="verEyebrow">Reading the release manifest…</span></div>
+      <h1 class="rise d2">Maintenance<br>records, <em>on the floor</em></h1>
+      <p class="lede rise d3">Run the full preventive-maintenance workflow from a tablet at the machine — offline when the signal drops, synced the moment it returns.</p>
+      <div class="cta-row rise d4">
+        <a class="cta" id="ctaLink" href="version.json" download aria-disabled="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 20h16"/></svg>
+          <span id="ctaLabel">LOADING…</span>
+        </a>
+      </div>
+      <div class="specs rise d4">
+        <span id="specSize"><b>—</b></span>
+        <span>Android <b>8.0+</b></span>
+        <span>Phones &amp; tablets</span>
+        <span>Signed build</span>
+      </div>
+      <p class="lede rise d4" id="verNote" style="margin:14px 0 0;font-size:.95rem;display:none"></p>
+    </div>
+
+    <div class="device-stage rise d5">
+      <div class="device back"><img src="screen-jobs.png" alt="The job list, showing scheduled and overdue maintenance jobs." loading="lazy" width="375" height="812"></div>
+      <div class="device front"><img src="screen-capture.png" alt="Recording a maintenance checklist on a phone, with pass and fail controls." width="375" height="812"></div>
+    </div>
+  </div>
+
+  <section>
+    <p class="sec-label">Installing</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div><h3>Download</h3><p>Tap the button above on the device you want to set up.</p></div></div>
+      <div class="step"><div class="n">2</div><div><h3>Open the file</h3><p>From the download notification, or Files → Downloads.</p></div></div>
+      <div class="step"><div class="n">3</div><div><h3>Allow &amp; install</h3><p>Android asks once for permission to install from your browser.</p></div></div>
+      <div class="step"><div class="n">4</div><div><h3>Sign in</h3><p>Open BamForm and use your normal account.</p></div></div>
+    </div>
+
+    <div class="note">
+      <b>The warning is expected</b>
+      <p>Android flags anything installed outside the Play Store. On that prompt, tap <strong>Settings</strong>, allow your browser to install apps, then open the file again. Company apps are distributed this way.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">Good to know</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Updating later</h3>
+        <p>Once installed, BamForm checks this page’s release manifest for itself and offers the update in the app. It verifies the published checksum <em>and</em> that the file carries the same signing key before Android’s installer is ever opened — you still confirm the install.</p>
+        <p class="dim" style="font-size:.9rem">Installing over the existing app keeps everything on the device. Uninstalling first does not — any records still waiting to sync are lost with it.</p>
+      </div>
+      <div class="card">
+        <h3>Using a different server</h3>
+        <p>The app connects to <code>form.bevorasg.com</code> as shipped. To point it elsewhere, expand <strong>Server</strong> at the foot of the sign-in screen and enter the address — the app checks the server answers before it switches.</p>
+        <p class="dim" style="font-size:.9rem">Records still waiting to sync stay with the server they were captured on. Finish syncing before moving a device.</p>
+      </div>
+      <div class="card">
+        <h3>iPhone and iPad</h3>
+        <p>There is no app file for iOS, and none is needed. Open <strong>form.bevorasg.com</strong> in Safari, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</p>
+        <p class="dim" style="font-size:.9rem">It installs to the home screen and works the same way, offline included.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Internal distribution — Bevora</span>
+    <span class="mono" id="footVersion">—</span>
+    <span class="hash" id="footHash">SHA-256 —</span>
+  </footer>
+</div>
+
+<!--
+  THE PAGE AND THE APP READ THE SAME FILE.
+
+  Every version-dependent value on this page (the download link, the version
+  label, the size, the SHA-256, the release note) is filled in at load time
+  from `version.json` — the same manifest the installed Android app polls to
+  decide whether an update exists. Nothing about the current release is
+  written into this HTML.
+
+  That is the point. Before this, the link said `bamform-1.1.apk` and the
+  footer said "v1.1" while the binary itself carried versionName 1.0.0 and
+  versionCode 1: the page and the artefact had already drifted, and nothing
+  could notice. version.json is generated from the built APK by the Gradle
+  task `:app:generateReleaseUpdateManifest` (android/app/build.gradle.kts) —
+  it is never hand-edited, and neither is anything here.
+
+  If the manifest cannot be read, this page says so and offers no download
+  link at all. A visibly broken page is the correct failure: a stale
+  hard-coded link would hand someone the wrong binary and look fine doing it.
+-->
+<script>
+(function () {
+  var el = function (id) { return document.getElementById(id); };
+  var fail = function (why) {
+    el('verEyebrow').textContent = 'Release manifest unavailable';
+    el('ctaLabel').textContent = 'UNAVAILABLE';
+    var cta = el('ctaLink');
+    cta.removeAttribute('href');
+    cta.setAttribute('aria-disabled', 'true');
+    cta.style.opacity = '.45';
+    cta.style.cursor = 'not-allowed';
+    var note = el('verNote');
+    note.style.display = 'block';
+    note.textContent =
+      'This page could not read version.json (' + why + '), so it will not offer a ' +
+      'download it cannot describe. Tell IT — the release manifest is missing or ' +
+      'malformed on the server.';
+  };
+  var hex64 = /^[0-9a-f]{64}$/;
+  var mb = function (n) { return (n / 1048576).toFixed(1) + ' MB'; };
+
+  fetch('version.json', { cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (m) {
+      if (!m || typeof m.versionName !== 'string' || typeof m.apkUrl !== 'string') {
+        throw new Error('missing fields');
+      }
+      if (!hex64.test(String(m.sha256 || ''))) throw new Error('bad sha256');
+      // Same origin rule the app applies: the link may only point at this
+      // server's own /app/ directory.
+      var url = new URL(m.apkUrl, location.href);
+      if (url.origin !== location.origin || url.pathname.indexOf('/app/') !== 0) {
+        throw new Error('apkUrl is not on this server');
+      }
+
+      el('verEyebrow').textContent = 'Version ' + m.versionName + ' · Ready to install';
+      var cta = el('ctaLink');
+      cta.setAttribute('href', url.pathname);
+      cta.removeAttribute('aria-disabled');
+      el('ctaLabel').textContent = 'DOWNLOAD APK';
+      if (typeof m.sizeBytes === 'number' && m.sizeBytes > 0) {
+        el('specSize').innerHTML = '<b>' + mb(m.sizeBytes) + '</b>';
+      } else {
+        el('specSize').style.display = 'none';
+      }
+      el('footVersion').textContent = 'v' + m.versionName + ' (build ' + m.versionCode + ')';
+      el('footHash').textContent = 'SHA-256 ' + m.sha256;
+      if (m.releaseNote) {
+        var note = el('verNote');
+        note.style.display = 'block';
+        note.textContent = m.releaseNote +
+          (m.releasedAt ? ' · published ' + String(m.releasedAt).slice(0, 10) : '');
+      }
+      document.title = 'BamForm ' + m.versionName + ' for Android';
+    })
+    .catch(function (e) { fail(e && e.message ? e.message : 'unreadable'); });
+})();
+</script>
+<noscript>
+  <p style="position:relative;z-index:3;max-width:720px;margin:0 auto 40px;padding:0 22px;color:#c3cad4">
+    This page needs JavaScript to read the release manifest, so that the link it
+    offers can never disagree with the app that is actually published. Without
+    it, open <a href="version.json" style="color:#f0a12e">version.json</a> and
+    download the file named in <code>apkUrl</code>.
+  </p>
+</noscript>
+</body>
+</html>

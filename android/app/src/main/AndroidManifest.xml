@@ -8,6 +8,15 @@
     <uses-feature
         android:name="android.hardware.camera.any"
         android:required="false" />
+    <!-- In-app update (slice 21-SHELL). This permission grants the right to
+         ASK the platform installer to install an APK — the user still
+         confirms in Android's own installer UI, and the system additionally
+         requires "install unknown apps" to be enabled for this app. There is
+         no silent-install capability here and none is wanted. The shell only
+         ever asks for a file it has already checked against the published
+         SHA-256 and proved to be signed by the same key as itself; see
+         UpdateService. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Backups/transfers disabled entirely: the shell holds no data worth
          migrating (one URL), and the WebView's cookie jar should never

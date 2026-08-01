@@ -73,6 +73,16 @@ jobs:
       # (no Gradle, no SDK), so it belongs in the fast job.
       - name: Android shell — Kotlin/TS protocol agreement + bridge security invariants
         run: node scripts/ci/assert-shell-protocol-contract.mjs
+      # Slice 21-SHELL added an in-app APK update — a CODE-DELIVERY channel,
+      # and the highest-consequence surface the shell has. Everything that
+      # makes it safe is a handful of lines the compiler is happy without:
+      # the pinned https update origin (deliberately NOT the admin-settable
+      # content origin), the apkUrl re-check before the request, the SHA-256
+      # and signing-certificate gates before any installer intent, and the
+      # absence of any bridge message that could let a page drive it. Same
+      # reasoning as the gate above, higher stakes.
+      - name: Android shell — update channel security + release-manifest anti-drift
+        run: node scripts/ci/assert-shell-update-contract.mjs
       # Slice 22-SELFUPDATE / review S-1. The whole self-update mechanism rests
       # on `sw.js` differing between deploys, and for the whole of that slice
       # it silently did NOT on the production deployment — VITE_APP_VERSION is

@@ -3,4 +3,12 @@
     <cache-path
         name="captures"
         path="captures/" />
+    <!-- Verified update APKs handed to the platform installer. App-private
+         cache: the shell writes the download here, checks its SHA-256 and
+         signing certificate, and only then grants the installer a read URI
+         for this one file. The directory is wiped before every download, so
+         a refused file is never left where a later grant could reach it. -->
+    <cache-path
+        name="updates"
+        path="updates/" />
 </paths>
