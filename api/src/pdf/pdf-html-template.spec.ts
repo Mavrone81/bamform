@@ -275,6 +275,20 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('deadbeef');
   });
 
+  /**
+   * Fix round 1 finding 1 — the header grid carries no status field, and
+   * `pdf-coordinator.service.ts` documents that archival status is NOT the
+   * access gate (a PDF can be pulled for a SUBMITTED-but-unverified job).
+   * Without an explicit status, a SUBMITTED and an ARCHIVED record read
+   * header-identical. Owner ruling: print status in the footer alongside
+   * the other record metadata (integrity digest, record id) rather than
+   * restoring it to the sheet's own header/body.
+   */
+  it('the page footer carries the record status (fix round 1, finding 1)', () => {
+    const html = renderRecordHtml(baseInput({ status: 'SUBMITTED' }));
+    expect(html).toMatch(/record-footer[\s\S]*Status:\s*SUBMITTED/);
+  });
+
   it('a DIFFERENT integrity digest produces a DIFFERENT footer (tamper-detectable at a glance)', () => {
     const htmlA = renderRecordHtml(
       baseInput({ footer: { recordId: 'rec-1', integrityDigestHex: 'aaaa', renderedAt: 't' } }),
