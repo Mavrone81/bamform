@@ -87,6 +87,7 @@ exports[`QA-format record — golden shapes renders long-18-item stably 1`] = `
     <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
     <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
     <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
   </dl>
   <div class="p-sign"><div>
         <div class="lbl">Maintenance Performed By</div>
@@ -193,6 +194,7 @@ exports[`QA-format record — golden shapes renders monthly-only stably 1`] = `
     <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
     <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
     <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
   </dl>
   <div class="p-sign"><div>
         <div class="lbl">Maintenance Performed By</div>
@@ -299,6 +301,7 @@ exports[`QA-format record — golden shapes renders single-3m stably 1`] = `
     <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
     <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
     <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
   </dl>
   <div class="p-sign"><div>
         <div class="lbl">Maintenance Performed By</div>
@@ -407,6 +410,7 @@ exports[`QA-format record — golden shapes renders voided stably 1`] = `
     <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
     <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
     <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
   </dl>
   <div class="p-sign"><div>
         <div class="lbl">Maintenance Performed By</div>

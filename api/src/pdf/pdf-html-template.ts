@@ -311,8 +311,16 @@ function renderMeasurements(rows: PdfMeasurementInput[]): string {
  * the controlled record actually consumed), not `partsRequired` (a planning
  * list): the printed record reports what happened, matching the physical
  * form, which has no separate "required" list of its own.
+ *
+ * Also folds in the attachment count (I6) — the bare `<ul>` `renderAttachments`
+ * emits further down has no heading of its own, so a reader would otherwise
+ * have no label telling them what that list is.
  */
-function renderStandingBlock(sc: PdfStandingContentInput, partsUsed: PdfPartUsedInput[]): string {
+function renderStandingBlock(
+  sc: PdfStandingContentInput,
+  partsUsed: PdfPartUsedInput[],
+  attachments: PdfAttachmentInput[],
+): string {
   const partsLine =
     partsUsed.length === 0
       ? '<span class="muted">None.</span>'
@@ -323,6 +331,8 @@ function renderStandingBlock(sc: PdfStandingContentInput, partsUsed: PdfPartUsed
     sc.ppe && sc.ppe.length > 0
       ? sc.ppe.map(esc).join(' · ')
       : '<span class="muted">None specified.</span>';
+  const attachmentsLine =
+    attachments.length === 0 ? '<span class="muted">None.</span>' : `${attachments.length} file(s)`;
   return `<div class="p-sect">Special Tools · Parts · PPE · Safety</div>
   <dl class="p-standing">
     <dt>Special Tools</dt><dd>${esc(sc.specialTools) || '<span class="muted">None specified.</span>'}</dd>
@@ -330,6 +340,7 @@ function renderStandingBlock(sc: PdfStandingContentInput, partsUsed: PdfPartUsed
     <dt>PPE</dt><dd>${ppe}</dd>
     <dt>Safety</dt><dd>${esc(sc.safety) || '<span class="muted">None specified.</span>'}</dd>
     <dt>Remarks</dt><dd>${esc(sc.remarks) || '<span class="muted">None.</span>'}</dd>
+    <dt>Attachments</dt><dd>${attachmentsLine}</dd>
   </dl>`;
 }
 
@@ -528,7 +539,7 @@ export function renderRecordHtml(input: PdfRecordInput): string {
 
   ${renderMeasurements(input.measurements)}
 
-  ${renderStandingBlock(input.standingContent, input.partsUsed)}
+  ${renderStandingBlock(input.standingContent, input.partsUsed, input.attachments)}
   ${renderSignatures(input.signatures)}
   ${renderAttachments(input.attachments)}
   <div class="p-foot">
