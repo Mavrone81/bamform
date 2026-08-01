@@ -8,11 +8,13 @@
  * PR-116's required blocks: header (title/document number/revision/page),
  * frequency banner, the numbered checklist, the measurement table, the
  * labelled standing-content block (special tools/parts used/PPE/safety/
- * remarks — Task 5), the signature row (UR-057: name/timestamp per
- * signature), and the page footer. PR-118: the page footer ALSO carries the
- * document identity line, the record status (owner ruling — see
- * `signatureBlockLabel`'s neighbour, the `.p-foot` markup in
- * `renderRecordHtml`) and the integrity digest.
+ * remarks — Task 5), the signature row (UR-057, Mandatory: name/role/
+ * timestamp per signature — plus, per UR-052/Journey D/Journey C/AC-06, an
+ * "on behalf of" line for a delegated action and a printed reason for a
+ * RETURNED step), and the page footer. PR-118: the page footer ALSO carries
+ * the document identity line, the record id, the record status (owner
+ * ruling — see the `.p-foot` markup in `renderRecordHtml`) and the
+ * integrity digest.
  *
  * SECURITY_ARCHITECTURE.md §8 ("PDF rendering... template variables
  * escaped — a remark field must not be able to inject markup into a
@@ -390,6 +392,16 @@ export function signatureBlockLabel(
  * `.signature-block` grid. A blank `.p-sigline` prints in place of a drawn
  * signature for an action that never captures one (return/recall/void) — the
  * physical form's own blank rule, not prose apologising for its absence.
+ *
+ * Owner ruling 2026-08-01 (Task 5 fix round 1) — do not drop any of these
+ * fields:
+ *  - UR-057 (Mandatory, `docs/URD.md:320`): every signature prints name,
+ *    ROLE and datetime.
+ *  - UR-052 + URD Journey D: a delegated action must read "on behalf of",
+ *    never print as a personal signature.
+ *  - Journey C / AC-06: a RETURNED step's reason must survive into the
+ *    archive — this loop runs over EVERY approval action, so a returned step
+ *    already gets its own cell here and carries its reason in it.
  */
 function renderSignatures(signatures: PdfSignatureInput[]): string {
   if (signatures.length === 0) return '<p class="muted">No approval actions recorded yet.</p>';
@@ -398,10 +410,15 @@ function renderSignatures(signatures: PdfSignatureInput[]): string {
       const img = s.drawnSignatureBase64
         ? `<img class="drawn-signature" src="data:image/png;base64,${s.drawnSignatureBase64}" alt="" />`
         : '<div class="p-sigline"></div>';
+      const onBehalf = s.onBehalfOfName
+        ? `<div class="p-signm">on behalf of ${esc(s.onBehalfOfName)}</div>`
+        : '';
+      const reason = s.reason ? `<div class="p-signm">Reason: ${esc(s.reason)}</div>` : '';
       return `<div>
         <div class="lbl">${esc(signatureBlockLabel(s.stageOrdinal, s.action, s.stageLabel))}</div>
         ${img}
-        <div class="p-signm">${esc(s.actorName)} · ${esc(s.actedAt)}</div>
+        <div class="p-signm">${esc(s.actorName)} · ${esc(s.actorRoleCode)} · ${esc(s.actedAt)}</div>
+        ${onBehalf}${reason}
       </div>`;
     })
     .join('');
@@ -459,6 +476,7 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
   .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
             display: flex; justify-content: space-between; font-size: 8px; color: #555; }
+  .p-foot-void { margin-top: 3px; font-size: 8px; font-weight: 700; color: #b00020; }
 </style>
 </head>
 <body>
@@ -487,8 +505,10 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   <div class="p-foot">
     <span>${esc(input.documentNumber)} Rev ${esc(input.revisionCode)} · ${esc(input.machineCode)} · ${esc(input.jobNumber)}</span>
     <span>Status: ${esc(input.status)}</span>
+    <span>Record ${esc(input.footer.recordId)}</span>
     <span>SHA-256 ${esc(input.footer.integrityDigestHex)}</span>
   </div>
+  ${input.voidNotice ? `<div class="p-foot-void">${voidLine(input.voidNotice)}</div>` : ''}
 </body>
 </html>`;
 }

@@ -423,16 +423,21 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
   });
 
   /**
-   * Task 5: the three-cell signature row prints name + timestamp under the
-   * sheet's own caption (`signatureBlockLabel`); it no longer prints the
-   * actor's raw role code as a separate line — the caption itself already
-   * says who the signature is ("Verified By (Workshop Team Leader)"), and
-   * the physical form's own signature box has no separate role field.
+   * UR-057 is Mandatory (`docs/URD.md:320`): "The rendered document shall
+   * display, for each signature, the signatory's full name, role and the
+   * date and time of signing." Owner ruling 2026-08-01 (Task 5 fix round 1)
+   * restored `actorRoleCode` to the three-cell row after an earlier draft of
+   * this task dropped it — the caption above the cell (e.g. "Verified By
+   * (Workshop Team Leader)") names the STAGE, not the individual signatory's
+   * own role code, so the two are not interchangeable.
    */
-  it('includes the signature row with name and timestamp (UR-057)', () => {
+  it('includes the signature row with name, role and timestamp (UR-057, Mandatory)', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Jane Doe');
+    expect(html).toContain('TEAM_LEADER');
     expect(html).toContain('2026-07-02T10:00:00.000Z');
+    // All three in the same cell, name first, per the amended plan's markup.
+    expect(html).toMatch(/Jane Doe · TEAM_LEADER · 2026-07-02T10:00:00\.000Z/);
   });
 
   /**
@@ -527,11 +532,15 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
    * Task 5: a step with no drawn signature (return/recall/void) prints the
    * sheet's own blank signature line (`.p-sigline`) in place of the drawn
    * `<img>` — the physical form's blank rule, not prose apologising for its
-   * absence. The three-cell row no longer prints the free-text `reason`
-   * field inline (dropped along with `onBehalfOfName`, matching the sheet's
-   * signature box, which has neither).
+   * absence.
+   *
+   * Owner ruling 2026-08-01 (Task 5 fix round 1), Journey C / AC-06
+   * (`docs/URD.md`): "the archive shows the full sequence with timestamps"
+   * including "returned with reason" — a RETURNED step's `reason` MUST
+   * still print. `renderSignatures` iterates every approval action, so this
+   * RETURNED step gets its own cell and carries its reason there.
    */
-  it('renders a blank signature line when a step has none (return/recall/void)', () => {
+  it('renders a blank signature line and the RETURNED reason when a step has no drawn signature', () => {
     const html = renderRecordHtml(
       baseInput({
         signatures: [
@@ -551,7 +560,42 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('class="p-sigline"');
     expect(html).toContain('Returned By (Stage 1)');
     expect(html).toContain('John Smith');
+    expect(html).toContain('ENGINEER');
+    expect(html).toContain('Reason: Missing measurement');
     expect(html).not.toContain('data:image/png;base64,');
+  });
+
+  /**
+   * UR-052 + URD Journey D (`docs/URD.md`): "every action shall be recorded
+   * as performed by the delegate on behalf of the approver" — the archive
+   * must read "verified by X, acting as delegate for Y", never print a
+   * delegated signature identically to a personal one. Owner ruling
+   * 2026-08-01 (Task 5 fix round 1) restored `onBehalfOfName` to the
+   * signature cell. Pinned both directions: present when set, ABSENT when
+   * not — a delegated signature must be distinguishable from a personal one
+   * in both directions, not just printable when present.
+   */
+  it('prints "on behalf of" only for a delegated signature, never for a personal one', () => {
+    const delegated = renderRecordHtml(
+      baseInput({
+        signatures: [
+          {
+            approvalStepId: 'step-3',
+            stageOrdinal: 2,
+            action: 'VERIFIED',
+            actorName: 'Sam Supervisor',
+            actorRoleCode: 'ENGINEER',
+            actedAt: '2026-07-02T11:00:00.000Z',
+            drawnSignatureBase64: 'BASE64DATA',
+            onBehalfOfName: 'Terry Team Leader',
+          },
+        ],
+      }),
+    );
+    expect(delegated).toContain('on behalf of Terry Team Leader');
+
+    const personal = renderRecordHtml(baseInput()); // baseInput's signature has no onBehalfOfName
+    expect(personal).not.toContain('on behalf of');
   });
 
   it('includes the Remarks footer (PR-116)', () => {
@@ -560,15 +604,21 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
   });
 
   /**
-   * Task 5: the `.p-foot` page footer identifies the record by its
-   * document/machine/job identity line (what an ISO auditor reads a
-   * controlled record by), not the internal `recordId` UUID — the sheet has
-   * no such field. The integrity digest is still carried verbatim (PR-118).
+   * PR-118, this file's own header comment: "the page footer ALSO carries
+   * the record id and integrity digest." Owner ruling 2026-08-01 (Task 5 fix
+   * round 1) restored `<span>Record ${recordId}</span>` after an earlier
+   * draft dropped it — `footer.recordId` IS `job.id`
+   * (`pdf-record-assembly.service.ts:70/103`), and
+   * `api/test/integration/records-pdf.spec.ts:531`/`:599` assert the job id
+   * appears in the extracted PDF text; dropping it broke both. The footer
+   * ALSO carries the document/machine/job identity line, which the sheet
+   * itself has no field for but an auditor would still read a record by.
    */
-  it('the page footer carries the record identity and integrity digest (PR-118)', () => {
+  it('the page footer carries the record id, identity line and integrity digest (PR-118)', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('CE 95 010 00 01');
     expect(html).toContain('PM-0001');
+    expect(html).toMatch(/p-foot[\s\S]*Record rec-1/);
     expect(html).toContain('deadbeef');
   });
 
@@ -653,7 +703,19 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
 
   // ------------------------------------------------------- slice 17-VOID
 
-  it('U-VOID-04: a voided record renders the VOID watermark, banner and footer status — the PDF must tell the truth', () => {
+  /**
+   * Owner ruling 2026-08-01 (Task 5 fix round 1, Important finding): an
+   * earlier draft of this task dropped the footer's void line entirely.
+   * `.void-banner` is NOT `position: fixed`, so the void REASON prints on
+   * page 1 only; the `position: fixed` watermark that repeats on every page
+   * carries just the word VOID, not why. A print/view of only the last page
+   * of a multi-page voided record would say THAT it is void without saying
+   * WHY — exactly what this footer line exists to prevent. Restored as
+   * `<div class="p-foot-void">` after the `.p-foot` block, and the
+   * assertion below is restored to match (not merely the `Status: VOIDED`
+   * fallback a prior round of this fix used instead).
+   */
+  it('U-VOID-04: a voided record renders the VOID watermark, banner and footer line — the PDF must tell the truth', () => {
     const html = renderRecordHtml(
       baseInput({
         status: 'VOIDED',
@@ -669,12 +731,11 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('Raised against the wrong machine');
     expect(html).toContain('Ada Admin');
     expect(html).toContain('2026-07-28T01:00:00.000Z');
-    // Task 5: the `.p-foot` page footer no longer repeats the full void
-    // line (`renderVoidNotice`'s `position: fixed` watermark already
-    // repeats on every printed page — see that function's doc comment — so
-    // a single last-page view still carries the truth); the footer instead
-    // carries the same signal via the record `Status:` field the owner
-    // ruling put there.
+    // The footer carries the void line too (survives a single-page print of
+    // the last page alone) — restored in `.p-foot-void`, printed after the
+    // `.p-foot` metadata row.
+    expect(html).toMatch(/p-foot-void[\s\S]*RECORD VOID/);
+    // The footer's Status field still carries the same signal too.
     expect(html).toMatch(/p-foot[\s\S]*Status:\s*VOIDED/);
   });
 
@@ -682,6 +743,7 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).not.toContain('class="void-watermark"');
     expect(html).not.toContain('class="void-banner"');
+    expect(html).not.toContain('class="p-foot-void"');
     expect(html).not.toContain('RECORD VOID');
   });
 
