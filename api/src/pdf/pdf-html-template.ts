@@ -274,12 +274,17 @@ function renderChecklist(items: PdfChecklistItemInput[], scope: string[]): strin
 function renderMeasurements(rows: PdfMeasurementInput[]): string {
   if (rows.length === 0) return '<p class="muted">No measurements.</p>';
   const body = rows
-    .map(
-      (m) =>
-        `<tr><td>${esc(m.description)}</td><td>${esc(m.specDisplay)}</td><td>${esc(m.reading)}${esc(m.unit ? ` ${m.unit}` : '')}</td><td class="judgement-${esc(m.judgement)}">${esc(m.judgement)}</td><td>${esc(m.remark)}</td></tr>`,
-    )
+    .map((m) => {
+      const reading =
+        m.reading === null || m.reading === ''
+          ? '—'
+          : `${esc(m.reading)}${m.unit ? ` ${esc(m.unit)}` : ''}`;
+      const cls = m.judgement === 'FAIL' ? 'c fail-ink' : 'c';
+      return `<tr><td>${esc(m.description)}</td><td class="p-sp">${esc(m.specDisplay)}</td><td class="c">${reading}</td><td class="${cls}">${esc(m.judgement)}</td><td>${esc(m.remark)}</td></tr>`;
+    })
     .join('');
-  return `<table class="measurements"><thead><tr><th>Description</th><th>Specification</th><th>Reading</th><th>Judgement</th><th>Remark</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<div class="p-sect">Measurement Records</div>
+  <table class="p"><thead><tr><th class="l">Description</th><th class="p-sp">Specification</th><th class="p-mk">Reading</th><th class="p-mk">Result</th><th class="l">Remark</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function renderParts(parts: PdfPartUsedInput[]): string {
@@ -429,6 +434,8 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   .p-no { width: 24px; text-align: center; }
   .p-fq { width: 32px; text-align: center; }
   .p-st { width: 58px; text-align: center; }
+  .p-sp { width: 110px; }
+  .p-mk { width: 44px; text-align: center; }
   .p-out { color: #777; }
   .fail-ink { color: #a8261c; font-weight: 700; }
   .muted { color: #777; font-style: italic; }
@@ -471,7 +478,6 @@ export function renderRecordHtml(input: PdfRecordInput): string {
 
   ${renderChecklist(input.checklist, input.frequencyScope)}
 
-  <h2>Measurements</h2>
   ${renderMeasurements(input.measurements)}
 
   <h2>Parts Used</h2>

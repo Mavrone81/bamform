@@ -328,6 +328,51 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('PASS');
   });
 
+  describe("renderMeasurements — the sheet's own columns (Task 4b)", () => {
+    it('heads the measurement result column "Result", not "Judgement"', () => {
+      const html = renderRecordHtml(baseInput({}));
+      expect(html).toContain('<th class="p-mk">Result</th>');
+      expect(html).not.toContain('<th>Judgement</th>');
+    });
+
+    it('prints the specification verbatim and flags a FAIL', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          measurements: [
+            {
+              description: '91 steps calibration',
+              unit: 'μm/encoder',
+              specDisplay: '0.19 – 0.21 μm/encoder',
+              reading: '0.218',
+              judgement: 'FAIL',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('0.19 – 0.21 μm/encoder');
+      expect(html).toContain('class="c fail-ink"');
+    });
+
+    it('prints an em dash for a measurement with no reading', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          measurements: [
+            {
+              description: 'Vacuum Check',
+              unit: 'mmHg',
+              specDisplay: '> -600 mmHg',
+              reading: null,
+              judgement: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('<td class="c">—</td>');
+    });
+  });
+
   it('includes the signature block with name, role and timestamp (UR-057)', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Jane Doe');
