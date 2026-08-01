@@ -11,6 +11,9 @@
     "node": ">=22"
   },
   "scripts": {
+    "//hooks": "core.hooksPath points git at scripts/git-hooks (tracked, reviewable) instead of the untracked .git/hooks. `prepare` runs on npm install/ci; it is deliberately total — inside the Docker build stages there is no git binary and no .git directory, and an install must not fail because of a developer convenience.",
+    "prepare": "git config core.hooksPath scripts/git-hooks 2>/dev/null || true",
+    "hooks:install": "git config core.hooksPath scripts/git-hooks",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
