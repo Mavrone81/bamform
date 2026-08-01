@@ -147,9 +147,12 @@ export class PdfRecordAssemblyService {
         const item = itemsById.get(r.templateItemId);
         // A result whose item fell off the active revision (soft-removed —
         // see `JOB_FULL_INCLUDE`'s `active: true` filter) has no frequency of
-        // its own to check against scope; fall back to the job's own
-        // frequency rather than fabricate one.
-        const frequency = item?.frequency ?? job.frequency;
+        // its own to resolve scope against. Fail CLOSED, the same way a
+        // Y-on-6M row is closed: `''` can never appear in a real
+        // `frequency_scope` array (`FrequencyT` is `'M1' | 'M3' | 'M6' |
+        // 'Y'`), so `itemInScope` below always returns false for this row
+        // rather than fabricating a frequency that would force it open.
+        const frequency = item?.frequency ?? '';
         return {
           itemNo: item?.itemNo ?? 0,
           frequency,
