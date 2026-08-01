@@ -439,8 +439,6 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   .p-out { color: #777; }
   .fail-ink { color: #a8261c; font-weight: 700; }
   .muted { color: #777; font-style: italic; }
-  .judgement-FAIL { color: #b00020; font-weight: bold; }
-  .status-NOT_DONE { color: #b00020; font-weight: bold; }
   .signature-block { display: inline-block; width: 45%; margin: 6px 2%; border: 1px solid #ccc; padding: 6px; vertical-align: top; }
   .drawn-signature { max-width: 180px; max-height: 80px; display: block; border-bottom: 1px solid #333; }
   .record-footer { margin-top: 24px; border-top: 1px solid #999; padding-top: 4px; font-size: 9px; color: #444; }
