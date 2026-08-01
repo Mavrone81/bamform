@@ -3147,6 +3147,13 @@ components:
         safety: { type: [string, 'null'] }
         procedure: { type: [string, 'null'] }
         remarks: { type: [string, 'null'] }
+        frequencyBanner:
+          type: string
+          nullable: true
+          description: >-
+            The form's printed frequency banner, verbatim. Reproduced on the
+            printed record's selection band. Not derivable from item
+            frequencies.
         cascadeOverride: { type: [object, 'null'], additionalProperties: true }
 
     TemplateItem:

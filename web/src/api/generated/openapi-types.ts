@@ -2393,6 +2393,8 @@ export interface components {
       safety?: string | null;
       procedure?: string | null;
       remarks?: string | null;
+      /** @description The form's printed frequency banner, verbatim. Reproduced on the printed record's selection band. Not derivable from item frequencies. */
+      frequencyBanner?: string | null;
       cascadeOverride?: {
         [key: string]: unknown;
       } | null;

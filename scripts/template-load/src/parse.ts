@@ -292,7 +292,7 @@ export function parseFormWorkbook(path: string): ParsedDocument {
     }
   }
 
-  // --- Frequency banner (informational only, TLP §4.1) -------------------
+  // --- Frequency banner (loaded into standing content, TLP §4.1) ---------
   const bannerParts: string[] = [];
   for (let r = valueRow + 1; r <= valueRow + 3; r++) {
     for (const col of ['C', 'D', 'H', 'L']) {

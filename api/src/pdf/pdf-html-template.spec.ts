@@ -1,9 +1,25 @@
 import {
   escapeHtml,
+  itemInScope,
   renderRecordHtml,
   signatureBlockLabel,
   type PdfRecordInput,
 } from './pdf-html-template';
+
+/**
+ * Fix round 2, I-finding: `class="c fail-ink"` and `<td class="c">—</td>`
+ * are produced by BOTH the checklist table (a NOT_DONE row / an out-of-scope
+ * row) and the measurement table (a FAIL judgement / a blank reading) — an
+ * unscoped `html.toContain(...)` for one can pass only because the other
+ * table's default fixture happens not to also produce it. Scope each
+ * assertion to the table it actually means to test.
+ */
+function checklistTableOf(html: string): string {
+  return /<table class="p">[\s\S]*?<\/table>/.exec(html)![0];
+}
+function measurementsTableOf(html: string): string {
+  return /Measurement Records<\/div>\s*<table class="p">[\s\S]*?<\/table>/.exec(html)![0];
+}
 
 function baseInput(overrides: Partial<PdfRecordInput> = {}): PdfRecordInput {
   return {
@@ -13,8 +29,10 @@ function baseInput(overrides: Partial<PdfRecordInput> = {}): PdfRecordInput {
     documentTitle: 'Besi Die Attach Preventive Maintenance Record',
     revisionCode: 'R2',
     assetCode: 'AST-001',
+    machineCode: 'AW02',
     assetDescription: 'Die Attach Machine',
     frequency: 'M1',
+    frequencyScope: ['M3', 'M6'],
     dueOn: '2026-07-01',
     status: 'ARCHIVED',
     standingContent: {
@@ -25,7 +43,16 @@ function baseInput(overrides: Partial<PdfRecordInput> = {}): PdfRecordInput {
       procedure: null,
       remarks: 'All good',
     },
-    checklist: [{ itemNo: 1, instruction: 'Check belts', status: 'DONE', remark: null }],
+    checklist: [
+      {
+        itemNo: 1,
+        frequency: 'M3',
+        inScope: true,
+        instruction: 'Check belts',
+        status: 'DONE',
+        remark: null,
+      },
+    ],
     measurements: [
       {
         description: 'Temperature',
@@ -67,32 +94,355 @@ describe('escapeHtml', () => {
 });
 
 describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
-  it('includes the header block: document title, document number, revision, job/asset', () => {
+  it('includes the header block: document title, document number, revision, job/machine', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Besi Die Attach Preventive Maintenance Record');
     expect(html).toContain('CE 95 010 00 01');
     expect(html).toContain('R2');
     expect(html).toContain('PM-0001');
-    expect(html).toContain('AST-001');
+    expect(html).toContain('AW02');
   });
 
-  it('includes the frequency banner', () => {
+  it('prints the machine in the header grid', () => {
+    const html = renderRecordHtml(baseInput({ machineCode: 'AW02' }));
+    expect(html).toContain('<span>Machine</span><span>AW02</span>');
+  });
+
+  it('includes the frequency selection band, falling back to the scope when no banner was loaded', () => {
     const html = renderRecordHtml(baseInput());
-    expect(html).toMatch(/Frequency:\s*M1/);
+    expect(html).toContain('class="p-band"');
+    expect(html).toContain('<span class="on">3M</span>');
+    expect(html).toContain('<span class="on">6M</span>');
   });
 
-  it('includes tools, parts-required, PPE and safety blocks', () => {
+  it('marks the selected frequency in the band and leaves the others unmarked', () => {
+    const html = renderRecordHtml(
+      baseInput({
+        frequencyScope: ['M3', 'M6'],
+        standingContent: { frequencyBanner: 'Three Monthly (3M) Six Monthly (6M) Yearly (Y)' },
+      }),
+    );
+    expect(html).toContain('<span class="on">Six Monthly (6M)</span>');
+    expect(html).toContain('<span class="off">Yearly (Y)</span>');
+  });
+
+  it('falls back to the scope itself when no banner was loaded', () => {
+    const html = renderRecordHtml(
+      baseInput({ frequencyScope: ['M3'], standingContent: { frequencyBanner: null } }),
+    );
+    expect(html).toContain('<span class="on">3M</span>');
+  });
+
+  /**
+   * I3 fix (final review, Important finding): the owner ruling that an empty
+   * `frequencyScope` is an AD-HOC job where every checklist item is in scope
+   * (`itemInScope`'s doc comment — "THE EMPTY SCOPE IS THE WHOLE POINT") had
+   * been applied to `itemInScope` only. `renderFrequencyBand` still marked a
+   * token on only when `scope.includes(code)`, so an ad-hoc record printed
+   * every option greyed off above a full page of completed work — and with
+   * no banner loaded, an EMPTY grey box. Pinned in both the banner and
+   * no-banner (fallback) shapes.
+   */
+  it('marks every option on in the frequency band for an ad-hoc job (frequencyScope: []), with and without a loaded banner', () => {
+    const withBanner = renderRecordHtml(
+      baseInput({
+        frequencyScope: [],
+        standingContent: {
+          frequencyBanner: 'Monthly (1M) Three Monthly (3M) Six Monthly (6M) Yearly (Y)',
+        },
+      }),
+    );
+    expect(withBanner).not.toContain('class="off"');
+    expect(withBanner).toContain('<span class="on">Monthly (1M)</span>');
+    expect(withBanner).toContain('<span class="on">Three Monthly (3M)</span>');
+    expect(withBanner).toContain('<span class="on">Six Monthly (6M)</span>');
+    expect(withBanner).toContain('<span class="on">Yearly (Y)</span>');
+
+    const withoutBanner = renderRecordHtml(
+      baseInput({ frequencyScope: [], standingContent: { frequencyBanner: null } }),
+    );
+    // Never an empty band — the no-banner fallback must also mark ad-hoc as
+    // fully in scope, not degrade to rendering nothing.
+    expect(withoutBanner).not.toMatch(/class="p-band">\s*<\/div>/);
+    expect(withoutBanner).toContain('<span class="on">1M</span>');
+    expect(withoutBanner).toContain('<span class="on">3M</span>');
+    expect(withoutBanner).toContain('<span class="on">6M</span>');
+    expect(withoutBanner).toContain('<span class="on">Y</span>');
+  });
+
+  it('escapes a banner containing markup', () => {
+    const html = renderRecordHtml(
+      baseInput({ standingContent: { frequencyBanner: '<script>x</script> (3M)' } }),
+    );
+    expect(html).not.toContain('<script>');
+  });
+
+  /**
+   * Task 5: the old separate "Parts Required" `<h2>` section is gone — the
+   * sheet's own standing-content block prints what was actually USED
+   * (`partsUsed`), not the planning list (`partsRequired`), matching the
+   * physical form (see `renderStandingBlock`'s doc comment). `standingContent
+   * .partsRequired`'s `Filter` row is therefore no longer expected on the
+   * printed record; `partsUsed`'s `Belt` row is.
+   */
+  it('includes standing content: special tools, parts used, PPE and safety, in one labelled block', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Torque wrench');
-    expect(html).toContain('Filter');
+    expect(html).toContain('Belt');
     expect(html).toContain('Gloves');
     expect(html).toContain('Lockout/tagout before servicing');
+  });
+
+  describe('renderStandingBlock / renderSignatures / page footer (Task 5)', () => {
+    it('prints standing content as one labelled block, not separate headings', () => {
+      const html = renderRecordHtml(
+        baseInput({ standingContent: { ppe: ['Safety Shoes'], safety: 'Lock out.' } }),
+      );
+      expect(html).toContain('<dt>PPE</dt>');
+      expect(html).not.toContain('<h2>PPE</h2>');
+    });
+
+    it('prints three signature cells with the captions signatureBlockLabel gives', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          signatures: [
+            {
+              approvalStepId: 's1',
+              stageOrdinal: 0,
+              action: 'SUBMITTED',
+              actorName: 'R. Tan',
+              actorRoleCode: 'MAINTAINER',
+              actedAt: '2026-08-14',
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('Maintenance Performed By');
+      expect(html).toContain('R. Tan');
+    });
+
+    it('prints the stored digest in the footer without recomputing it', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          footer: {
+            recordId: 'r1',
+            integrityDigestHex: 'deadbeef',
+            renderedAt: '2026-08-14T00:00:00Z',
+          },
+        }),
+      );
+      expect(html).toContain('deadbeef');
+    });
   });
 
   it('includes the numbered checklist with recorded status', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Check belts');
     expect(html).toContain('DONE');
+  });
+
+  describe("renderChecklist — the sheet's own columns (Task 4)", () => {
+    it('prints No, Freq, Instruction, Status and Remark in that order', () => {
+      const html = renderRecordHtml(baseInput({}));
+      // A generic `<thead>` match is not scoped to a specific table — the
+      // document renders more than one (checklist, measurements). Scope the
+      // match to the checklist table specifically (`<table class="p">`,
+      // first one in document order) rather than relying on ordering.
+      const head = /<table class="p"><thead>(.*?)<\/thead>/s.exec(html)![1];
+      expect(head.indexOf('No')).toBeLessThan(head.indexOf('Freq'));
+      expect(head.indexOf('Freq')).toBeLessThan(head.indexOf('Maintenance Instruction'));
+      expect(head.indexOf('Maintenance Instruction')).toBeLessThan(head.indexOf('Status'));
+      expect(head.indexOf('Status')).toBeLessThan(head.indexOf('Remark'));
+    });
+
+    /**
+     * I2 fix (final review): `frequency` arrives as the stored enum (`M3`,
+     * `M6`) but column B of the workbook — and the frequency band and the
+     * out-of-scope reason right next to it — print the SHEET's form (`3M`,
+     * `6M`). Three notations for one frequency on one page would read as a
+     * defect on a controlled record; the Freq column must convert like the
+     * other two.
+     */
+    it("prints each row's frequency in the Freq column in the sheet's own form, not the stored enum", () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: ['M3', 'M6'],
+          checklist: [
+            {
+              itemNo: 1,
+              frequency: 'M3',
+              inScope: true,
+              instruction: 'Clean',
+              status: 'DONE',
+              remark: null,
+            },
+            {
+              itemNo: 9,
+              frequency: 'M6',
+              inScope: true,
+              instruction: 'Fans',
+              status: 'DONE',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('<td class="p-fq">3M</td>');
+      expect(html).toContain('<td class="p-fq">6M</td>');
+      expect(html).not.toContain('<td class="p-fq">M3</td>');
+      expect(html).not.toContain('<td class="p-fq">M6</td>');
+    });
+
+    it('prints an out-of-scope row, numbered, with an em dash and a reason', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: ['M3', 'M6'],
+          checklist: [
+            {
+              itemNo: 13,
+              frequency: 'Y',
+              inScope: false,
+              instruction: 'Calibrate',
+              status: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('>13<');
+      expect(html).toContain('—');
+      expect(html).toContain('Not in scope (6M)');
+    });
+
+    it('prints the status word, not a glyph, and flags NOT_DONE', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          checklist: [
+            {
+              itemNo: 12,
+              frequency: 'M6',
+              inScope: true,
+              instruction: 'ESD',
+              status: 'NOT_DONE',
+              remark: 'WO-2291',
+            },
+          ],
+        }),
+      );
+      const checklistTable = checklistTableOf(html);
+      expect(checklistTable).toContain('NOT DONE');
+      expect(checklistTable).toContain('class="c fail-ink"');
+    });
+
+    /**
+     * Owner ruling on the soft-removed-item sentinel: the assembly service
+     * deliberately sets `frequency: ''` for a row whose template item was
+     * removed from the revision (the correct fail-closed value for
+     * `itemInScope`), but a bare blank Freq cell is visually
+     * indistinguishable from a rendering defect if a viewer doesn't also
+     * read the instruction column. The Freq column must print a visible
+     * placeholder, not nothing.
+     */
+    it("prints a placeholder, not a blank cell, when a soft-removed item's frequency is empty", () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: ['M3', 'M6'],
+          checklist: [
+            {
+              itemNo: 7,
+              frequency: '',
+              inScope: false,
+              instruction: 'Replace filter (item removed from revision)',
+              status: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('<td class="p-fq">—</td>');
+      expect(html).not.toContain('<td class="p-fq"></td>');
+    });
+
+    /**
+     * Fix round 1, CRITICAL finding: `frequencyScope: []` is a deliberate,
+     * documented production value for ad-hoc jobs
+     * (`api/src/jobs/adhoc-job.service.ts` — "THE EMPTY SCOPE IS THE WHOLE
+     * POINT"), not "nothing applies". Owner ruling: on an ad-hoc job every
+     * checklist item is in scope, so its rows must print OPEN — no closed
+     * cell, no "Not in scope" reason.
+     *
+     * Task 7 re-review finding — RENDERING ONLY. This test hardcodes
+     * `inScope: true` on both rows below, so it never calls the real
+     * `itemInScope` and would still pass if `itemInScope` regressed to its
+     * old, buggy "empty scope means nothing applies" form. It proves
+     * `renderChecklist` prints an already-open row as open on an ad-hoc
+     * job — nothing about whether that row IS correctly computed as open.
+     * The end-to-end wiring (`job.frequencyScope` → `itemInScope` →
+     * assembled `inScope`) is covered separately, by
+     * `pdf-record-assembly.service.spec.ts`'s "an ad-hoc job (empty
+     * frequencyScope) resolves a real template item as in scope" test,
+     * which calls `PdfRecordAssemblyService#buildChecklist` — the real,
+     * un-mocked `itemInScope` — rather than a precomputed fixture flag.
+     */
+    it('renders an ad-hoc job (empty scope) with checklist rows open, not closed, GIVEN an already-true inScope flag (rendering only — see pdf-record-assembly.service.spec.ts for the itemInScope wiring)', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: [],
+          checklist: [
+            {
+              itemNo: 1,
+              frequency: 'M3',
+              inScope: true,
+              instruction: 'Check belts',
+              status: 'DONE',
+              remark: null,
+            },
+            {
+              itemNo: 2,
+              frequency: 'Y',
+              inScope: true,
+              instruction: 'Calibrate',
+              status: 'DONE',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).not.toContain('Not in scope');
+      expect(html).not.toContain('class="p-out"');
+      expect(html).toContain('<td class="p-fq">3M</td>');
+      expect(html).toContain('<td class="p-fq">Y</td>');
+    });
+
+    /**
+     * Fix round 1: `scopeLabel([])` naively produced a bare `"M"` (matches
+     * none of the sheet's real frequency labels — `3M`, `6M`, `Y`), which
+     * reads as a rendering defect on a controlled record. The ruling makes
+     * this path unreachable in practice (an ad-hoc job now puts every real
+     * frequency in scope), but the orphaned-row sentinel can still land here
+     * on an ad-hoc job — it fails closed regardless of scope — so the guard
+     * must hold: a bare "Not in scope", never a malformed "(M)" reason.
+     */
+    it('prints a bare "Not in scope" reason, never a malformed "(M)", for the sentinel on an ad-hoc job', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: [],
+          checklist: [
+            {
+              itemNo: 4,
+              frequency: '',
+              inScope: false,
+              instruction: 'Removed item',
+              status: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('Not in scope</td>');
+      expect(html).not.toContain('Not in scope (');
+      expect(html).not.toContain('(M)');
+    });
   });
 
   it('includes the measurement table with specification and reading', () => {
@@ -103,11 +453,68 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('PASS');
   });
 
-  it('includes the signature block with name, role and timestamp (UR-057)', () => {
+  describe("renderMeasurements — the sheet's own columns (Task 4b)", () => {
+    it('heads the measurement result column "Result", not "Judgement"', () => {
+      const html = renderRecordHtml(baseInput({}));
+      expect(html).toContain('<th class="p-mk">Result</th>');
+      expect(html).not.toContain('<th>Judgement</th>');
+    });
+
+    it('prints the specification verbatim and flags a FAIL', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          measurements: [
+            {
+              description: '91 steps calibration',
+              unit: 'μm/encoder',
+              specDisplay: '0.19 – 0.21 μm/encoder',
+              reading: '0.218',
+              judgement: 'FAIL',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      const measurementsTable = measurementsTableOf(html);
+      expect(measurementsTable).toContain('0.19 – 0.21 μm/encoder');
+      expect(measurementsTable).toContain('class="c fail-ink"');
+    });
+
+    it('prints an em dash for a measurement with no reading', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          measurements: [
+            {
+              description: 'Vacuum Check',
+              unit: 'mmHg',
+              specDisplay: '> -600 mmHg',
+              reading: null,
+              judgement: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(measurementsTableOf(html)).toContain('<td class="c">—</td>');
+    });
+  });
+
+  /**
+   * UR-057 is Mandatory (`docs/URD.md:320`): "The rendered document shall
+   * display, for each signature, the signatory's full name, role and the
+   * date and time of signing." Owner ruling 2026-08-01 (Task 5 fix round 1)
+   * restored `actorRoleCode` to the three-cell row after an earlier draft of
+   * this task dropped it — the caption above the cell (e.g. "Verified By
+   * (Workshop Team Leader)") names the STAGE, not the individual signatory's
+   * own role code, so the two are not interchangeable.
+   */
+  it('includes the signature row with name, role and timestamp (UR-057, Mandatory)', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Jane Doe');
     expect(html).toContain('TEAM_LEADER');
     expect(html).toContain('2026-07-02T10:00:00.000Z');
+    // All three in the same cell, name first, per the amended plan's markup.
+    expect(html).toMatch(/Jane Doe · TEAM_LEADER · 2026-07-02T10:00:00\.000Z/);
   });
 
   /**
@@ -198,7 +605,19 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('data:image/png;base64,BASE64DATA');
   });
 
-  it('renders "(no drawn signature captured...)" when a step has none (return/recall/void)', () => {
+  /**
+   * Task 5: a step with no drawn signature (return/recall/void) prints the
+   * sheet's own blank signature line (`.p-sigline`) in place of the drawn
+   * `<img>` — the physical form's blank rule, not prose apologising for its
+   * absence.
+   *
+   * Owner ruling 2026-08-01 (Task 5 fix round 1), Journey C / AC-06
+   * (`docs/URD.md`): "the archive shows the full sequence with timestamps"
+   * including "returned with reason" — a RETURNED step's `reason` MUST
+   * still print. `renderSignatures` iterates every approval action, so this
+   * RETURNED step gets its own cell and carries its reason there.
+   */
+  it('renders a blank signature line and the RETURNED reason when a step has no drawn signature', () => {
     const html = renderRecordHtml(
       baseInput({
         signatures: [
@@ -215,9 +634,45 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
         ],
       }),
     );
-    expect(html).toContain('no drawn signature captured');
-    expect(html).toContain('Missing measurement');
+    expect(html).toContain('class="p-sigline"');
+    expect(html).toContain('Returned By (Stage 1)');
+    expect(html).toContain('John Smith');
+    expect(html).toContain('ENGINEER');
+    expect(html).toContain('Reason: Missing measurement');
     expect(html).not.toContain('data:image/png;base64,');
+  });
+
+  /**
+   * UR-052 + URD Journey D (`docs/URD.md`): "every action shall be recorded
+   * as performed by the delegate on behalf of the approver" — the archive
+   * must read "verified by X, acting as delegate for Y", never print a
+   * delegated signature identically to a personal one. Owner ruling
+   * 2026-08-01 (Task 5 fix round 1) restored `onBehalfOfName` to the
+   * signature cell. Pinned both directions: present when set, ABSENT when
+   * not — a delegated signature must be distinguishable from a personal one
+   * in both directions, not just printable when present.
+   */
+  it('prints "on behalf of" only for a delegated signature, never for a personal one', () => {
+    const delegated = renderRecordHtml(
+      baseInput({
+        signatures: [
+          {
+            approvalStepId: 'step-3',
+            stageOrdinal: 2,
+            action: 'VERIFIED',
+            actorName: 'Sam Supervisor',
+            actorRoleCode: 'ENGINEER',
+            actedAt: '2026-07-02T11:00:00.000Z',
+            drawnSignatureBase64: 'BASE64DATA',
+            onBehalfOfName: 'Terry Team Leader',
+          },
+        ],
+      }),
+    );
+    expect(delegated).toContain('on behalf of Terry Team Leader');
+
+    const personal = renderRecordHtml(baseInput()); // baseInput's signature has no onBehalfOfName
+    expect(personal).not.toContain('on behalf of');
   });
 
   it('includes the Remarks footer (PR-116)', () => {
@@ -225,10 +680,42 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('All good');
   });
 
-  it('the page footer carries the record id and integrity digest (PR-118)', () => {
+  /**
+   * PR-118, this file's own header comment: "the page footer ALSO carries
+   * the record id and integrity digest." Owner ruling 2026-08-01 (Task 5 fix
+   * round 1) restored `<span>Record ${recordId}</span>` after an earlier
+   * draft dropped it — `footer.recordId` IS `job.id`
+   * (`pdf-record-assembly.service.ts:70/103`), and
+   * `api/test/integration/records-pdf.spec.ts:531`/`:599` assert the job id
+   * appears in the extracted PDF text; dropping it broke both. The footer
+   * ALSO carries the document/machine/job identity line, which the sheet
+   * itself has no field for but an auditor would still read a record by.
+   */
+  it('the page footer carries the record id, identity line and integrity digest (PR-118)', () => {
     const html = renderRecordHtml(baseInput());
-    expect(html).toContain('rec-1');
+    expect(html).toContain('CE 95 010 00 01');
+    expect(html).toContain('PM-0001');
+    expect(html).toMatch(/p-foot[\s\S]*Record rec-1/);
     expect(html).toContain('deadbeef');
+  });
+
+  /**
+   * Fix round 1 finding 1 — the header grid carries no status field, and
+   * `pdf-coordinator.service.ts` documents that archival status is NOT the
+   * access gate (a PDF can be pulled for a SUBMITTED-but-unverified job).
+   * Without an explicit status, a SUBMITTED and an ARCHIVED record read
+   * header-identical. Owner ruling: print status in the footer alongside
+   * the other record metadata (integrity digest, record id) rather than
+   * restoring it to the sheet's own header/body.
+   *
+   * Task 5 replaced the `.record-footer` div this ruling landed on with the
+   * sheet's own `.p-foot` page footer — the selector below tracks that
+   * rename, but the ruling itself (status must survive in the footer) is
+   * unchanged and is NOT weakened here.
+   */
+  it('the page footer carries the record status (fix round 1, finding 1)', () => {
+    const html = renderRecordHtml(baseInput({ status: 'SUBMITTED' }));
+    expect(html).toMatch(/p-foot[\s\S]*Status:\s*SUBMITTED/);
   });
 
   it('a DIFFERENT integrity digest produces a DIFFERENT footer (tamper-detectable at a glance)', () => {
@@ -247,6 +734,8 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
         checklist: [
           {
             itemNo: 1,
+            frequency: 'M3',
+            inScope: true,
             instruction: 'Check belts',
             status: 'DONE',
             remark: '<img src=x onerror=alert(1)>',
@@ -258,15 +747,51 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 
-  it('escapes malicious content in the document title and asset description', () => {
+  /**
+   * Task 7, extra requirement 2. `actorRoleCode`, `onBehalfOfName` and
+   * `reason` are all printed in the signature cells (`renderSignatures`) and
+   * are all passed through `esc()` there, but until this test nothing
+   * exercised that escaping — only the void reason (U-VOID-06, below) and
+   * a checklist remark (above) were covered. In the style of the void-reason
+   * escaping test: feed markup through each of the three fields and assert
+   * it is escaped, never passed through raw.
+   */
+  it('escapes malicious content in actorRoleCode, onBehalfOfName and reason (SECURITY_ARCHITECTURE.md §8 — no markup injection)', () => {
+    const html = renderRecordHtml(
+      baseInput({
+        signatures: [
+          {
+            approvalStepId: 'step-4',
+            stageOrdinal: 1,
+            action: 'RETURNED',
+            actorName: 'Sam Supervisor',
+            actorRoleCode: '<img src=x onerror=alert(1)>',
+            actedAt: '2026-07-02T12:00:00.000Z',
+            drawnSignatureBase64: null,
+            onBehalfOfName: '<script>alert(2)</script>',
+            reason: '<script>alert(3)</script>',
+          },
+        ],
+      }),
+    );
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).not.toContain('<script>alert(2)</script>');
+    expect(html).not.toContain('<script>alert(3)</script>');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).toContain('on behalf of &lt;script&gt;alert(2)&lt;/script&gt;');
+    expect(html).toContain('Reason: &lt;script&gt;alert(3)&lt;/script&gt;');
+  });
+
+  // `assetDescription` is not rendered anywhere in this template — dropped
+  // from this test (was asserting nothing) rather than left implying
+  // coverage that doesn't exist.
+  it('escapes malicious content in the document title', () => {
     const html = renderRecordHtml(
       baseInput({
         documentTitle: '<script>alert(1)</script>',
-        assetDescription: '"><script>alert(2)</script>',
       }),
     );
     expect(html).not.toContain('<script>alert(1)</script>');
-    expect(html).not.toContain('<script>alert(2)</script>');
   });
 
   it('handles an empty checklist/measurements/parts/attachments/signatures gracefully', () => {
@@ -281,13 +806,28 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     );
     expect(html).toContain('No checklist items.');
     expect(html).toContain('No measurements.');
-    expect(html).toContain('No parts used.');
+    // Task 5: "no parts used" is now rendered inline in the standing-content
+    // block's <dd> (`<span class="muted">None.</span>`), not as its own
+    // sentence — the same fallback used for "no remarks".
+    expect(html).toContain('<dt>Parts Used</dt><dd><span class="muted">None.</span></dd>');
     expect(html).toContain('No attachments.');
     expect(html).toContain('No approval actions recorded yet.');
   });
 
   // ------------------------------------------------------- slice 17-VOID
 
+  /**
+   * Owner ruling 2026-08-01 (Task 5 fix round 1, Important finding): an
+   * earlier draft of this task dropped the footer's void line entirely.
+   * `.void-banner` is NOT `position: fixed`, so the void REASON prints on
+   * page 1 only; the `position: fixed` watermark that repeats on every page
+   * carries just the word VOID, not why. A print/view of only the last page
+   * of a multi-page voided record would say THAT it is void without saying
+   * WHY — exactly what this footer line exists to prevent. Restored as
+   * `<div class="p-foot-void">` after the `.p-foot` block, and the
+   * assertion below is restored to match (not merely the `Status: VOIDED`
+   * fallback a prior round of this fix used instead).
+   */
   it('U-VOID-04: a voided record renders the VOID watermark, banner and footer line — the PDF must tell the truth', () => {
     const html = renderRecordHtml(
       baseInput({
@@ -305,14 +845,18 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(html).toContain('Ada Admin');
     expect(html).toContain('2026-07-28T01:00:00.000Z');
     // The footer carries the void line too (survives a single-page print of
-    // the last page alone).
-    expect(html).toMatch(/record-footer[\s\S]*RECORD VOID/);
+    // the last page alone) — restored in `.p-foot-void`, printed after the
+    // `.p-foot` metadata row.
+    expect(html).toMatch(/p-foot-void[\s\S]*RECORD VOID/);
+    // The footer's Status field still carries the same signal too.
+    expect(html).toMatch(/p-foot[\s\S]*Status:\s*VOIDED/);
   });
 
   it('U-VOID-05: a live record renders NO void marking (the stylesheet may define the class; no element uses it)', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).not.toContain('class="void-watermark"');
     expect(html).not.toContain('class="void-banner"');
+    expect(html).not.toContain('class="p-foot-void"');
     expect(html).not.toContain('RECORD VOID');
   });
 
@@ -329,5 +873,49 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     );
     expect(html).not.toContain('<script>alert(9)</script>');
     expect(html).toContain('&lt;script&gt;alert(9)&lt;/script&gt;');
+  });
+});
+
+describe('print CSS — A4, margins, repeating headers (Task 6)', () => {
+  it('declares A4 with margins and repeats table headers across pages', () => {
+    const html = renderRecordHtml(baseInput({}));
+    expect(html).toContain('@page { size: A4 portrait;');
+    expect(html).toContain('thead { display: table-header-group; }');
+    expect(html).toContain('tr { break-inside: avoid; }');
+  });
+});
+
+describe('itemInScope', () => {
+  it('is true when the row frequency is in the visit scope', () => {
+    expect(itemInScope('M3', ['M3', 'M6'])).toBe(true);
+    expect(itemInScope('M6', ['M3', 'M6'])).toBe(true);
+  });
+
+  it('is false for a yearly row on a six-monthly visit', () => {
+    expect(itemInScope('Y', ['M3', 'M6'])).toBe(false);
+  });
+
+  /**
+   * Owner ruling 2026-08-01 (Task 4 fix round 1). This assertion is
+   * DELIBERATELY INVERTED from the one Task 2 committed
+   * (`expect(itemInScope('M3', [])).toBe(false)`). An empty scope is not
+   * "nothing applies" — it is `adhoc-job.service.ts`'s deliberate scheduling
+   * device ("THE EMPTY SCOPE IS THE WHOLE POINT") so an ad-hoc job advances
+   * no schedule rule; it says nothing about which checklist items apply. On
+   * an ad-hoc job every item is in scope. This is a corrected requirement,
+   * not a weakened test.
+   */
+  it('treats an empty scope as ad-hoc: every real frequency applies', () => {
+    expect(itemInScope('M3', [])).toBe(true);
+    expect(itemInScope('M6', [])).toBe(true);
+    expect(itemInScope('Y', [])).toBe(true);
+  });
+
+  // The orphaned-row sentinel is a DIFFERENT thing from an empty scope and
+  // still fails closed — including on an ad-hoc job, where an unresolvable
+  // row must never print as work that was expected.
+  it('is false for the empty-frequency sentinel, even on an ad-hoc job', () => {
+    expect(itemInScope('', [])).toBe(false);
+    expect(itemInScope('', ['M3', 'M6'])).toBe(false);
   });
 });

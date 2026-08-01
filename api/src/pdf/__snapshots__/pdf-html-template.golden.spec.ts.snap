@@ -1,0 +1,431 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`QA-format record — golden shapes renders long-18-item stably 1`] = `
+"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>CE 95 043 00 01 — PM-4471</title>
+<style>
+  @page { size: A4 portrait; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
+  /* Chromium repeats a thead on every page only with table-header-group. */
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  .p-sign, .p-standing { break-inside: avoid; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
+  .p-head-l { padding: 5px 7px; border-right: 1px solid #1a1a1a; }
+  .p-title { font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 2px; }
+  .p-head-r { display: grid; grid-template-columns: auto 1fr; }
+  .p-head-r span { padding: 2px 6px; border-bottom: 1px solid #c4c4c4; }
+  .p-head-r span:nth-child(odd) { color: #555; border-right: 1px solid #c4c4c4; }
+  .p-band { border: 1px solid #1a1a1a; border-top: none; text-align: center;
+            padding: 4px; background: #ececec; font-weight: 700; }
+  .p-band .off { color: #999; font-weight: 400; }
+  .p-band .on { text-decoration: underline; text-underline-offset: 2px; }
+  table.p { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+  table.p th, table.p td { border: 1px solid #8a8a8a; padding: 3px 5px; text-align: left; vertical-align: middle; }
+  table.p thead th { background: #ececec; font-size: 9px; text-align: center; font-weight: 700; }
+  table.p thead th.l { text-align: left; }
+  table.p td.c { text-align: center; }
+  .p-no { width: 24px; text-align: center; }
+  .p-fq { width: 32px; text-align: center; }
+  .p-st { width: 58px; text-align: center; }
+  .p-sp { width: 110px; }
+  .p-mk { width: 44px; text-align: center; }
+  .p-out { color: #777; }
+  .fail-ink { color: #a8261c; font-weight: 700; }
+  .muted { color: #777; font-style: italic; }
+  .drawn-signature { max-width: 180px; max-height: 80px; display: block; border-bottom: 1px solid #333; }
+  .void-watermark { position: fixed; top: 40%; left: 8%; font-size: 130px; font-weight: bold; color: rgba(176, 0, 32, 0.14); transform: rotate(-30deg); letter-spacing: 24px; pointer-events: none; z-index: 1000; }
+  .void-banner { border: 2px solid #b00020; color: #b00020; font-weight: bold; padding: 6px 8px; margin: 8px 0; }
+  .p-sect { border: 1px solid #1a1a1a; border-top: none; background: #ececec;
+            padding: 3px 5px; font-weight: 700; font-size: 9px;
+            letter-spacing: 0.05em; text-transform: uppercase; }
+  .p-standing { border: 1px solid #8a8a8a; border-top: none; display: grid; grid-template-columns: 90px 1fr; }
+  .p-standing dt { padding: 3px 5px; border-right: 1px solid #c4c4c4; border-bottom: 1px solid #c4c4c4; font-weight: 700; color: #444; }
+  .p-standing dd { margin: 0; padding: 3px 5px; border-bottom: 1px solid #c4c4c4; }
+  .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
+  .p-sign > div { padding: 5px 6px; }
+  .p-sign > div + div { border-left: 1px solid #8a8a8a; }
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
+  .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
+  .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px;
+            font-size: 8px; color: #555; }
+  .p-foot span { white-space: nowrap; }
+  .p-foot-void { margin-top: 3px; font-size: 8px; font-weight: 700; color: #b00020; }
+</style>
+</head>
+<body>
+  
+  <div class="p-head">
+    <div class="p-head-l">
+      <div class="p-title">ASM Wire Bond Preventive Maintenance Record</div>
+    </div>
+    <div class="p-head-r">
+      <span>Document No.</span><span>CE 95 043 00 01</span>
+      <span>Revision</span><span>C</span>
+      <span>Machine</span><span>AW02</span>
+      <span>Job No.</span><span>PM-4471</span>
+      <span>Date</span><span>2026-08-14</span>
+    </div>
+  </div>
+  <div class="p-band"><span class="on">Three Monthly (3M)</span> &nbsp; <span class="on">Six Monthly (6M)</span> &nbsp; <span class="on">Yearly (Y)</span></div>
+
+  <table class="p"><thead><tr><th class="p-no">No</th><th class="p-fq">Freq</th><th class="l">Maintenance Instruction</th><th class="p-st">Status</th><th class="l">Remark</th></tr></thead><tbody><tr><td class="p-no">1</td><td class="p-fq">1M</td><td>Maintenance instruction number 1 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">2</td><td class="p-fq">1M</td><td>Maintenance instruction number 2 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">3</td><td class="p-fq">1M</td><td>Maintenance instruction number 3 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">4</td><td class="p-fq">1M</td><td>Maintenance instruction number 4 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">5</td><td class="p-fq">1M</td><td>Maintenance instruction number 5 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">6</td><td class="p-fq">1M</td><td>Maintenance instruction number 6 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">7</td><td class="p-fq">1M</td><td>Maintenance instruction number 7 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">8</td><td class="p-fq">1M</td><td>Maintenance instruction number 8 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">9</td><td class="p-fq">1M</td><td>Maintenance instruction number 9 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">10</td><td class="p-fq">1M</td><td>Maintenance instruction number 10 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">11</td><td class="p-fq">3M</td><td>Maintenance instruction number 11 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">12</td><td class="p-fq">3M</td><td>Maintenance instruction number 12 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">13</td><td class="p-fq">3M</td><td>Maintenance instruction number 13 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">14</td><td class="p-fq">3M</td><td>Maintenance instruction number 14 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">15</td><td class="p-fq">6M</td><td>Maintenance instruction number 15 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">16</td><td class="p-fq">6M</td><td>Maintenance instruction number 16 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">17</td><td class="p-fq">6M</td><td>Maintenance instruction number 17 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr><tr><td class="p-no">18</td><td class="p-fq">Y</td><td>Maintenance instruction number 18 for the long-form pagination case</td><td class="c">DONE</td><td></td></tr></tbody></table>
+
+  <div class="p-sect">Measurement Records</div>
+  <table class="p"><thead><tr><th class="l">Description</th><th class="p-sp">Specification</th><th class="p-mk">Reading</th><th class="p-mk">Result</th><th class="l">Remark</th></tr></thead><tbody><tr><td>Heater Block Flatness Check</td><td class="p-sp">Hmin ≤ 20 um</td><td class="c">17.4 um</td><td class="c">PASS</td><td></td></tr><tr><td>91 steps calibration</td><td class="p-sp">0.19 – 0.21 μm/encoder</td><td class="c">0.218 μm/encoder</td><td class="c fail-ink">FAIL</td><td>Above upper limit</td></tr></tbody></table>
+
+  <div class="p-sect">Special Tools · Parts · PPE · Safety</div>
+  <dl class="p-standing">
+    <dt>Special Tools</dt><dd><span class="muted">None specified.</span></dd>
+    <dt>Parts Used</dt><dd>ASM-4471-FLT — Air filter element — Qty 2</dd>
+    <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
+    <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
+    <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
+  </dl>
+  <div class="p-sign"><div>
+        <div class="lbl">Maintenance Performed By</div>
+        <div class="p-sigline"></div>
+        <div class="p-signm">R. Tan · MAINTAINER · 2026-08-14</div>
+        
+      </div></div>
+  <p class="muted">No attachments.</p>
+  <div class="p-foot">
+    <span>CE 95 043 00 01 Rev C · AW02 · PM-4471</span>
+    <span>Status: ARCHIVED</span>
+    <span>Record rec-1</span>
+    <span>SHA-256 deadbeefcafe</span>
+  </div>
+  
+</body>
+</html>"
+`;
+
+exports[`QA-format record — golden shapes renders monthly-only stably 1`] = `
+"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>CE 95 012 00 02 — PM-4471</title>
+<style>
+  @page { size: A4 portrait; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
+  /* Chromium repeats a thead on every page only with table-header-group. */
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  .p-sign, .p-standing { break-inside: avoid; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
+  .p-head-l { padding: 5px 7px; border-right: 1px solid #1a1a1a; }
+  .p-title { font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 2px; }
+  .p-head-r { display: grid; grid-template-columns: auto 1fr; }
+  .p-head-r span { padding: 2px 6px; border-bottom: 1px solid #c4c4c4; }
+  .p-head-r span:nth-child(odd) { color: #555; border-right: 1px solid #c4c4c4; }
+  .p-band { border: 1px solid #1a1a1a; border-top: none; text-align: center;
+            padding: 4px; background: #ececec; font-weight: 700; }
+  .p-band .off { color: #999; font-weight: 400; }
+  .p-band .on { text-decoration: underline; text-underline-offset: 2px; }
+  table.p { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+  table.p th, table.p td { border: 1px solid #8a8a8a; padding: 3px 5px; text-align: left; vertical-align: middle; }
+  table.p thead th { background: #ececec; font-size: 9px; text-align: center; font-weight: 700; }
+  table.p thead th.l { text-align: left; }
+  table.p td.c { text-align: center; }
+  .p-no { width: 24px; text-align: center; }
+  .p-fq { width: 32px; text-align: center; }
+  .p-st { width: 58px; text-align: center; }
+  .p-sp { width: 110px; }
+  .p-mk { width: 44px; text-align: center; }
+  .p-out { color: #777; }
+  .fail-ink { color: #a8261c; font-weight: 700; }
+  .muted { color: #777; font-style: italic; }
+  .drawn-signature { max-width: 180px; max-height: 80px; display: block; border-bottom: 1px solid #333; }
+  .void-watermark { position: fixed; top: 40%; left: 8%; font-size: 130px; font-weight: bold; color: rgba(176, 0, 32, 0.14); transform: rotate(-30deg); letter-spacing: 24px; pointer-events: none; z-index: 1000; }
+  .void-banner { border: 2px solid #b00020; color: #b00020; font-weight: bold; padding: 6px 8px; margin: 8px 0; }
+  .p-sect { border: 1px solid #1a1a1a; border-top: none; background: #ececec;
+            padding: 3px 5px; font-weight: 700; font-size: 9px;
+            letter-spacing: 0.05em; text-transform: uppercase; }
+  .p-standing { border: 1px solid #8a8a8a; border-top: none; display: grid; grid-template-columns: 90px 1fr; }
+  .p-standing dt { padding: 3px 5px; border-right: 1px solid #c4c4c4; border-bottom: 1px solid #c4c4c4; font-weight: 700; color: #444; }
+  .p-standing dd { margin: 0; padding: 3px 5px; border-bottom: 1px solid #c4c4c4; }
+  .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
+  .p-sign > div { padding: 5px 6px; }
+  .p-sign > div + div { border-left: 1px solid #8a8a8a; }
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
+  .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
+  .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px;
+            font-size: 8px; color: #555; }
+  .p-foot span { white-space: nowrap; }
+  .p-foot-void { margin-top: 3px; font-size: 8px; font-weight: 700; color: #b00020; }
+</style>
+</head>
+<body>
+  
+  <div class="p-head">
+    <div class="p-head-l">
+      <div class="p-title">ASM Wire Bond Preventive Maintenance Record</div>
+    </div>
+    <div class="p-head-r">
+      <span>Document No.</span><span>CE 95 012 00 02</span>
+      <span>Revision</span><span>C</span>
+      <span>Machine</span><span>AW02</span>
+      <span>Job No.</span><span>PM-4471</span>
+      <span>Date</span><span>2026-08-14</span>
+    </div>
+  </div>
+  <div class="p-band"><span class="on">Monthly (1M)</span> &nbsp; <span class="off">Three Monthly (3M)</span> &nbsp; <span class="off">Six Monthly (6M)</span> &nbsp; <span class="off">Yearly (Y)</span></div>
+
+  <table class="p"><thead><tr><th class="p-no">No</th><th class="p-fq">Freq</th><th class="l">Maintenance Instruction</th><th class="p-st">Status</th><th class="l">Remark</th></tr></thead><tbody><tr><td class="p-no">1</td><td class="p-fq">1M</td><td>Monthly check</td><td class="c">DONE</td><td></td></tr></tbody></table>
+
+  <div class="p-sect">Measurement Records</div>
+  <table class="p"><thead><tr><th class="l">Description</th><th class="p-sp">Specification</th><th class="p-mk">Reading</th><th class="p-mk">Result</th><th class="l">Remark</th></tr></thead><tbody><tr><td>Heater Block Flatness Check</td><td class="p-sp">Hmin ≤ 20 um</td><td class="c">17.4 um</td><td class="c">PASS</td><td></td></tr><tr><td>91 steps calibration</td><td class="p-sp">0.19 – 0.21 μm/encoder</td><td class="c">0.218 μm/encoder</td><td class="c fail-ink">FAIL</td><td>Above upper limit</td></tr></tbody></table>
+
+  <div class="p-sect">Special Tools · Parts · PPE · Safety</div>
+  <dl class="p-standing">
+    <dt>Special Tools</dt><dd><span class="muted">None specified.</span></dd>
+    <dt>Parts Used</dt><dd>ASM-4471-FLT — Air filter element — Qty 2</dd>
+    <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
+    <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
+    <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
+  </dl>
+  <div class="p-sign"><div>
+        <div class="lbl">Maintenance Performed By</div>
+        <div class="p-sigline"></div>
+        <div class="p-signm">R. Tan · MAINTAINER · 2026-08-14</div>
+        
+      </div></div>
+  <p class="muted">No attachments.</p>
+  <div class="p-foot">
+    <span>CE 95 012 00 02 Rev C · AW02 · PM-4471</span>
+    <span>Status: ARCHIVED</span>
+    <span>Record rec-1</span>
+    <span>SHA-256 deadbeefcafe</span>
+  </div>
+  
+</body>
+</html>"
+`;
+
+exports[`QA-format record — golden shapes renders single-3m stably 1`] = `
+"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>CE 95 020 00 01 — PM-4471</title>
+<style>
+  @page { size: A4 portrait; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
+  /* Chromium repeats a thead on every page only with table-header-group. */
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  .p-sign, .p-standing { break-inside: avoid; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
+  .p-head-l { padding: 5px 7px; border-right: 1px solid #1a1a1a; }
+  .p-title { font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 2px; }
+  .p-head-r { display: grid; grid-template-columns: auto 1fr; }
+  .p-head-r span { padding: 2px 6px; border-bottom: 1px solid #c4c4c4; }
+  .p-head-r span:nth-child(odd) { color: #555; border-right: 1px solid #c4c4c4; }
+  .p-band { border: 1px solid #1a1a1a; border-top: none; text-align: center;
+            padding: 4px; background: #ececec; font-weight: 700; }
+  .p-band .off { color: #999; font-weight: 400; }
+  .p-band .on { text-decoration: underline; text-underline-offset: 2px; }
+  table.p { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+  table.p th, table.p td { border: 1px solid #8a8a8a; padding: 3px 5px; text-align: left; vertical-align: middle; }
+  table.p thead th { background: #ececec; font-size: 9px; text-align: center; font-weight: 700; }
+  table.p thead th.l { text-align: left; }
+  table.p td.c { text-align: center; }
+  .p-no { width: 24px; text-align: center; }
+  .p-fq { width: 32px; text-align: center; }
+  .p-st { width: 58px; text-align: center; }
+  .p-sp { width: 110px; }
+  .p-mk { width: 44px; text-align: center; }
+  .p-out { color: #777; }
+  .fail-ink { color: #a8261c; font-weight: 700; }
+  .muted { color: #777; font-style: italic; }
+  .drawn-signature { max-width: 180px; max-height: 80px; display: block; border-bottom: 1px solid #333; }
+  .void-watermark { position: fixed; top: 40%; left: 8%; font-size: 130px; font-weight: bold; color: rgba(176, 0, 32, 0.14); transform: rotate(-30deg); letter-spacing: 24px; pointer-events: none; z-index: 1000; }
+  .void-banner { border: 2px solid #b00020; color: #b00020; font-weight: bold; padding: 6px 8px; margin: 8px 0; }
+  .p-sect { border: 1px solid #1a1a1a; border-top: none; background: #ececec;
+            padding: 3px 5px; font-weight: 700; font-size: 9px;
+            letter-spacing: 0.05em; text-transform: uppercase; }
+  .p-standing { border: 1px solid #8a8a8a; border-top: none; display: grid; grid-template-columns: 90px 1fr; }
+  .p-standing dt { padding: 3px 5px; border-right: 1px solid #c4c4c4; border-bottom: 1px solid #c4c4c4; font-weight: 700; color: #444; }
+  .p-standing dd { margin: 0; padding: 3px 5px; border-bottom: 1px solid #c4c4c4; }
+  .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
+  .p-sign > div { padding: 5px 6px; }
+  .p-sign > div + div { border-left: 1px solid #8a8a8a; }
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
+  .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
+  .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px;
+            font-size: 8px; color: #555; }
+  .p-foot span { white-space: nowrap; }
+  .p-foot-void { margin-top: 3px; font-size: 8px; font-weight: 700; color: #b00020; }
+</style>
+</head>
+<body>
+  
+  <div class="p-head">
+    <div class="p-head-l">
+      <div class="p-title">ASM Wire Bond Preventive Maintenance Record</div>
+    </div>
+    <div class="p-head-r">
+      <span>Document No.</span><span>CE 95 020 00 01</span>
+      <span>Revision</span><span>C</span>
+      <span>Machine</span><span>AW02</span>
+      <span>Job No.</span><span>PM-4471</span>
+      <span>Date</span><span>2026-08-14</span>
+    </div>
+  </div>
+  <div class="p-band"><span class="on">Three Monthly (3M)</span> &nbsp; <span class="on">Six Monthly (6M)</span> &nbsp; <span class="off">Yearly (Y)</span></div>
+
+  <table class="p"><thead><tr><th class="p-no">No</th><th class="p-fq">Freq</th><th class="l">Maintenance Instruction</th><th class="p-st">Status</th><th class="l">Remark</th></tr></thead><tbody><tr><td class="p-no">1</td><td class="p-fq">3M</td><td>Inspection and check safety interlock / emergency stop is functional</td><td class="c">DONE</td><td></td></tr><tr class="p-out"><td class="p-no">13</td><td class="p-fq">Y</td><td>Calibrate Workholder, BH Setup, Heater Block Setup, Bond Force</td><td class="c">—</td><td>Not in scope (6M)</td></tr></tbody></table>
+
+  <div class="p-sect">Measurement Records</div>
+  <table class="p"><thead><tr><th class="l">Description</th><th class="p-sp">Specification</th><th class="p-mk">Reading</th><th class="p-mk">Result</th><th class="l">Remark</th></tr></thead><tbody><tr><td>Heater Block Flatness Check</td><td class="p-sp">Hmin ≤ 20 um</td><td class="c">17.4 um</td><td class="c">PASS</td><td></td></tr><tr><td>91 steps calibration</td><td class="p-sp">0.19 – 0.21 μm/encoder</td><td class="c">0.218 μm/encoder</td><td class="c fail-ink">FAIL</td><td>Above upper limit</td></tr></tbody></table>
+
+  <div class="p-sect">Special Tools · Parts · PPE · Safety</div>
+  <dl class="p-standing">
+    <dt>Special Tools</dt><dd><span class="muted">None specified.</span></dd>
+    <dt>Parts Used</dt><dd>ASM-4471-FLT — Air filter element — Qty 2</dd>
+    <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
+    <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
+    <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
+  </dl>
+  <div class="p-sign"><div>
+        <div class="lbl">Maintenance Performed By</div>
+        <div class="p-sigline"></div>
+        <div class="p-signm">R. Tan · MAINTAINER · 2026-08-14</div>
+        
+      </div></div>
+  <p class="muted">No attachments.</p>
+  <div class="p-foot">
+    <span>CE 95 020 00 01 Rev C · AW02 · PM-4471</span>
+    <span>Status: ARCHIVED</span>
+    <span>Record rec-1</span>
+    <span>SHA-256 deadbeefcafe</span>
+  </div>
+  
+</body>
+</html>"
+`;
+
+exports[`QA-format record — golden shapes renders voided stably 1`] = `
+"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>CE 95 020 00 01 — PM-4471</title>
+<style>
+  @page { size: A4 portrait; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; color: #1a1a1a; margin: 0; }
+  /* Chromium repeats a thead on every page only with table-header-group. */
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  .p-sign, .p-standing { break-inside: avoid; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
+  .p-head-l { padding: 5px 7px; border-right: 1px solid #1a1a1a; }
+  .p-title { font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 2px; }
+  .p-head-r { display: grid; grid-template-columns: auto 1fr; }
+  .p-head-r span { padding: 2px 6px; border-bottom: 1px solid #c4c4c4; }
+  .p-head-r span:nth-child(odd) { color: #555; border-right: 1px solid #c4c4c4; }
+  .p-band { border: 1px solid #1a1a1a; border-top: none; text-align: center;
+            padding: 4px; background: #ececec; font-weight: 700; }
+  .p-band .off { color: #999; font-weight: 400; }
+  .p-band .on { text-decoration: underline; text-underline-offset: 2px; }
+  table.p { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+  table.p th, table.p td { border: 1px solid #8a8a8a; padding: 3px 5px; text-align: left; vertical-align: middle; }
+  table.p thead th { background: #ececec; font-size: 9px; text-align: center; font-weight: 700; }
+  table.p thead th.l { text-align: left; }
+  table.p td.c { text-align: center; }
+  .p-no { width: 24px; text-align: center; }
+  .p-fq { width: 32px; text-align: center; }
+  .p-st { width: 58px; text-align: center; }
+  .p-sp { width: 110px; }
+  .p-mk { width: 44px; text-align: center; }
+  .p-out { color: #777; }
+  .fail-ink { color: #a8261c; font-weight: 700; }
+  .muted { color: #777; font-style: italic; }
+  .drawn-signature { max-width: 180px; max-height: 80px; display: block; border-bottom: 1px solid #333; }
+  .void-watermark { position: fixed; top: 40%; left: 8%; font-size: 130px; font-weight: bold; color: rgba(176, 0, 32, 0.14); transform: rotate(-30deg); letter-spacing: 24px; pointer-events: none; z-index: 1000; }
+  .void-banner { border: 2px solid #b00020; color: #b00020; font-weight: bold; padding: 6px 8px; margin: 8px 0; }
+  .p-sect { border: 1px solid #1a1a1a; border-top: none; background: #ececec;
+            padding: 3px 5px; font-weight: 700; font-size: 9px;
+            letter-spacing: 0.05em; text-transform: uppercase; }
+  .p-standing { border: 1px solid #8a8a8a; border-top: none; display: grid; grid-template-columns: 90px 1fr; }
+  .p-standing dt { padding: 3px 5px; border-right: 1px solid #c4c4c4; border-bottom: 1px solid #c4c4c4; font-weight: 700; color: #444; }
+  .p-standing dd { margin: 0; padding: 3px 5px; border-bottom: 1px solid #c4c4c4; }
+  .p-sign { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #1a1a1a; border-top: none; }
+  .p-sign > div { padding: 5px 6px; }
+  .p-sign > div + div { border-left: 1px solid #8a8a8a; }
+  .p-sign .lbl { font-size: 8px; font-weight: 700; color: #444; text-transform: uppercase; }
+  .p-sigline { height: 22px; border-bottom: 1px solid #1a1a1a; margin-top: 3px; }
+  .p-signm { font-size: 8px; color: #444; padding-top: 2px; }
+  .p-foot { margin-top: 10px; padding-top: 4px; border-top: 1px solid #8a8a8a;
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px;
+            font-size: 8px; color: #555; }
+  .p-foot span { white-space: nowrap; }
+  .p-foot-void { margin-top: 3px; font-size: 8px; font-weight: 700; color: #b00020; }
+</style>
+</head>
+<body>
+  
+  <div class="void-watermark" aria-hidden="true">VOID</div>
+  <div class="void-banner">RECORD VOID: Wrong machine (voided 2026-08-15 by S. Kumar)</div>
+  <div class="p-head">
+    <div class="p-head-l">
+      <div class="p-title">ASM Wire Bond Preventive Maintenance Record</div>
+    </div>
+    <div class="p-head-r">
+      <span>Document No.</span><span>CE 95 020 00 01</span>
+      <span>Revision</span><span>C</span>
+      <span>Machine</span><span>AW02</span>
+      <span>Job No.</span><span>PM-4471</span>
+      <span>Date</span><span>2026-08-14</span>
+    </div>
+  </div>
+  <div class="p-band"><span class="on">Three Monthly (3M)</span> &nbsp; <span class="on">Six Monthly (6M)</span> &nbsp; <span class="off">Yearly (Y)</span></div>
+
+  <table class="p"><thead><tr><th class="p-no">No</th><th class="p-fq">Freq</th><th class="l">Maintenance Instruction</th><th class="p-st">Status</th><th class="l">Remark</th></tr></thead><tbody><tr><td class="p-no">1</td><td class="p-fq">3M</td><td>Inspection and check safety interlock / emergency stop is functional</td><td class="c">DONE</td><td></td></tr><tr class="p-out"><td class="p-no">13</td><td class="p-fq">Y</td><td>Calibrate Workholder, BH Setup, Heater Block Setup, Bond Force</td><td class="c">—</td><td>Not in scope (6M)</td></tr></tbody></table>
+
+  <div class="p-sect">Measurement Records</div>
+  <table class="p"><thead><tr><th class="l">Description</th><th class="p-sp">Specification</th><th class="p-mk">Reading</th><th class="p-mk">Result</th><th class="l">Remark</th></tr></thead><tbody><tr><td>Heater Block Flatness Check</td><td class="p-sp">Hmin ≤ 20 um</td><td class="c">17.4 um</td><td class="c">PASS</td><td></td></tr><tr><td>91 steps calibration</td><td class="p-sp">0.19 – 0.21 μm/encoder</td><td class="c">0.218 μm/encoder</td><td class="c fail-ink">FAIL</td><td>Above upper limit</td></tr></tbody></table>
+
+  <div class="p-sect">Special Tools · Parts · PPE · Safety</div>
+  <dl class="p-standing">
+    <dt>Special Tools</dt><dd><span class="muted">None specified.</span></dd>
+    <dt>Parts Used</dt><dd>ASM-4471-FLT — Air filter element — Qty 2</dd>
+    <dt>PPE</dt><dd>Safety Shoes · Ear Plugs (If required)</dd>
+    <dt>Safety</dt><dd>Please switch off the main power and put the lock out/ tag on the power disconnect.</dd>
+    <dt>Remarks</dt><dd>For Y maintenance, 3M and 6M must be performed at the same time.</dd>
+    <dt>Attachments</dt><dd><span class="muted">None.</span></dd>
+  </dl>
+  <div class="p-sign"><div>
+        <div class="lbl">Maintenance Performed By</div>
+        <div class="p-sigline"></div>
+        <div class="p-signm">R. Tan · MAINTAINER · 2026-08-14</div>
+        
+      </div></div>
+  <p class="muted">No attachments.</p>
+  <div class="p-foot">
+    <span>CE 95 020 00 01 Rev C · AW02 · PM-4471</span>
+    <span>Status: VOIDED</span>
+    <span>Record rec-1</span>
+    <span>SHA-256 deadbeefcafe</span>
+  </div>
+  <div class="p-foot-void">RECORD VOID: Wrong machine (voided 2026-08-15 by S. Kumar)</div>
+</body>
+</html>"
+`;

@@ -50,7 +50,7 @@ export function renderEvidence(doc: ParsedDocument, formsDir: string): string {
       doc.loadRevision !== doc.printedRevision ? ' — see the B-04 disposition below' : ''
     } |`,
     `| Machine column(s) on the checklist | ${doc.machineColumns.map(esc).join(', ')} |`,
-    `| Frequency banner (informational, not loaded — TLP §4.1) | ${show(doc.frequencyBanner)} |`,
+    `| Frequency banner (loaded into standing content) | ${show(doc.frequencyBanner)} |`,
     `| Asset type | \`${doc.assetTypeCode}\` (${doc.assetTypeName}) |`,
     '',
     '> **How to read this file** — every source value is shown JSON-escaped so whitespace and',
