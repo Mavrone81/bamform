@@ -134,9 +134,25 @@ export interface PdfRecordInput {
  * Whether a checklist row applies to this visit. A Y row on a 6M visit is out
  * of scope: it still PRINTS, still numbered, but its cell is closed.
  * `job.frequency_scope` already carries the cascade — a Y visit arrives as
- * `['M3','M6','Y']` — so plain membership is the whole rule.
+ * `['M3','M6','Y']` — so for a scheduled job plain membership is the rule.
+ *
+ * Two special cases, and they are NOT the same thing:
+ *
+ *  - An EMPTY `scope` is an AD-HOC job. `frequency_scope` is deliberately
+ *    empty there so the job advances no schedule rule (see
+ *    `adhoc-job.service.ts`: "THE EMPTY SCOPE IS THE WHOLE POINT"). That is a
+ *    scheduling device, not a statement about which checklist items apply —
+ *    reading it as "nothing applies" printed every row of an ad-hoc record
+ *    closed. Owner ruling 2026-08-01: on an ad-hoc job every item is in scope.
+ *
+ *  - An EMPTY `frequency` is the orphaned-row sentinel, set when a row's
+ *    template item was soft-removed from the revision. It fails closed
+ *    ALWAYS, including on an ad-hoc job — an unresolvable row must never
+ *    print as work that was expected.
  */
 export function itemInScope(frequency: string, scope: readonly string[]): boolean {
+  if (frequency === '') return false;
+  if (scope.length === 0) return true;
   return scope.includes(frequency);
 }
 
@@ -206,11 +222,27 @@ function statusWord(status: string): string {
   return status;
 }
 
-/** The coarsest frequency in scope, for the "Not in scope (6M)" reason. */
+/**
+ * The coarsest frequency in scope, for the "Not in scope (6M)" reason.
+ *
+ * An empty scope returns `''` and the caller must omit the parenthesised
+ * reason entirely. It should be unreachable — an ad-hoc job (empty scope)
+ * puts every real-frequency row in scope via `itemInScope`, so no row prints
+ * a reason — but the naive form returned a bare `"M"`, which matches none of
+ * the sheet's labels and reads as a rendering defect on a controlled record.
+ * Guarded rather than trusted.
+ */
 function scopeLabel(scope: string[]): string {
+  if (scope.length === 0) return '';
   const order = ['M1', 'M3', 'M6', 'Y'];
   const widest = [...scope].sort((a, b) => order.indexOf(b) - order.indexOf(a))[0] ?? '';
   return widest === 'Y' ? 'Y' : widest.replace('M', '') + 'M';
+}
+
+/** "Not in scope (6M)" — or bare "Not in scope" when `scopeLabel` has nothing to say. */
+function notInScopeReason(scope: string[]): string {
+  const label = scopeLabel(scope);
+  return label === '' ? 'Not in scope' : `Not in scope (${esc(label)})`;
 }
 
 /**
@@ -230,7 +262,7 @@ function renderChecklist(items: PdfChecklistItemInput[], scope: string[]): strin
   const rows = items
     .map((item) => {
       if (!item.inScope) {
-        return `<tr class="p-out"><td class="p-no">${item.itemNo}</td><td class="p-fq">${freqCell(item.frequency)}</td><td>${esc(item.instruction)}</td><td class="c">—</td><td>Not in scope (${esc(scopeLabel(scope))})</td></tr>`;
+        return `<tr class="p-out"><td class="p-no">${item.itemNo}</td><td class="p-fq">${freqCell(item.frequency)}</td><td>${esc(item.instruction)}</td><td class="c">—</td><td>${notInScopeReason(scope)}</td></tr>`;
       }
       const cls = item.status === 'NOT_DONE' ? 'c fail-ink' : 'c';
       return `<tr><td class="p-no">${item.itemNo}</td><td class="p-fq">${freqCell(item.frequency)}</td><td>${esc(item.instruction)}</td><td class="${cls}">${esc(statusWord(item.status))}</td><td>${esc(item.remark)}</td></tr>`;

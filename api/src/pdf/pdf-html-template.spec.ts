@@ -250,6 +250,74 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
       expect(html).toContain('<td class="p-fq">—</td>');
       expect(html).not.toContain('<td class="p-fq"></td>');
     });
+
+    /**
+     * Fix round 1, CRITICAL finding: `frequencyScope: []` is a deliberate,
+     * documented production value for ad-hoc jobs
+     * (`api/src/jobs/adhoc-job.service.ts` — "THE EMPTY SCOPE IS THE WHOLE
+     * POINT"), not "nothing applies". Owner ruling: on an ad-hoc job every
+     * checklist item is in scope, so its rows must print OPEN — no closed
+     * cell, no "Not in scope" reason.
+     */
+    it('renders an ad-hoc job (empty scope) with checklist rows open, not closed', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: [],
+          checklist: [
+            {
+              itemNo: 1,
+              frequency: 'M3',
+              inScope: true,
+              instruction: 'Check belts',
+              status: 'DONE',
+              remark: null,
+            },
+            {
+              itemNo: 2,
+              frequency: 'Y',
+              inScope: true,
+              instruction: 'Calibrate',
+              status: 'DONE',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).not.toContain('Not in scope');
+      expect(html).not.toContain('class="p-out"');
+      expect(html).toContain('<td class="p-fq">M3</td>');
+      expect(html).toContain('<td class="p-fq">Y</td>');
+    });
+
+    /**
+     * Fix round 1: `scopeLabel([])` naively produced a bare `"M"` (matches
+     * none of the sheet's real frequency labels — `3M`, `6M`, `Y`), which
+     * reads as a rendering defect on a controlled record. The ruling makes
+     * this path unreachable in practice (an ad-hoc job now puts every real
+     * frequency in scope), but the orphaned-row sentinel can still land here
+     * on an ad-hoc job — it fails closed regardless of scope — so the guard
+     * must hold: a bare "Not in scope", never a malformed "(M)" reason.
+     */
+    it('prints a bare "Not in scope" reason, never a malformed "(M)", for the sentinel on an ad-hoc job', () => {
+      const html = renderRecordHtml(
+        baseInput({
+          frequencyScope: [],
+          checklist: [
+            {
+              itemNo: 4,
+              frequency: '',
+              inScope: false,
+              instruction: 'Removed item',
+              status: 'NOT_EVALUATED',
+              remark: null,
+            },
+          ],
+        }),
+      );
+      expect(html).toContain('Not in scope</td>');
+      expect(html).not.toContain('Not in scope (');
+      expect(html).not.toContain('(M)');
+    });
   });
 
   it('includes the measurement table with specification and reading', () => {
@@ -515,7 +583,27 @@ describe('itemInScope', () => {
     expect(itemInScope('Y', ['M3', 'M6'])).toBe(false);
   });
 
-  it('is false against an empty scope rather than throwing', () => {
-    expect(itemInScope('M3', [])).toBe(false);
+  /**
+   * Owner ruling 2026-08-01 (Task 4 fix round 1). This assertion is
+   * DELIBERATELY INVERTED from the one Task 2 committed
+   * (`expect(itemInScope('M3', [])).toBe(false)`). An empty scope is not
+   * "nothing applies" — it is `adhoc-job.service.ts`'s deliberate scheduling
+   * device ("THE EMPTY SCOPE IS THE WHOLE POINT") so an ad-hoc job advances
+   * no schedule rule; it says nothing about which checklist items apply. On
+   * an ad-hoc job every item is in scope. This is a corrected requirement,
+   * not a weakened test.
+   */
+  it('treats an empty scope as ad-hoc: every real frequency applies', () => {
+    expect(itemInScope('M3', [])).toBe(true);
+    expect(itemInScope('M6', [])).toBe(true);
+    expect(itemInScope('Y', [])).toBe(true);
+  });
+
+  // The orphaned-row sentinel is a DIFFERENT thing from an empty scope and
+  // still fails closed — including on an ad-hoc job, where an unresolvable
+  // row must never print as work that was expected.
+  it('is false for the empty-frequency sentinel, even on an ad-hoc job', () => {
+    expect(itemInScope('', [])).toBe(false);
+    expect(itemInScope('', ['M3', 'M6'])).toBe(false);
   });
 });
