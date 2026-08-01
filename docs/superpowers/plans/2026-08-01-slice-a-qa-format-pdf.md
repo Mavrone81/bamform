@@ -166,8 +166,20 @@ describe('itemInScope', () => {
     expect(itemInScope('Y', ['M3', 'M6'])).toBe(false);
   });
 
-  it('is false against an empty scope rather than throwing', () => {
-    expect(itemInScope('M3', [])).toBe(false);
+  // Owner ruling 2026-08-01. An EMPTY scope is not "nothing applies" — it is
+  // an ad-hoc job, where `frequency_scope` is deliberately empty so the job
+  // advances no schedule rule (adhoc-job.service.ts: "THE EMPTY SCOPE IS THE
+  // WHOLE POINT"). That is a scheduling device, not a statement about which
+  // checklist items apply. On an ad-hoc record every item is in scope.
+  it('treats an empty scope as ad-hoc: every real frequency applies', () => {
+    expect(itemInScope('M3', [])).toBe(true);
+    expect(itemInScope('Y', [])).toBe(true);
+  });
+
+  // The orphaned-row sentinel is a DIFFERENT thing and still fails closed.
+  it('is false for the empty-frequency sentinel, even on an ad-hoc job', () => {
+    expect(itemInScope('', [])).toBe(false);
+    expect(itemInScope('', ['M3', 'M6'])).toBe(false);
   });
 });
 ```
@@ -227,9 +239,25 @@ database:
  * Whether a checklist row applies to this visit. A Y row on a 6M visit is out
  * of scope: it still PRINTS, still numbered, but its cell is closed.
  * `job.frequency_scope` already carries the cascade — a Y visit arrives as
- * `['M3','M6','Y']` — so plain membership is the whole rule.
+ * `['M3','M6','Y']` — so for a scheduled job plain membership is the rule.
+ *
+ * Two special cases, and they are NOT the same thing:
+ *
+ *  - An EMPTY `scope` is an AD-HOC job. `frequency_scope` is deliberately
+ *    empty there so the job advances no schedule rule (see
+ *    `adhoc-job.service.ts`: "THE EMPTY SCOPE IS THE WHOLE POINT"). That is a
+ *    scheduling device, not a statement about which checklist items apply —
+ *    reading it as "nothing applies" printed every row of an ad-hoc record
+ *    closed. Owner ruling 2026-08-01: on an ad-hoc job every item is in scope.
+ *
+ *  - An EMPTY `frequency` is the orphaned-row sentinel, set when a row's
+ *    template item was soft-removed from the revision. It fails closed
+ *    ALWAYS, including on an ad-hoc job — an unresolvable row must never
+ *    print as work that was expected.
  */
 export function itemInScope(frequency: string, scope: readonly string[]): boolean {
+  if (frequency === '') return false;
+  if (scope.length === 0) return true;
   return scope.includes(frequency);
 }
 ```
@@ -485,8 +513,17 @@ function statusWord(status: string): string {
   return status;
 }
 
-/** The coarsest frequency in scope, for the "Not in scope (6M)" reason. */
+/**
+ * The coarsest frequency in scope, for the "Not in scope (6M)" reason.
+ *
+ * An empty scope returns `''` and the caller must omit the parenthesised
+ * reason entirely. It should be unreachable — an ad-hoc job puts every row in
+ * scope, so no row prints a reason — but the naive form returned a bare `"M"`,
+ * which matches none of the sheet's labels and reads as a rendering defect on
+ * a controlled record. Guarded rather than trusted.
+ */
 function scopeLabel(scope: string[]): string {
+  if (scope.length === 0) return '';
   const order = ['M1', 'M3', 'M6', 'Y'];
   const widest = [...scope].sort((a, b) => order.indexOf(b) - order.indexOf(a))[0] ?? '';
   return widest === 'Y' ? 'Y' : widest.replace('M', '') + 'M';
