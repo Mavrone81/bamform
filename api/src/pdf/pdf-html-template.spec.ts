@@ -79,18 +79,50 @@ describe('escapeHtml', () => {
 });
 
 describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
-  it('includes the header block: document title, document number, revision, job/asset', () => {
+  it('includes the header block: document title, document number, revision, job/machine', () => {
     const html = renderRecordHtml(baseInput());
     expect(html).toContain('Besi Die Attach Preventive Maintenance Record');
     expect(html).toContain('CE 95 010 00 01');
     expect(html).toContain('R2');
     expect(html).toContain('PM-0001');
-    expect(html).toContain('AST-001');
+    expect(html).toContain('AW02');
   });
 
-  it('includes the frequency banner', () => {
+  it('prints the machine in the header grid', () => {
+    const html = renderRecordHtml(baseInput({ machineCode: 'AW02' }));
+    expect(html).toContain('<span>Machine</span><span>AW02</span>');
+  });
+
+  it('includes the frequency selection band, falling back to the scope when no banner was loaded', () => {
     const html = renderRecordHtml(baseInput());
-    expect(html).toMatch(/Frequency:\s*M1/);
+    expect(html).toContain('class="p-band"');
+    expect(html).toContain('<span class="on">3M</span>');
+    expect(html).toContain('<span class="on">6M</span>');
+  });
+
+  it('marks the selected frequency in the band and leaves the others unmarked', () => {
+    const html = renderRecordHtml(
+      baseInput({
+        frequencyScope: ['M3', 'M6'],
+        standingContent: { frequencyBanner: 'Three Monthly (3M) Six Monthly (6M) Yearly (Y)' },
+      }),
+    );
+    expect(html).toContain('<span class="on">Six Monthly (6M)</span>');
+    expect(html).toContain('<span class="off">Yearly (Y)</span>');
+  });
+
+  it('falls back to the scope itself when no banner was loaded', () => {
+    const html = renderRecordHtml(
+      baseInput({ frequencyScope: ['M3'], standingContent: { frequencyBanner: null } }),
+    );
+    expect(html).toContain('<span class="on">3M</span>');
+  });
+
+  it('escapes a banner containing markup', () => {
+    const html = renderRecordHtml(
+      baseInput({ standingContent: { frequencyBanner: '<script>x</script> (3M)' } }),
+    );
+    expect(html).not.toContain('<script>');
   });
 
   it('includes tools, parts-required, PPE and safety blocks', () => {

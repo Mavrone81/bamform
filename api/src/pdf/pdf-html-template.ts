@@ -153,6 +153,41 @@ function esc(value: string | null | undefined): string {
   return value ? escapeHtml(value) : '';
 }
 
+/**
+ * The sheet's frequency band. The banner is printed VERBATIM and split on its
+ * "(3M)"-style tokens so each option can be marked or greyed; a token is
+ * "on" when its code is in this visit's scope.
+ *
+ * Falls back to rendering the scope codes alone when no banner was loaded —
+ * forms loaded before the banner was persisted must still print a band.
+ */
+function renderFrequencyBand(banner: string | null | undefined, scope: string[]): string {
+  const codeOf = (token: string): string | null => {
+    const m = /\(([0-9]+M|Y)\)/i.exec(token);
+    if (!m) return null;
+    const raw = m[1].toUpperCase();
+    return raw === 'Y' ? 'Y' : `M${raw.replace('M', '')}`;
+  };
+
+  if (!banner) {
+    const spans = scope
+      .map((f) => `<span class="on">${esc(f === 'Y' ? 'Y' : f.replace('M', '') + 'M')}</span>`)
+      .join(' &nbsp; ');
+    return `<div class="p-band">${spans}</div>`;
+  }
+
+  // Split before each "Monthly (3M)"-style group: the code marks the end of one.
+  const tokens = banner.split(/(?<=\))\s+/).filter((t) => t.trim() !== '');
+  const spans = tokens
+    .map((token) => {
+      const code = codeOf(token);
+      const on = code !== null && scope.includes(code);
+      return `<span class="${on ? 'on' : 'off'}">${esc(token.trim())}</span>`;
+    })
+    .join(' &nbsp; ');
+  return `<div class="p-band">${spans}</div>`;
+}
+
 function renderPartsRequired(parts: PdfStandingContentInput['partsRequired']): string {
   if (!parts || parts.length === 0) return '<p class="muted">None specified.</p>';
   const rows = parts
@@ -315,8 +350,17 @@ export function renderRecordHtml(input: PdfRecordInput): string {
   h2 { font-size: 13px; margin-top: 18px; margin-bottom: 4px; border-bottom: 1px solid #999; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
   th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }
-  .header-block { display: flex; justify-content: space-between; border-bottom: 2px solid #333; padding-bottom: 6px; }
-  .frequency-banner { background: #eee; padding: 4px 8px; font-weight: bold; margin: 8px 0; }
+  .p-head { display: grid; grid-template-columns: 1fr 13rem; border: 1px solid #1a1a1a; }
+  .p-head-l { padding: 5px 7px; border-right: 1px solid #1a1a1a; }
+  .p-org { font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: #666; }
+  .p-title { font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 2px; }
+  .p-head-r { display: grid; grid-template-columns: auto 1fr; }
+  .p-head-r span { padding: 2px 6px; border-bottom: 1px solid #c4c4c4; }
+  .p-head-r span:nth-child(odd) { color: #555; border-right: 1px solid #c4c4c4; }
+  .p-band { border: 1px solid #1a1a1a; border-top: none; text-align: center;
+            padding: 4px; background: #ececec; font-weight: 700; }
+  .p-band .off { color: #999; font-weight: 400; }
+  .p-band .on { text-decoration: underline; text-underline-offset: 2px; }
   .muted { color: #777; font-style: italic; }
   .judgement-FAIL { color: #b00020; font-weight: bold; }
   .status-NOT_DONE { color: #b00020; font-weight: bold; }
@@ -329,19 +373,20 @@ export function renderRecordHtml(input: PdfRecordInput): string {
 </head>
 <body>
   ${renderVoidNotice(input.voidNotice)}
-  <div class="header-block">
-    <div>
-      <h1>${esc(input.documentTitle)}</h1>
-      <div>Document No.: ${esc(input.documentNumber)} &nbsp; Revision: ${esc(input.revisionCode)}</div>
-      <div>Job No.: ${esc(input.jobNumber)} &nbsp; Asset: ${esc(input.assetCode)}${esc(input.assetDescription ? ` — ${input.assetDescription}` : '')}</div>
+  <div class="p-head">
+    <div class="p-head-l">
+      <div class="p-org">${esc(input.assetDescription)}</div>
+      <div class="p-title">${esc(input.documentTitle)}</div>
     </div>
-    <div>
-      <div>Due: ${esc(input.dueOn)}</div>
-      <div>Status: ${esc(input.status)}</div>
+    <div class="p-head-r">
+      <span>Document No.</span><span>${esc(input.documentNumber)}</span>
+      <span>Revision</span><span>${esc(input.revisionCode)}</span>
+      <span>Machine</span><span>${esc(input.machineCode)}</span>
+      <span>Job No.</span><span>${esc(input.jobNumber)}</span>
+      <span>Date</span><span>${esc(input.dueOn)}</span>
     </div>
   </div>
-
-  <div class="frequency-banner">Frequency: ${esc(input.frequency)}</div>
+  ${renderFrequencyBand(input.standingContent.frequencyBanner, input.frequencyScope)}
 
   <h2>Special Tools</h2>
   <p>${esc(input.standingContent.specialTools) || '<span class="muted">None specified.</span>'}</p>
