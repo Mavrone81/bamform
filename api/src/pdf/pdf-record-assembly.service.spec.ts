@@ -61,4 +61,32 @@ describe('PdfRecordAssemblyService#buildChecklist', () => {
     expect(checklist[0].inScope).toBe(true);
     expect(checklist[0].instruction).toBe('Check belts');
   });
+
+  /**
+   * Task 7, extra requirement 1 — the only test in this codebase that
+   * exercises the REAL wiring from `job.frequencyScope` through
+   * `itemInScope` to an assembled row's `inScope`. Every other coverage of
+   * "an ad-hoc job's rows print open" (`pdf-html-template.spec.ts`) feeds
+   * `renderRecordHtml` a fixture with `inScope: true` HARDCODED — it proves
+   * only that rendering respects a precomputed flag, not that the flag is
+   * computed correctly. `buildChecklist` calls the real, un-mocked
+   * `itemInScope` (imported from `pdf-html-template.ts`, not stubbed here),
+   * so this is the one place a regression to `itemInScope`'s old, buggy
+   * "empty scope means nothing applies" form would actually fail a test.
+   */
+  it('an ad-hoc job (empty frequencyScope) resolves a real template item as in scope — the real itemInScope wiring, not a hardcoded flag', () => {
+    const job = {
+      frequency: 'ADHOC',
+      frequencyScope: [], // adhoc-job.service.ts: "THE EMPTY SCOPE IS THE WHOLE POINT"
+      templateRevision: {
+        items: [{ id: 'item-1', itemNo: 1, frequency: 'Y', instruction: 'Calibrate' }],
+      },
+      itemResults: [{ templateItemId: 'item-1', status: 'done', remark: null }],
+    };
+
+    const checklist = buildChecklist(job);
+
+    expect(checklist[0].frequency).toBe('Y');
+    expect(checklist[0].inScope).toBe(true);
+  });
 });

@@ -307,8 +307,21 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
      * POINT"), not "nothing applies". Owner ruling: on an ad-hoc job every
      * checklist item is in scope, so its rows must print OPEN — no closed
      * cell, no "Not in scope" reason.
+     *
+     * Task 7 re-review finding — RENDERING ONLY. This test hardcodes
+     * `inScope: true` on both rows below, so it never calls the real
+     * `itemInScope` and would still pass if `itemInScope` regressed to its
+     * old, buggy "empty scope means nothing applies" form. It proves
+     * `renderChecklist` prints an already-open row as open on an ad-hoc
+     * job — nothing about whether that row IS correctly computed as open.
+     * The end-to-end wiring (`job.frequencyScope` → `itemInScope` →
+     * assembled `inScope`) is covered separately, by
+     * `pdf-record-assembly.service.spec.ts`'s "an ad-hoc job (empty
+     * frequencyScope) resolves a real template item as in scope" test,
+     * which calls `PdfRecordAssemblyService#buildChecklist` — the real,
+     * un-mocked `itemInScope` — rather than a precomputed fixture flag.
      */
-    it('renders an ad-hoc job (empty scope) with checklist rows open, not closed', () => {
+    it('renders an ad-hoc job (empty scope) with checklist rows open, not closed, GIVEN an already-true inScope flag (rendering only — see pdf-record-assembly.service.spec.ts for the itemInScope wiring)', () => {
       const html = renderRecordHtml(
         baseInput({
           frequencyScope: [],
@@ -668,6 +681,41 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     );
     expect(html).not.toContain('<img src=x onerror=alert(1)>');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+
+  /**
+   * Task 7, extra requirement 2. `actorRoleCode`, `onBehalfOfName` and
+   * `reason` are all printed in the signature cells (`renderSignatures`) and
+   * are all passed through `esc()` there, but until this test nothing
+   * exercised that escaping — only the void reason (U-VOID-06, below) and
+   * a checklist remark (above) were covered. In the style of the void-reason
+   * escaping test: feed markup through each of the three fields and assert
+   * it is escaped, never passed through raw.
+   */
+  it('escapes malicious content in actorRoleCode, onBehalfOfName and reason (SECURITY_ARCHITECTURE.md §8 — no markup injection)', () => {
+    const html = renderRecordHtml(
+      baseInput({
+        signatures: [
+          {
+            approvalStepId: 'step-4',
+            stageOrdinal: 1,
+            action: 'RETURNED',
+            actorName: 'Sam Supervisor',
+            actorRoleCode: '<img src=x onerror=alert(1)>',
+            actedAt: '2026-07-02T12:00:00.000Z',
+            drawnSignatureBase64: null,
+            onBehalfOfName: '<script>alert(2)</script>',
+            reason: '<script>alert(3)</script>',
+          },
+        ],
+      }),
+    );
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).not.toContain('<script>alert(2)</script>');
+    expect(html).not.toContain('<script>alert(3)</script>');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).toContain('on behalf of &lt;script&gt;alert(2)&lt;/script&gt;');
+    expect(html).toContain('Reason: &lt;script&gt;alert(3)&lt;/script&gt;');
   });
 
   it('escapes malicious content in the document title and asset description', () => {
