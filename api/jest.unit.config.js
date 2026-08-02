@@ -3,7 +3,17 @@ module.exports = {
   displayName: 'unit',
   rootDir: '.',
   testEnvironment: 'node',
-  testMatch: ['<rootDir>/src/**/*.spec.ts'],
+  // Slice masterlist-migration: scripts/template-load/src/masterlist/*.spec.ts
+  // are pure functions (no network, no database) that belong beside the
+  // template loader they extend (see docs/superpowers/plans/
+  // 2026-08-02-masterlist-migration.md), not under api/src — but they are
+  // exactly what this "unit" config exists to run, and Task 6 of that plan's
+  // final gate (`cd api && npx jest --config jest.unit.config.js`) only ever
+  // exercises them if this config discovers them. `roots` defaults to
+  // [rootDir] (api/), which would silently exclude them even with a
+  // matching testMatch glob, so it is widened explicitly here.
+  roots: ['<rootDir>/src', '<rootDir>/../scripts/template-load/src'],
+  testMatch: ['<rootDir>/src/**/*.spec.ts', '<rootDir>/../scripts/template-load/src/**/*.spec.ts'],
   transform: {
     // tsconfig.jest.json extends tsconfig.json and adds a path mapping so
     // @bamform/shared resolves to source for ts-jest's type-checker too
