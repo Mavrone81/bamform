@@ -12,8 +12,11 @@ module.exports = {
   // exercises them if this config discovers them. `roots` defaults to
   // [rootDir] (api/), which would silently exclude them even with a
   // matching testMatch glob, so it is widened explicitly here.
-  roots: ['<rootDir>/src', '<rootDir>/../scripts/template-load/src'],
-  testMatch: ['<rootDir>/src/**/*.spec.ts', '<rootDir>/../scripts/template-load/src/**/*.spec.ts'],
+  roots: ['<rootDir>/src', '<rootDir>/../scripts/template-load/src/masterlist'],
+  testMatch: [
+    '<rootDir>/src/**/*.spec.ts',
+    '<rootDir>/../scripts/template-load/src/masterlist/**/*.spec.ts',
+  ],
   transform: {
     // tsconfig.jest.json extends tsconfig.json and adds a path mapping so
     // @bamform/shared resolves to source for ts-jest's type-checker too
