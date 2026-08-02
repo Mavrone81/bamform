@@ -1,5 +1,5 @@
 // scripts/template-load/src/masterlist/mapping.spec.ts
-import { workWeekToDate, assetTypeCodeForModel, SKIPPED_CODES } from './mapping';
+import { workWeekToDate, assetTypeCodeForModel, machineNumberFor, SKIPPED_CODES } from './mapping';
 
 describe('workWeekToDate — calendar weeks, owner decision 2026-08-02', () => {
   it('puts week 1 on 1 January', () => {
@@ -48,5 +48,45 @@ describe('assetTypeCodeForModel', () => {
 
   it('lists DDA 03 as skipped', () => {
     expect(SKIPPED_CODES).toContain('DDA 03');
+  });
+});
+
+describe('machineNumberFor', () => {
+  it('returns the numeric tail for a title with a blank', () => {
+    expect(machineNumberFor('KNS Wire Bond Preventive Maintenance Record KW___', 'KW13')).toBe(
+      '13',
+    );
+    expect(machineNumberFor('BESI Die Attach Preventive Maintenance Record ED____', 'ED01')).toBe(
+      '01',
+    );
+  });
+
+  it('handles a hyphenated code', () => {
+    expect(
+      machineNumberFor('Preventive Maintenance Work Instruction / Record AVS 35-____', 'AVS35-01'),
+    ).toBe('01');
+  });
+
+  it('returns null when the title has no blank to fill', () => {
+    // Emerald's title is a fixed "EP01" — filling it would corrupt the title.
+    expect(
+      machineNumberFor('Emerald Pick and Place Preventive Maintenance Record EP01', 'EP01'),
+    ).toBeNull();
+  });
+
+  it('returns null when the code has no numeric tail rather than guessing', () => {
+    expect(
+      machineNumberFor('MB E-Test Preventive Maintenance Record______', 'MS-620 ST01'),
+    ).toBeNull();
+  });
+
+  it('finds the underscore run even when the title carries a literal CRLF elsewhere', () => {
+    // scripts/template-load/yaml/CE-95-055-00-01.yaml stores this title as a
+    // double-quoted YAML scalar with a \r\n escape; a YAML parser turns that
+    // into real CR/LF characters ahead of the blank. The blank itself is
+    // still a contiguous underscore run, so the regex must not be thrown off
+    // by unrelated line breaks in the string.
+    const titleWithRealCrlf = 'Preventive Maintenance Work Instruction / \r\nRecord AVS 35-____';
+    expect(machineNumberFor(titleWithRealCrlf, 'AVS35-01')).toBe('01');
   });
 });

@@ -44,3 +44,23 @@ export function assetTypeCodeForModel(model: string, code: string): string | nul
   }
   return null;
 }
+
+/**
+ * The blank in a template title is a run of underscores. The prefix before it
+ * is already printed, so what gets supplied is the machine code's trailing
+ * digits — `KW13` fills `KW___` with `13`, never `KW13`.
+ *
+ * A legitimate machine code is a single token (`KW13`, `ED01`, `AVS35-01`).
+ * `MS-620 ST01` — the masterlist's un-typed machine, imported without a
+ * document — is a two-word model + station label, not a code, even though it
+ * ends in digits. Extracting `01` from it would be a guess dressed up as a
+ * regex match, so codes containing whitespace are treated as having no
+ * numeric tail at all.
+ */
+export function machineNumberFor(templateTitle: string, code: string): string | null {
+  if (!/_{2,}/.test(templateTitle)) return null;
+  const trimmed = code.trim();
+  if (/\s/.test(trimmed)) return null;
+  const tail = /(\d+)$/.exec(trimmed);
+  return tail ? tail[1] : null;
+}
