@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.2 |
+| Revision | 0.3 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -23,6 +23,7 @@
 |---|---|---|---|---|
 | 0.1 | 24 Jul 2026 | Initial draft | Lead Engineer | _(pending)_ |
 | 0.2 | 1 Aug 2026 | §3.4 added — create the first ADMIN account via the `bootstrap-admin` entrypoint (PR-RUN-21, PR-RUN-22); §11 gains the no-account-yet failure mode | Lead Engineer | _(pending)_ |
+| 0.3 | 2 Aug 2026 | §3.5 added — recover a lost password via the `reset-password` entrypoint (PR-RUN-23, PR-RUN-24), after a live lockout with five accounts and no known credentials; corrected the `psql` role in §3.3 and §7 from the non-existent `bamform` to `bamform_migrate` | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -246,12 +247,46 @@ Verify, then sign in:
 ```bash
 # Expect exactly one user
 docker compose -f /opt/bamform/docker-compose.yml exec -T bamform-postgres \
-  psql -U bamform -d bamform -c "SELECT count(*) FROM app_user;"
+  psql -U bamform_migrate -d bamform -c "SELECT count(*) FROM app_user;"
 ```
 
 Sign in at the application URL with the address just entered, then create the remaining users
 through the admin screens. Re-running the command afterwards is harmless — it refuses with
 `Bootstrap refused: 1 user(s) already exist.`
+
+## 3.5 Recover a lost password
+
+The refusal above is the guard working, not a fault — the bootstrap is one-time
+by design. When accounts already exist but nobody can sign in, this is the way back.
+
+There is no other route. `UserUpdate` carries no password field, so an ADMIN cannot reset
+anyone else's password over the API; `POST /auth/password` is self-service and needs a live
+session; and there is no forgot-password flow — `/auth/login` and `/auth/refresh` are the only
+unauthenticated endpoints. `users.service.ts`'s SYS-11 comment names the alternative plainly:
+"recovery is psql surgery on the box". This command is that surgery done through the
+application's own crypto, so the stored hash is a real Argon2id hash and the change is audited.
+
+```bash
+docker compose -f /opt/bamform/docker-compose.yml exec bamform-api \
+  node dist/reset-password.js
+```
+
+It prints every account — email, name, roles, and `[INACTIVE]` where applicable — and asks
+which to reset **by row number**. A raw id is rejected: a mistyped UUID must never quietly
+select the wrong account. Blank input cancels without changing anything. The new password is
+typed twice with echo muted, must be at least 12 characters, and is taken only from the prompt.
+
+**PR-RUN-23** This command changes a credential on a live system and is audited as such — the
+event records `operatorReset: true`, so the trail never reads as though the user changed their
+own password. `must_change_password` is deliberately left unset, matching §3.4: the operator
+chose this password at a prompt, and forcing a change risks a second lockout via the very
+screen the operator may not be able to reach.
+
+**PR-RUN-24** Like §3.4 this needs `docker compose exec`, never `run`, never `-T`. It checks
+`stdin.isTTY` and exits 1 before opening a database connection, so it cannot be driven from
+cron, a script or a piped `echo`.
+
+If NO users exist at all, this command says so and points at §3.4 instead.
 
 ---
 
@@ -495,7 +530,7 @@ docker compose -f /opt/bamform/docker-compose.yml run --rm bamform-migrate 2>&1 
 
 # Current schema state
 docker compose -f /opt/bamform/docker-compose.yml exec -T bamform-postgres \
-  psql -U bamform -d bamform -c "SELECT * FROM _prisma_migrations ORDER BY finished_at DESC LIMIT 10;"
+  psql -U bamform_migrate -d bamform -c "SELECT * FROM _prisma_migrations ORDER BY finished_at DESC LIMIT 10;"
 ```
 
 | Symptom | Likely cause | Action |
