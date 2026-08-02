@@ -622,6 +622,68 @@ export class UsersService {
     });
   }
 
+  /**
+   * OPERATOR RECOVERY — every user, decrypted, for `reset-password.ts` to list
+   * at a prompt. Deliberately NOT reachable over HTTP: it has no actor, no
+   * pagination and no scope filtering, and it exists only so an operator with
+   * shell access on the box can see WHOSE account they are about to reset.
+   *
+   * `list` cannot serve this: it is an authenticated, paginated, area-scoped
+   * read, and the whole point here is that nobody can authenticate.
+   */
+  async listAllForOperatorRecovery(): Promise<User[]> {
+    const rows = await this.prisma.appUser.findMany({
+      include: USER_ROLES_INCLUDE,
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((row) => toUser(row, this.fieldEncryption));
+  }
+
+  /**
+   * OPERATOR RECOVERY — set an existing user's password from the CLI.
+   *
+   * WHY THIS EXISTS: there is no other way back in. `userUpdateSchema` carries
+   * no password field, so an ADMIN cannot reset anyone else's password over the
+   * API; `POST /auth/password` is self-service and needs a live session; and
+   * `bootstrapFirstAdmin` refuses the moment any user exists. `update`'s own
+   * SYS-11 comment already concedes the endgame — "recovery is psql surgery on
+   * the box". This is that surgery, done through the app's own crypto instead
+   * of by hand, so the hash is a real Argon2id hash and the change is audited.
+   *
+   * `must_change_password` is left FALSE, matching `bootstrapFirstAdmin`: the
+   * operator chose this password at a prompt. Forcing a change here risks a
+   * second lockout if the change screen is ever unreachable, which is the
+   * failure this method exists to undo.
+   *
+   * The audit event is attributed to the target user (`user_role.granted_by`
+   * and `audit_event.actor_id` are NOT NULL and there is no authenticated
+   * actor), and carries `operatorReset: true` in `after` so the trail never
+   * reads as if the user changed their own password.
+   */
+  async resetPasswordAsOperator(userId: string, newPassword: string): Promise<User> {
+    const existing = await this.findOrThrow(userId);
+    const passwordHash = await this.passwordService.hash(newPassword);
+
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.appUser.update({
+        where: { id: userId },
+        data: { passwordHash },
+        include: USER_ROLES_INCLUDE,
+      });
+
+      await this.audit.record(tx, {
+        actorId: userId,
+        action: AuditActionT.update,
+        entityType: 'user',
+        entityId: userId,
+        before: toUserAuditView(existing),
+        after: { ...toUserAuditView(row), operatorReset: true },
+      });
+
+      return toUser(row, this.fieldEncryption);
+    });
+  }
+
   private async findOrThrow(id: string): Promise<AppUserWithRoles> {
     const row = await this.prisma.appUser.findUnique({
       where: { id },
