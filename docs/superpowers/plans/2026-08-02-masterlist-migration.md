@@ -386,10 +386,21 @@ describe('machineNumberFor', () => {
  */
 export function machineNumberFor(templateTitle: string, code: string): string | null {
   if (!/_{2,}/.test(templateTitle)) return null;
-  const tail = /(\d+)\s*$/.exec(code.trim());
+  const trimmed = code.trim();
+  // A real machine code is a single token — ED01, KW13, AVS35-01. A label with
+  // a space in it is a model-plus-station string like `MS-620 ST01`, whose
+  // trailing digits belong to the station, not to a machine number. Taking
+  // them would print `…Record 01` on a controlled record for a machine that
+  // has no number at all.
+  if (/\s/.test(trimmed)) return null;
+  const tail = /(\d+)\s*$/.exec(trimmed);
   return tail ? tail[1] : null;
 }
 ```
+
+**The whitespace guard is not optional.** Without it this function contradicts
+its own test above: `MS-620 ST01` matches `/(\d+)\s*$/` on the `01` of `ST01`
+and returns `"01"` where the test requires `null`.
 
 - [ ] **Step 4: Verify against every real template**
 
