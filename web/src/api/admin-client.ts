@@ -39,6 +39,7 @@ export type AssetDocumentCreate = components['schemas']['AssetDocumentCreate'];
 export type AssetDocumentUpdate = components['schemas']['AssetDocumentUpdate'];
 export type ScheduleRule = components['schemas']['ScheduleRule'];
 export type ScheduleAdjust = components['schemas']['ScheduleAdjust'];
+export type PlannerScheduleRow = components['schemas']['PlannerScheduleRow'];
 
 export interface AdminPage<T> {
   data: T[];
@@ -261,4 +262,74 @@ export function adjustAssetSchedule(
     headers: jsonHeaders,
     body: JSON.stringify(body),
   });
+}
+
+// ------------------------------------------------- the planner grid (31)
+
+/**
+ * `GET /schedule` — the CROSS-MACHINE schedule read behind `/planner`, the
+ * screen that replaces `ML-S-MFT-00015`.
+ *
+ * Carries NO `@Roles()` server-side, exactly like `getAssetSchedule` above:
+ * every authenticated user may read a schedule. The Menu offers `/planner`
+ * only to the roles that plan, which is presentation, not enforcement
+ * (non-negotiable #6) — and the WRITE the screen leads to is still
+ * `adjustAssetSchedule`, which is genuinely role-gated.
+ *
+ * PAGINATED, unlike `getAssetSchedule`'s bare array: that one is
+ * fixed-cardinality for a single machine, this is a tenant-wide collection
+ * and follows the standard cursor envelope. 76 machines at ~3 rules each
+ * exceeds the server's 100-row clamp, so `listAllPlannerSchedule` below
+ * follows the cursor rather than silently drawing three quarters of a plan.
+ */
+export function listPlannerSchedule(params: {
+  from: string;
+  to: string;
+  assetTypeId?: string;
+  areaId?: string;
+  cursor?: string;
+}): Promise<AdminResult<AdminPage<PlannerScheduleRow>>> {
+  const query = new URLSearchParams({
+    limit: String(PAGE_LIMIT),
+    from: params.from,
+    to: params.to,
+  });
+  if (params.assetTypeId) query.set('assetTypeId', params.assetTypeId);
+  if (params.areaId) query.set('areaId', params.areaId);
+  if (params.cursor) query.set('cursor', params.cursor);
+  return call(`/schedule?${query.toString()}`);
+}
+
+/**
+ * The whole window, cursor followed to the end. A partial grid is worse than
+ * no grid: a planner deciding week 12 is free, when the machines that would
+ * have filled it were simply on page two, plans work into a week that is
+ * already full. So this either returns every row or reports the refusal.
+ *
+ * `MAX_PLANNER_PAGES` bounds it at 5000 rows — roughly twenty times the
+ * plant's ~230 scheduled rules. It exists so a server-side paging fault
+ * cannot spin the browser, not as a business limit; hitting it is reported as
+ * a refusal rather than quietly truncating, for the same reason.
+ */
+const MAX_PLANNER_PAGES = 50;
+
+export async function listAllPlannerSchedule(params: {
+  from: string;
+  to: string;
+  assetTypeId?: string;
+  areaId?: string;
+}): Promise<AdminResult<PlannerScheduleRow[]>> {
+  const rows: PlannerScheduleRow[] = [];
+  let cursor: string | undefined;
+
+  for (let page = 0; page < MAX_PLANNER_PAGES; page += 1) {
+    const result = await listPlannerSchedule({ ...params, cursor });
+    if (!result.ok) return result;
+    rows.push(...result.value.data);
+    if (!result.value.page.hasMore || !result.value.page.nextCursor) {
+      return { ok: true, status: result.status, value: rows };
+    }
+    cursor = result.value.page.nextCursor;
+  }
+  return { ok: false, status: 0 };
 }

@@ -18,6 +18,7 @@ import { AdminMachineCreate } from './screens/AdminMachineCreate';
 import { AdminMachineDetail } from './screens/AdminMachineDetail';
 import { AdminAreas } from './screens/AdminAreas';
 import { MachineSchedules } from './screens/MachineSchedules';
+import { Planner } from './screens/Planner';
 import { RecoveryCodes } from './screens/RecoveryCodes';
 import { Menu } from './screens/Menu';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -131,6 +132,12 @@ function Screens() {
     // (`PUT /assets/{assetId}/schedule`) but must not gain the rest of the
     // admin area. See `MachineSchedules`' own module doc.
     if (matchPath('/schedule', path)) return <MachineSchedules />;
+    // Slice 31-PLANNER — the cross-machine year grid that replaces
+    // ML-S-MFT-00015. Beside `/schedule`, not under `/admin/*`, and for the
+    // same reason: the roles that plan are not the roles that administer.
+    // Routing only — `GET /schedule` is open to every authenticated caller
+    // and the write it leads to is the server's to refuse (non-negotiable #6).
+    if (matchPath('/planner', path)) return <Planner />;
     if (matchPath('/admin/mfa-reset', path)) return <AdminMfaReset />;
     // Slice 13-UI-B — the admin area. Routing only; ADMIN-ness is decided by
     // the server per request (non-negotiable #6): a non-admin reaching any

@@ -25,6 +25,11 @@ import { assetDocumentCreateSchema, assetDocumentUpdateSchema } from '../../../s
 // not a second, hand-typed `{M1: 1, ...}` that could quietly drift from it.
 import { scheduleAdjustRequestSchema } from '../../../shared/src/schedule';
 import { FREQUENCY_INTERVAL_MONTHS, type Frequency } from '../../../shared/src/frequency';
+// Slice 31-PLANNER, same rationale again: `GET /schedule` resolves a
+// document's title through the REAL `resolveTemplateTitle` the api calls
+// (`asset-documents.service.ts`/`planner-schedule.service.ts`), so the fake
+// cannot quietly disagree about a fillable run.
+import { resolveTemplateTitle } from '../../../shared/src/template-title';
 
 /**
  * A fake backend for the offline suite, installed via Playwright route
@@ -330,6 +335,79 @@ interface ApprovalStepLike {
   actedAt: string;
 }
 
+/**
+ * Slice 31-PLANNER. The date arithmetic behind `GET /schedule`'s
+ * `plannedDates`, mirroring `api/src/scheduling/planner-projection.ts`:
+ * occurrences are `nextDueOn + n·intervalMonths` computed from the ORIGINAL
+ * anchor (never by stepping off the previous, clamped result, which would
+ * lose a month-end anchor for good) and clamped to the last day of a short
+ * month, exactly as `addCalendarMonthsClamped` does.
+ *
+ * Written here in `YYYY-MM-DD` strings rather than importing the api's copy:
+ * `web/e2e` deliberately does not depend on the `api` workspace at all (see
+ * this file's own header), and a wrong projection would surface as a visit
+ * drawn in the wrong column, which the journey spec asserts against.
+ */
+/**
+ * A deterministic, well-formed UUIDv4-shaped id from a counter.
+ *
+ * Slice 31-PLANNER found this the hard way. `asset_document` ids were
+ * `ad-1`, `ad-2`, … which read nicely — but `scheduleAdjustRequestSchema`
+ * (the REAL schema this fake parses with, review M-2) types
+ * `assetDocumentId` as `z.string().uuid()`, and both schedule editors ALWAYS
+ * send it. So every adjust through the fake was refused with the contentless
+ * "Request body failed validation.", a refusal the real server could never
+ * give, because its ids are `uuidv7()`. No spec had exercised a save through
+ * the fake before, so nothing caught it: the fake was STRICTER than
+ * production in exactly the place that made a working flow look broken —
+ * the mirror image of the `''`-vs-`null` lie that made review M-2 import
+ * these schemas in the first place.
+ *
+ * Same reasoning as `E2E_TEMPLATES`' real UUIDs, applied to every generated
+ * id that crosses a request body.
+ */
+function fakeUuid(prefix: number, counter: number): string {
+  const tail = String(counter).padStart(12, '0');
+  return `${String(prefix).repeat(8)}-0000-4000-8000-${tail}`;
+}
+
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function addCalendarMonthsClamped(iso: string, months: number): string {
+  const from = new Date(`${iso}T00:00:00.000Z`);
+  const targetMonth = from.getUTCMonth() + months;
+  const lastDay = new Date(Date.UTC(from.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
+  return new Date(
+    Date.UTC(from.getUTCFullYear(), targetMonth, Math.min(from.getUTCDate(), lastDay)),
+  )
+    .toISOString()
+    .slice(0, 10);
+}
+
+function projectVisitDates(
+  nextDueOn: string,
+  intervalMonths: number,
+  from: string,
+  to: string,
+): string[] {
+  if (!isIsoDate(nextDueOn) || intervalMonths < 1) {
+    return nextDueOn >= from && nextDueOn <= to ? [nextDueOn] : [];
+  }
+  const dates: string[] = [];
+  // 256 matches MAX_PROJECTED_VISITS_PER_RULE — a bound, not a business rule.
+  for (let step = 0; step < 256; step += 1) {
+    const occurrence =
+      step === 0 ? nextDueOn : addCalendarMonthsClamped(nextDueOn, step * intervalMonths);
+    if (occurrence > to) break;
+    if (occurrence >= from) dates.push(occurrence);
+  }
+  return dates;
+}
+
 export class FakeServer {
   // ---- Slice 13-UI-B: mutable admin state (users/areas/asset-types/assets).
   //
@@ -451,7 +529,19 @@ export class FakeServer {
 
   /** Slice 18-WORKFLOW — a machine the "Raise a job" screen can offer,
    * without going through the admin create flow first. */
-  seedAsset(input: { code: string; assetTypeId: string; description?: string }): FakeAsset {
+  /**
+   * `scheduleAnchorDate` is settable (slice 31-PLANNER): a document tagged to
+   * this machine bootstraps its rules with `nextDueOn` equal to the anchor,
+   * so it is the only way a spec can put a visit in a KNOWN work week rather
+   * than in whichever week the suite happens to run in. Defaults to today,
+   * unchanged for every existing caller.
+   */
+  seedAsset(input: {
+    code: string;
+    assetTypeId: string;
+    description?: string;
+    scheduleAnchorDate?: string;
+  }): FakeAsset {
     const asset: FakeAsset = {
       id: `asset-${++this.assetSeq}`,
       code: input.code,
@@ -464,7 +554,7 @@ export class FakeServer {
       areaId: null,
       locationDetail: null,
       commissionedOn: null,
-      scheduleAnchorDate: new Date().toISOString().slice(0, 10),
+      scheduleAnchorDate: input.scheduleAnchorDate ?? new Date().toISOString().slice(0, 10),
       status: 'ACTIVE',
       active: true,
     };
@@ -481,7 +571,8 @@ export class FakeServer {
     active?: boolean;
   }): FakeAssetDocument {
     const doc: FakeAssetDocument = {
-      id: `ad-${++this.assetDocumentSeq}`,
+      // A real UUID — the schemas this fake parses with demand one (`fakeUuid`).
+      id: fakeUuid(4, ++this.assetDocumentSeq),
       assetId: input.assetId,
       formTemplateId: input.formTemplateId,
       machineNumber: input.machineNumber ?? null,
@@ -513,7 +604,7 @@ export class FakeServer {
     for (const frequency of template.frequencies) {
       if (existing.has(frequency)) continue;
       const rule: FakeScheduleRule = {
-        id: `sched-${++this.scheduleRuleSeq}`,
+        id: fakeUuid(5, ++this.scheduleRuleSeq),
         assetDocumentId: doc.id,
         frequency,
         intervalMonths: FREQUENCY_INTERVAL_MONTHS[frequency],
@@ -2545,6 +2636,92 @@ export class FakeServer {
     });
   }
 
+  /**
+   * `GET /schedule` — `planner-schedule.controller.ts`, slice 31-PLANNER.
+   * The CROSS-MACHINE read behind `/planner`.
+   *
+   * Mirrored faithfully, including the three things a spec could otherwise
+   * pass against a fake that is kinder than production:
+   *
+   *  - NO role gate (same as `GET /assets/{id}/schedule`) — but AREA SCOPE
+   *    applies, and an out-of-scope machine is simply ABSENT rather than a
+   *    403. That difference is the real service's, not a simplification: this
+   *    is a collection read, so refusing the whole grid over one invisible
+   *    machine would make it useless to the scoped planners it is for.
+   *  - A `{data, page}` ENVELOPE, unlike the per-asset read's bare array.
+   *  - `plannedDates` PROJECTED across the window and `cascadeFrequencies`
+   *    resolved from the document's own rules, both exactly as
+   *    `planner-schedule.service.ts` computes them — the grid is drawn from
+   *    these, so a fake that returned only `nextDueOn` would let a broken
+   *    projection pass CI.
+   */
+  private async handlePlannerSchedule(route: Route): Promise<void> {
+    const requester = await this.requireUser(route);
+    if (!requester) return;
+
+    const url = new URL(route.request().url());
+    const year = new Date().getUTCFullYear();
+    const from = url.searchParams.get('from') ?? `${year}-01-01`;
+    const to = url.searchParams.get('to') ?? `${year}-12-31`;
+    const assetTypeId = url.searchParams.get('assetTypeId') ?? undefined;
+    const areaId = url.searchParams.get('areaId') ?? undefined;
+
+    if (!isIsoDate(from) || !isIsoDate(to) || to < from) {
+      await this.fulfillValidationFailed(route);
+      return;
+    }
+
+    const rows = Array.from(this.assetsById.values())
+      .filter((asset) => this.assetInScope(requester, asset))
+      .filter((asset) => (assetTypeId ? asset.assetTypeId === assetTypeId : true))
+      // Intersected with, never widening, the caller's own scope.
+      .filter((asset) => (areaId ? asset.areaId === areaId : true))
+      .flatMap((asset) =>
+        this.scheduleRulesOf(asset.id)
+          .filter((rule) => rule.nextDueOn <= to)
+          .map((rule) => this.toApiPlannerRow(asset, rule, from, to)),
+      )
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.page(rows)),
+    });
+  }
+
+  private toApiPlannerRow(asset: FakeAsset, rule: FakeScheduleRule, from: string, to: string) {
+    const doc = this.assetDocumentsById.get(rule.assetDocumentId);
+    const template = doc ? this.templatesById.get(doc.formTemplateId) : undefined;
+    // Every ACTIVE rule on the SAME document — what the real service reads
+    // through its nested `scheduleRules` include, and what U-CAS-05 makes the
+    // cascade depend on (only frequencies the document really has).
+    const siblings = Array.from(this.scheduleRulesById.values()).filter(
+      (sibling) => sibling.assetDocumentId === rule.assetDocumentId && sibling.active,
+    );
+    return {
+      id: rule.id,
+      assetId: asset.id,
+      assetCode: asset.code,
+      assetDescription: asset.description ?? null,
+      areaId: asset.areaId ?? null,
+      assetDocumentId: rule.assetDocumentId,
+      documentNumber: template?.documentNumber ?? 'UNKNOWN',
+      documentTitle: resolveTemplateTitle(template?.title ?? '', doc?.machineNumber ?? null),
+      frequency: rule.frequency,
+      intervalMonths: rule.intervalMonths,
+      nextDueOn: rule.nextDueOn,
+      lastCompletedOn: rule.lastCompletedOn,
+      adjustedReason: rule.adjustedReason,
+      active: rule.active,
+      plannedDates: projectVisitDates(rule.nextDueOn, rule.intervalMonths, from, to),
+      cascadeFrequencies: siblings
+        .filter((sibling) => rule.intervalMonths % sibling.intervalMonths === 0)
+        .map((sibling) => sibling.frequency)
+        .sort((a, b) => FREQUENCY_INTERVAL_MONTHS[a] - FREQUENCY_INTERVAL_MONTHS[b]),
+    };
+  }
+
   private assetInScope(requester: FakeAdminUser, asset: FakeAsset): boolean {
     if (requester.areaIds.length === 0) return true;
     return asset.areaId != null && requester.areaIds.includes(asset.areaId);
@@ -2911,6 +3088,15 @@ export class FakeServer {
           .match(/\/assets\/([^/]+)\/schedule$/);
         return this.handleAssetSchedule(route, match ? decodeURIComponent(match[1]) : 'unknown');
       }),
+    );
+
+    // Slice 31-PLANNER — the cross-machine read behind `/planner`. A
+    // top-level path, so it cannot collide with `/assets/{id}/schedule`
+    // registered above; the trailing `(\?.*)?` admits the window and filter
+    // query the screen always sends.
+    await page.route(
+      /\/api\/v1\/schedule(\?.*)?$/,
+      this.guarded((route) => this.handlePlannerSchedule(route)),
     );
 
     await page.route(

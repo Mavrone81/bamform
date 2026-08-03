@@ -527,6 +527,59 @@ test('A-01/A-05: the machine schedule section (empty, populated, adjust form ope
   await expectNoViolations(page);
 });
 
+/**
+ * Slice 31-PLANNER — the planner grid, in the three states that matter: the
+ * populated year (a 52-column table with a sticky machine column and a load
+ * row, the most structurally complex surface in the app), the selected-visit
+ * panel, and the adjust form open inside it. Swept at all three widths like
+ * everything else, which for this screen also proves the grid's own
+ * scroll container behaves rather than the page scrolling sideways.
+ *
+ * A-05 is asserted here too: the past-due cell carries the ⚠ glyph AND the
+ * word LATE AND a "past due" accessible name, and the heavy-week flag is a
+ * real sentence, not a taller bar.
+ */
+test('A-01/A-05: the planner grid (year, selected visit, adjust form) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  await page.clock.setFixedTime(new Date('2026-08-03T12:00:00.000Z'));
+  const late = server.seedAsset({
+    code: 'AW09',
+    assetTypeId: 'at-1',
+    scheduleAnchorDate: '2026-02-04',
+  });
+  server.seedAssetDocument({ assetId: late.id, formTemplateId: E2E_TEMPLATES.wireBond });
+  const later = server.seedAsset({
+    code: 'EP07',
+    assetTypeId: 'at-1',
+    scheduleAnchorDate: '2026-09-17',
+  });
+  server.seedAssetDocument({ assetId: later.id, formTemplateId: E2E_TEMPLATES.epoxy });
+
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.goto('/planner');
+  await expect(page.getByRole('table')).toBeVisible();
+
+  // A-05: past due is an icon plus the word, never the tint on its own.
+  const lateCell = page.getByRole('button', { name: /AW09.*WW05/ });
+  await expect(lateCell).toContainText('LATE');
+  await expect(lateCell).toHaveAccessibleName(/past due/);
+  const icon = await lateCell.locator('[aria-hidden="true"]').first().textContent();
+  expect(icon?.trim().length).toBeGreaterThan(0);
+  await expectNoViolations(page);
+
+  // The selected-visit panel is its own interactive surface.
+  await page.getByRole('button', { name: /EP07.*WW38/ }).click();
+  await expect(page.getByTestId('planner-detail')).toBeVisible();
+  await expectNoViolations(page);
+
+  // And so is the adjust form inside it.
+  await page.getByRole('button', { name: /Move next due date for/ }).click();
+  await expect(page.getByLabel('Reason for this change')).toBeVisible();
+  await expectNoViolations(page);
+});
+
 test('A-01: the ad-hoc document picker has zero axe violations', async ({ page, server }) => {
   const machine = server.seedAsset({ code: 'AW10', assetTypeId: 'at-1' });
   server.seedAssetDocument({

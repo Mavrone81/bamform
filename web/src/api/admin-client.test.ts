@@ -6,7 +6,9 @@ import {
   listAreas,
   listAssetDocuments,
   listAssetTypes,
+  listAllPlannerSchedule,
   listAssets,
+  listPlannerSchedule,
   listRoles,
   listTemplates,
   listUsers,
@@ -296,5 +298,92 @@ describe('U-ADMIN-DOC-01: admin-client — asset documents', () => {
       expect(result.status).toBe(409);
       expect(result.problem?.detail).toBe('already carries');
     }
+  });
+});
+
+/**
+ * Slice 31-PLANNER — `GET /schedule`, the cross-machine read behind the
+ * planner grid.
+ *
+ * The paging loop is the part worth pinning. 76 machines at ~3 rules each is
+ * over 200 rows against a server that clamps `limit` to 100, so the grid is
+ * always assembled from several pages. A PARTIAL grid is worse than none: a
+ * planner who decides week 12 is free, when the machines that would have
+ * filled it were on page two, plans work into a week that is already full.
+ */
+describe('planner schedule — the whole window, or an honest refusal', () => {
+  function pageResponse(data: unknown[], nextCursor: string | null) {
+    return jsonResponse({
+      data,
+      page: { hasMore: nextCursor !== null, limit: 100, nextCursor },
+    });
+  }
+
+  it('listPlannerSchedule sends the window, the max limit and the filters', async () => {
+    vi.mocked(fetch).mockResolvedValue(pageResponse([], null));
+    await listPlannerSchedule({
+      from: '2026-01-01',
+      to: '2026-12-31',
+      assetTypeId: 'at-1',
+      areaId: 'area-1',
+    });
+    const call = lastCall();
+    expect(call.method).toBe('GET');
+    expect(call.url).toContain('/api/v1/schedule?');
+    expect(call.url).toContain('from=2026-01-01');
+    expect(call.url).toContain('to=2026-12-31');
+    expect(call.url).toContain('limit=100');
+    expect(call.url).toContain('assetTypeId=at-1');
+    expect(call.url).toContain('areaId=area-1');
+  });
+
+  it('omits filters that were not asked for', async () => {
+    vi.mocked(fetch).mockResolvedValue(pageResponse([], null));
+    await listPlannerSchedule({ from: '2026-01-01', to: '2026-12-31' });
+    expect(lastCall().url).not.toContain('assetTypeId');
+    expect(lastCall().url).not.toContain('areaId');
+  });
+
+  it('follows the cursor to the end and returns every row, in order', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(pageResponse([{ id: 'r1' }, { id: 'r2' }], 'cursor-1'))
+      .mockResolvedValueOnce(pageResponse([{ id: 'r3' }], null));
+
+    const result = await listAllPlannerSchedule({ from: '2026-01-01', to: '2026-12-31' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.map((r) => r.id)).toEqual(['r1', 'r2', 'r3']);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+    // The second request carries the cursor the first one handed back.
+    expect(lastCall().url).toContain('cursor=cursor-1');
+  });
+
+  it('stops at the first page when there is no more', async () => {
+    vi.mocked(fetch).mockResolvedValue(pageResponse([{ id: 'r1' }], null));
+    const result = await listAllPlannerSchedule({ from: '2026-01-01', to: '2026-12-31' });
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops rather than looping when the server claims more but hands back no cursor', async () => {
+    // Defensive: `hasMore: true, nextCursor: null` is not a state the server
+    // produces, and re-requesting page one forever is the wrong response to it.
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ data: [{ id: 'r1' }], page: { hasMore: true, limit: 100, nextCursor: null } }),
+    );
+    const result = await listAllPlannerSchedule({ from: '2026-01-01', to: '2026-12-31' });
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a refusal mid-paging instead of returning a partial plan', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(pageResponse([{ id: 'r1' }], 'cursor-1'))
+      .mockResolvedValueOnce(jsonResponse({ title: 'Forbidden', status: 403 }, 403));
+
+    const result = await listAllPlannerSchedule({ from: '2026-01-01', to: '2026-12-31' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(403);
   });
 });

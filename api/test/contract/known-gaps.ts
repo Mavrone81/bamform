@@ -210,4 +210,12 @@ export const COLLECTION_ENDPOINTS: readonly CollectionEndpointClassification[] =
     areaScoped: false,
     reason: 'role (DBD §6.3) is global reference data, seeded by migration, with no areaId column.',
   },
+  {
+    method: 'GET',
+    path: '/api/v1/schedule',
+    areaScoped: true,
+    reason:
+      'Slice 31-PLANNER — the cross-machine planner grid. schedule_rule (DBD §6.14) has no areaId column of its own, but schedule_rule.assetDocument.asset.areaId does, so PR-API-10 filtering runs through that relation — the same shape GET /jobs already scopes through job.asset.areaId. This one matters more than most: it is the ONLY endpoint that returns rows for every machine in the plant in one response, so a missing filter here would hand a scoped planner the whole site rather than one extra row.',
+    sourceFile: 'src/scheduling/planner-schedule.repository.ts',
+  },
 ];
