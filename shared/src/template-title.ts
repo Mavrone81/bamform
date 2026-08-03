@@ -28,8 +28,29 @@ export function titleHasFillableRun(title: string): boolean {
 
 /**
  * Substitution happens at RENDER, never at tag time, so a template revision
- * that changes the title stays correct. Slice 23-PDFA freezes the rendered
- * result at archive, so an archived record keeps the title it was signed under.
+ * that changes the title stays correct.
+ *
+ * ##### AN ARCHIVED RECORD'S TITLE IS NOT FROZEN — READ THIS #####
+ * This comment used to claim "slice 23-PDFA freezes the rendered result at
+ * archive, so an archived record keeps the title it was signed under". That
+ * was never true. Slice 23-PDFA is an unbuilt PLAN
+ * (`docs/superpowers/plans/2026-07-29-slice-23-pdfa.md`); no frozen artefact
+ * is stored anywhere. A record's PDF is re-rendered LIVE from current data on
+ * every single request (`api/src/pdf/pdf-render.service.ts` ->
+ * `pdf-record-assembly.service.ts`), so this function runs again, against
+ * whatever the machine number and template title say TODAY, every time an
+ * archived record is printed. `GET /records/{id}/integrity` does not detect
+ * the difference: neither the machine number nor the resolved title is part of
+ * the canonical signed record (`api/src/jobs/canonical-job-record.ts`).
+ *
+ * Immutability of an archived record's printed title therefore rests entirely
+ * on write-side guards. One exists:
+ * `AssetDocumentsService#assertNoArchivedRecordDependsOnMachineNumber` refuses
+ * a `PATCH /asset-documents/{id}` that would rewrite the title on an archived
+ * record. That guard covers THAT ENDPOINT ONLY — it is not, and must not be
+ * mistaken for, a general freeze. Any new write path that can reach a
+ * template title, a machine number, or anything else
+ * `pdf-record-assembly.service.ts` reads needs its own guard.
  *
  * A missing `machineNumber` is never an error: it leaves the blank intact,
  * exactly as the paper form reads before someone writes on it. A number

@@ -377,8 +377,26 @@ any number of machines. Both directions were previously forbidden.
 NULL, the title renders with its blank intact, exactly as the paper form reads before
 someone writes on it. Supplied for a title with no blank, it is stored and simply has
 nothing to substitute into. Substitution happens **at render, never stored resolved**, so a
-revision that changes the title stays correct; slice 23-PDFA freezes the rendered result at
-archive, so an archived record keeps the title it was signed under.
+revision that changes the title stays correct.
+
+> **An archived record's title is not frozen.** This section previously claimed "slice
+> 23-PDFA freezes the rendered result at archive, so an archived record keeps the title it
+> was signed under". That was never true: slice 23-PDFA is an **unbuilt plan**
+> (`docs/superpowers/plans/2026-07-29-slice-23-pdfa.md`), and a record's PDF is
+> **re-rendered live from current data on every request** (`pdf-render.service.ts` →
+> `pdf-record-assembly.service.ts`). Editing `machine_number` therefore rewrites the title
+> printed on records signed months earlier, and `GET /records/{id}/integrity` does **not**
+> detect it — neither the machine number nor the resolved title is part of the canonical
+> signed record (`canonical-job-record.ts`).
+>
+> Immutability rests on write-side guards instead. `PATCH /asset-documents/{id}` refuses a
+> `machine_number` change when any **ARCHIVED** job on that document would render a
+> different title (`/errors/archived-record-title-dependency`, 409). The document is *not*
+> frozen by the mere existence of an archived record: a change is refused only when it
+> would actually alter printed output, so a title with no fillable run, a record carrying
+> its own captured number, and a document with no archived records yet all stay editable.
+> **That guard covers that one endpoint** — it is not a general property of archived
+> records, and every other write path feeding the PDF assembly needs its own.
 
 **Deactivation, never deletion.** INV-16 forbids DELETE on record tables, and a document
 that has generated jobs must remain resolvable. `active = false` stops future job
@@ -406,7 +424,10 @@ The `title` may carry a **fillable run** — two or more consecutive underscores
 "…Record KW___" — into which `asset_document.machine_number` is substituted **at render**.
 8 of the 12 controlled documents carry one; `EP01` and `PM01` have the number printed
 already, and two have no machine designation at all. Never stored resolved, so a revision
-that changes the title stays correct; slice 23-PDFA freezes the rendered result at archive.
+that changes the title stays correct. The rendered result is **not** frozen at archive —
+see §6.8a's note: slice 23-PDFA is unbuilt, the PDF re-renders live from current data, and
+what protects an archived record's title is the write-side guard on
+`PATCH /asset-documents/{id}`.
 
 ---
 

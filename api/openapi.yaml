@@ -854,10 +854,21 @@ paths:
       operationId: updateAssetDocument
       summary: Change a tagged document's form number, or deactivate it
       description: |
-        ADMIN only. There is deliberately NO DELETE: INV-16 forbids DELETE on
-        record tables, and a document that has already generated jobs must stay
-        resolvable. `active: false` stops future job generation and leaves the
-        history intact.
+        ENGINEER or ADMIN. There is deliberately NO DELETE: INV-16 forbids
+        DELETE on record tables, and a document that has already generated jobs
+        must stay resolvable. `active: false` stops future job generation and
+        leaves the history intact.
+
+        `machineNumber` is substituted into the template title at RENDER, and a
+        record's PDF is re-rendered live from current data on every request —
+        nothing is frozen at archive. A change is therefore REFUSED with
+        `/errors/archived-record-title-dependency` (409) when any ARCHIVED job
+        on this document would print a different title as a result. The
+        document is not frozen by the existence of archived records: the change
+        is allowed when the title carries no fillable run, when the archived
+        records carry their own captured number, and when no archived record
+        exists. Toggling `active` is never refused — it changes nothing any
+        record prints.
       requestBody:
         required: true
         content:
@@ -871,6 +882,7 @@ paths:
               schema: { $ref: '#/components/schemas/AssetDocument' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
   /approval-routes:

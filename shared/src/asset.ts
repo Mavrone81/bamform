@@ -90,9 +90,14 @@ export type AssetUpdate = z.infer<typeof assetUpdateSchema>;
  *
  * `title`, `resolvedTitle` and `titleHasFillableRun` are DERIVED per response
  * from the template's current title (see `resolveTemplateTitle`), never stored.
- * A revision that changes the title therefore stays correct, and slice 23-PDFA
- * freezes the rendered result at archive so a signed record keeps the title it
- * was signed under.
+ * A revision that changes the title therefore stays correct.
+ *
+ * This comment previously added "and slice 23-PDFA freezes the rendered result
+ * at archive so a signed record keeps the title it was signed under". That is
+ * false — slice 23-PDFA is an unbuilt plan and a record's PDF is re-rendered
+ * live from current data on every request. See `resolveTemplateTitle`'s note
+ * in `template-title.ts` for what actually protects an archived record's
+ * title, and what it does not cover.
  */
 export const assetDocumentSchema = z.object({
   id: z.string().uuid(),

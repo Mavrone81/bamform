@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { AuditActionT, Prisma, type AssetDocument as AssetDocumentRow } from '@prisma/client';
+import {
+  AuditActionT,
+  JobStatusT,
+  Prisma,
+  type AssetDocument as AssetDocumentRow,
+} from '@prisma/client';
 import {
   resolveTemplateTitle,
   titleHasFillableRun,
@@ -10,8 +15,17 @@ import {
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import { AreaScopeService } from '../common/area-scope';
-import { conflictProblem, notFoundProblem, outOfScopeProblem } from '../common/domain-problems';
+import {
+  archivedRecordTitleDependencyProblem,
+  conflictProblem,
+  notFoundProblem,
+  outOfScopeProblem,
+} from '../common/domain-problems';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  recordsBlockingMachineNumberChange,
+  type ArchivedRecordTitle,
+} from './archived-title-dependency';
 
 type RowWithTemplate = AssetDocumentRow & {
   formTemplate: { documentNumber: string; title: string };
@@ -36,6 +50,26 @@ function toDto(row: RowWithTemplate): AssetDocument {
 const INCLUDE_TEMPLATE = {
   formTemplate: { select: { documentNumber: true, title: true } },
 } as const;
+
+/**
+ * The machine number a record prints from ITSELF, or `null` when it has none
+ * and therefore falls back to `asset_document.machine_number`.
+ *
+ * This mirrors the fallback order in `pdf-record-assembly.service.ts` — the
+ * single place that decides what a record's title actually prints — and must
+ * be kept in step with it. The cast is deliberate and is what makes the guard
+ * correct on both sides of slice 31-TITLEBLANK: on `main` there is no
+ * per-record column, so this reads `undefined` and every archived record is
+ * judged against the document's value (correct — that is its only source);
+ * once `job.title_machine_number` exists it reads the captured value, and a
+ * record carrying its own is correctly treated as unaffected by this edit.
+ *
+ * Typed as an optional read rather than `any` so a future rename of the column
+ * fails the `??` intent visibly here rather than silently widening the guard.
+ */
+function ownMachineNumber(job: object): string | null {
+  return (job as { titleMachineNumber?: string | null }).titleMachineNumber ?? null;
+}
 
 /**
  * Slice 27-ASSETDOC §4.6 — tagging PM documents to a machine.
@@ -131,6 +165,14 @@ export class AssetDocumentsService {
     }
     await this.getAssetInScopeOrThrow(userId, existing.assetId);
 
+    // INV-09 — refuse a machine-number edit that would rewrite the title
+    // printed on an already-archived, signed record. Scoped to a machine
+    // number that is actually CHANGING: `active` toggles and no-op re-sends
+    // never reach it, because neither can alter what any record prints.
+    if (dto.machineNumber !== undefined && dto.machineNumber !== existing.machineNumber) {
+      await this.assertNoArchivedRecordDependsOnMachineNumber(existing, dto.machineNumber);
+    }
+
     // No DELETE anywhere in this service (INV-16): `active: false` is the only
     // removal, and it leaves every job this document already generated
     // resolvable.
@@ -158,6 +200,70 @@ export class AssetDocumentsService {
       });
 
       return dtoOut;
+    });
+  }
+
+  /**
+   * INV-09 — the archived-record guard for `machine_number`.
+   *
+   * The exposure this closes: `resolveTemplateTitle` substitutes
+   * `asset_document.machine_number` into the template title at RENDER
+   * (`pdf-record-assembly.service.ts`), and `pdf-render.service.ts` re-renders
+   * a record's PDF live from current data on every request — nothing is frozen
+   * at archive. So editing this one field rewrote the title printed on records
+   * signed months earlier, and `GET /records/{id}/integrity` still reported
+   * `intact: true`, because neither the machine number nor the resolved title
+   * is part of the canonical signed record (`canonical-job-record.ts`).
+   *
+   * SCOPE, stated plainly so nobody over-reads it: this guards THIS endpoint.
+   * It is not a general immutability property of an archived record's printed
+   * content — that would need the frozen artefact slice 23-PDFA only ever
+   * planned, or a guard on every other write path that feeds
+   * `pdf-record-assembly.service.ts`.
+   *
+   * VOIDED records are deliberately NOT counted. `archived -> VOID` is legal
+   * (`job-state-machine.ts`), so a record voided after archiving leaves this
+   * guard's reach — see the branch report; widening the rule to `voided` is an
+   * owner decision, not a tidy-up, because `voided` is also reachable from
+   * SCHEDULED/ASSIGNED/IN_PROGRESS, which were never signed.
+   */
+  private async assertNoArchivedRecordDependsOnMachineNumber(
+    existing: RowWithTemplate,
+    proposed: string | null,
+  ): Promise<void> {
+    const archivedJobs = await this.prisma.job.findMany({
+      where: { assetDocumentId: existing.id, status: JobStatusT.archived },
+      // `include`, NOT `select`: it returns every `job` scalar, which is what
+      // lets `ownMachineNumber` below read a per-record machine number that
+      // exists on some branches and not others without naming a column that
+      // may not be in this schema. Every `job` scalar is small (no blobs, no
+      // ciphertext — see `schema.prisma`), and the row set is bounded by one
+      // document's archived history.
+      include: {
+        templateRevision: { select: { formTemplate: { select: { title: true } } } },
+      },
+      orderBy: { jobNumber: 'asc' },
+    });
+
+    const records: ArchivedRecordTitle[] = archivedJobs.map((job) => ({
+      jobNumber: job.jobNumber,
+      templateTitle: job.templateRevision.formTemplate.title,
+      ownMachineNumber: ownMachineNumber(job),
+    }));
+
+    const blocking = recordsBlockingMachineNumberChange(records, existing.machineNumber, proposed);
+    if (blocking.length === 0) {
+      return;
+    }
+
+    // Quote the FIRST blocking record's before/after. Records on this document
+    // can sit on different revisions, so there is no single "the" title —
+    // naming one real record's real title beats a synthesised one.
+    const [first] = blocking;
+    throw archivedRecordTitleDependencyProblem({
+      blockingJobNumbers: blocking.map((r) => r.jobNumber),
+      currentTitle: resolveTemplateTitle(first.templateTitle, existing.machineNumber),
+      proposedTitle: resolveTemplateTitle(first.templateTitle, proposed),
     });
   }
 

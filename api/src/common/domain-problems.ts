@@ -153,6 +153,58 @@ export function recordImmutableProblem(): ConflictException {
   });
 }
 
+/**
+ * INV-09 — `PATCH /asset-documents/{id}` refused because an already-ARCHIVED
+ * record would print a different document title as a result.
+ *
+ * A SEPARATE type from `/errors/record-immutable`, deliberately. That one says
+ * "the thing you addressed is frozen"; the caller addressed a job. Here the
+ * thing addressed — a machine's long-lived document — is NOT frozen and stays
+ * editable in every other respect; what refuses is a downstream consequence on
+ * a different entity the caller never named. Collapsing the two would tell an
+ * engineer their document is archived, which is false and unactionable.
+ *
+ * 409, matching every other state-based refusal in this file
+ * (`recordImmutableProblem`, `invalidTransitionProblem`): the request is
+ * well-formed, so it is a conflict with the current state of the record set,
+ * not a validation failure.
+ *
+ * `detail` names the blocking records BY JOB NUMBER and quotes both titles,
+ * because the whole point is that the engineer can go and look: either the
+ * value is right and the archived record legitimately depends on it, or the
+ * archived record itself is wrong and needs a void-and-reissue, which is a
+ * different, deliberate, ADMIN-only act.
+ */
+export function archivedRecordTitleDependencyProblem(input: {
+  blockingJobNumbers: string[];
+  currentTitle: string;
+  proposedTitle: string;
+}): ConflictException {
+  const { blockingJobNumbers, currentTitle, proposedTitle } = input;
+  const count = blockingJobNumbers.length;
+  // Bounded: a long-lived document can accumulate hundreds of archived
+  // records, and an error detail is read by a human, not parsed.
+  const SHOWN = 5;
+  const shown = blockingJobNumbers.slice(0, SHOWN).join(', ');
+  const named = count > SHOWN ? `${shown} and ${count - SHOWN} more` : shown;
+
+  return new ConflictException({
+    type: '/errors/archived-record-title-dependency',
+    title: 'An archived record depends on this value',
+    status: 409,
+    detail:
+      `Changing the machine number would rewrite the title printed on ${count} archived ` +
+      `record${count === 1 ? '' : 's'}: "${currentTitle}" would become "${proposedTitle}". ` +
+      `An archived record is signed evidence, so its printed content cannot be changed here. ` +
+      `Affected record${count === 1 ? '' : 's'}: ${named}.`,
+    errors: blockingJobNumbers.slice(0, SHOWN).map((jobNumber) => ({
+      pointer: '/machineNumber',
+      code: 'ARCHIVED_RECORD_TITLE_DEPENDENCY',
+      message: `Archived record ${jobNumber} prints its title from this machine number`,
+    })),
+  });
+}
+
 /** PR-API-18/PR-064: the job's `draftVersion` no longer matches the client's `If-Match`. */
 export function draftConflictProblem(currentDraftVersion: number): ConflictException {
   return new ConflictException({

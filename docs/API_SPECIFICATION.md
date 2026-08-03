@@ -260,6 +260,7 @@ not by callers, so a new endpoint cannot forget it.
 | `/errors/invalid-transition` | 409 | State machine rejects the transition |
 | `/errors/draft-conflict` | 409 | Client's base version is stale (PR-064) — body names the conflicting fields |
 | `/errors/record-immutable` | 409 | Attempt to modify an archived record (INV-09) |
+| `/errors/archived-record-title-dependency` | 409 | `PATCH /asset-documents/{id}` would rewrite the title printed on an already-archived record (INV-09) — `detail` names the blocking records and quotes both titles |
 | `/errors/mfa-already-enrolled` | 409 | `POST /auth/mfa/enrol` on an account that already has an authenticator; only an ADMIN reset can clear it |
 | `/errors/idempotency-mismatch` | 422 | Same key, different request body (DBD §6.23) |
 | `/errors/validation-failed` | 422 | Field-level failures in `errors[]` |
