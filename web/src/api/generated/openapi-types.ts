@@ -1060,6 +1060,55 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/jobs/{jobId}/title-machine-number': {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Record the technician's entry for the blank in the form's title
+     * @description Slice 31-TITLEBLANK. Eight of the twelve controlled templates carry a
+     *     blank in their TITLE (`ED____`, `KW___`, `AVS 35-____`, CE 95 050 00
+     *     01's bare `______`, ...). On paper the technician writes into it; this
+     *     is that entry, captured per record like any other field on the form.
+     *
+     *     NOT pre-filled from the machine code - deciding which part of
+     *     `AVS35-01` belongs in `AVS 35-____` is unverifiable and wrong on two
+     *     of the eight shapes, so the field starts empty. `null` clears a
+     *     mistyped value; an empty string is rejected.
+     *
+     *     Optional while drafting and offline, REQUIRED at
+     *     `POST /jobs/{jobId}/submit` when the title carries a fillable run
+     *     (`titleHasFillableRun`) - a form with the number already printed
+     *     (EP01, PM01) or with no machine designation at all is never asked for
+     *     one.
+     *
+     *     `Idempotency-Key` is REQUIRED (reachable from the offline outbox,
+     *     PR-API-16). UNVERSIONED, exactly like
+     *     `PUT /jobs/{jobId}/parts/{partId}`: it neither accepts `If-Match` nor
+     *     bumps `draftVersion`, and it does not transition the job's status.
+     *     Last write wins on a single scalar the one assigned technician types
+     *     on one device - see `title-machine-number.service.ts` for the measured
+     *     reason (a versioned shape produced self-inflicted 409s whenever the
+     *     debounced box flushed on blur in the same tick as the tap that caused
+     *     the blur).
+     */
+    put: operations['recordTitleMachineNumber'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/jobs/{jobId}/attachments': {
     parameters: {
       query?: never;
@@ -2483,6 +2532,29 @@ export interface components {
     };
     Job: components['schemas']['JobSummary'] & {
       draftVersion?: number;
+      /**
+       * @description Slice 31-TITLEBLANK - what the TECHNICIAN wrote into the blank
+       *     in this record's title (`…Record ED____` + `01` ->
+       *     `…Record ED01`), or null while it is still empty. Substituted
+       *     at RENDER, never stored resolved. The PDF prefers this over
+       *     the admin-set `AssetDocument.machineNumber`, which remains the
+       *     fallback so records captured before this field existed print
+       *     exactly as they did.
+       */
+      titleMachineNumber?: string | null;
+      /**
+       * @description Whether this record's title carries a fillable run of
+       *     underscores, and so whether the technician is offered a box for
+       *     it at all. DERIVED per response from the frozen revision's
+       *     template title, never stored - the same shape and reasoning as
+       *     `AssetDocument.titleHasFillableRun`. A form with the number
+       *     pre-printed (EP01, PM01) or with no machine designation reports
+       *     false, and no box is shown. There is deliberately no
+       *     `resolvedTitle` counterpart on `Job`: a cached job's resolved
+       *     title goes stale the moment the technician types a number
+       *     offline.
+       */
+      titleHasFillableRun?: boolean;
       /** @description Slice 17 - the void ANNOTATION (never part of the signed record content). Populated only once the job is VOIDED. */
       voidReason?: string | null;
       /** Format: uuid */
@@ -2539,6 +2611,19 @@ export interface components {
       clientRecordedAt?: string;
       /** Format: date-time */
       recordedAt?: string;
+    };
+    TitleMachineNumberInput: {
+      /**
+       * @description Slice 31-TITLEBLANK. What the technician writes into the blank in
+       *     the form's title. Bounds are deliberately identical to
+       *     `AssetDocumentCreate.machineNumber`, the admin-set value this
+       *     overrides - one blank, one set of rules, whoever fills it.
+       *     Explicitly nullable: `null` CLEARS a mistyped value, while an
+       *     empty string is rejected so nothing zero-width can reach a
+       *     controlled title. Required in the body (the caller must say which
+       *     of the two it means); the VALUE is not required until submit.
+       */
+      titleMachineNumber: string | null;
     };
     PartUsedInput: {
       partNo?: string | null;
@@ -4570,6 +4655,45 @@ export interface operations {
           'application/problem+json': components['schemas']['Problem'];
         };
       };
+    };
+  };
+  recordTitleMachineNumber: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Client-generated UUIDv7. Required on endpoints reachable from the offline outbox. */
+        'Idempotency-Key'?: components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        jobId: components['parameters']['JobId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['TitleMachineNumberInput'];
+      };
+    };
+    responses: {
+      /** @description Recorded */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Job'];
+        };
+      };
+      /** @description The record is archived, or is no longer in a capturable state */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      422: components['responses']['Problem'];
     };
   };
   uploadAttachment: {

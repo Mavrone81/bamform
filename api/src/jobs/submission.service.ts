@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { ApprovalActionT, AuditActionT, JobStatusT } from '@prisma/client';
-import type { Job, SubmitJobRequest } from '@bamform/shared';
+import { titleHasFillableRun, type Job, type SubmitJobRequest } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import {
   forbiddenProblem,
   incompleteRecordProblem,
   invalidTransitionProblem,
+  titleMachineNumberRequiredProblem,
 } from '../common/domain-problems';
 import { IdempotencyService } from '../common/idempotency.service';
 import { computeContentHash } from '../crypto/content-hash';
@@ -152,6 +153,21 @@ export class SubmissionService {
     );
     if (outstanding.length > 0) {
       throw incompleteRecordProblem(outstanding);
+    }
+
+    // Slice 31-TITLEBLANK — the blank in the TITLE is a mandatory field too,
+    // and the last moment it can still be filled is before the record is
+    // signed. Gated on `titleHasFillableRun` rather than on a stored flag for
+    // the reason that function's own doc gives: a form with the number
+    // already printed (EP01, PM01) or with no machine designation at all has
+    // no blank, so demanding one would be demanding something that cannot be
+    // written anywhere. Read from the job's FROZEN revision's template, the
+    // same source `pdf-record-assembly.service.ts` resolves the printed title
+    // from, so the gate and the render can never disagree about whether there
+    // is a blank.
+    const templateTitle = job.templateRevision.formTemplate.title;
+    if (titleHasFillableRun(templateTitle) && !job.titleMachineNumber) {
+      throw titleMachineNumberRequiredProblem(templateTitle);
     }
 
     // The role the performer is signing AS — recorded on the step so the

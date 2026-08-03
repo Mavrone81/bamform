@@ -143,6 +143,32 @@ export function incompleteRecordProblem(
   });
 }
 
+/**
+ * Slice 31-TITLEBLANK: `IN_PROGRESS -> SUBMITTED` rejected — the form's title
+ * carries a blank (`ED____`) and nothing has been written into it.
+ *
+ * Deliberately the SAME `/errors/incomplete-record` type as the outstanding-
+ * items gate above: from the technician's point of view it is the same class
+ * of failure — a box on the form that has to be filled before the record can
+ * be signed. `detail` quotes the actual title so the message names the field
+ * as it is printed on the form, not just its API name.
+ */
+export function titleMachineNumberRequiredProblem(title: string): UnprocessableEntityException {
+  return new UnprocessableEntityException({
+    type: '/errors/incomplete-record',
+    title: 'Record is incomplete',
+    status: 422,
+    detail: `The form number in the title has not been filled in — "${title}".`,
+    errors: [
+      {
+        pointer: '/titleMachineNumber',
+        code: 'REQUIRED',
+        message: 'Form number in the title is required',
+      },
+    ],
+  });
+}
+
 /** INV-09/PR-041: attempted mutation against an ARCHIVED (or otherwise terminal-immutable) job. */
 export function recordImmutableProblem(): ConflictException {
   return new ConflictException({

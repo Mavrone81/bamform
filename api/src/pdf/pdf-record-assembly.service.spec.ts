@@ -27,6 +27,77 @@ function buildChecklist(job: unknown): BuildChecklistResult {
   return service.buildChecklist(job as JobFullRow);
 }
 
+/** Same bracket-access technique and the same reasoning: `documentTitle` is a
+ * private, synchronous, Prisma-free mapping over the `JobFullRow` it is
+ * handed. Slice 31-TITLEBLANK. */
+function documentTitle(job: unknown): string {
+  const service = new PdfRecordAssemblyService(
+    undefined as never,
+    undefined as never,
+  ) as unknown as { documentTitle: (job: JobFullRow) => string };
+  return service.documentTitle(job as JobFullRow);
+}
+
+/** A `JobFullRow`-shaped fixture carrying only what `documentTitle` reads. */
+function titleFixture(input: {
+  title: string;
+  titleMachineNumber?: string | null;
+  machineNumber?: string | null;
+}) {
+  return {
+    titleMachineNumber: input.titleMachineNumber ?? null,
+    assetDocument: { machineNumber: input.machineNumber ?? null },
+    templateRevision: { formTemplate: { title: input.title } },
+  };
+}
+
+const FILLABLE = 'BESi Die Attach Preventive Maintenance Record ED____';
+
+describe('PdfRecordAssemblyService#documentTitle (slice 31-TITLEBLANK)', () => {
+  it("prefers the TECHNICIAN's per-record entry over the admin-set machineNumber", () => {
+    expect(
+      documentTitle(
+        titleFixture({ title: FILLABLE, titleMachineNumber: '01', machineNumber: '99' }),
+      ),
+    ).toBe('BESi Die Attach Preventive Maintenance Record ED01');
+  });
+
+  it('falls back to the admin-set asset_document.machineNumber when the record has no entry — every record signed before this field existed prints exactly as before', () => {
+    expect(documentTitle(titleFixture({ title: FILLABLE, machineNumber: '99' }))).toBe(
+      'BESi Die Attach Preventive Maintenance Record ED99',
+    );
+  });
+
+  it('leaves the blank INTACT when neither is set — the paper form reads that way before anyone writes on it', () => {
+    expect(documentTitle(titleFixture({ title: FILLABLE }))).toBe(FILLABLE);
+  });
+
+  it('substitutes nothing into a title with no blank, whatever is captured (EP01/PM01 shapes)', () => {
+    const printed = 'Epoxy Dispenser EP01 Preventive Maintenance Record';
+    expect(documentTitle(titleFixture({ title: printed, titleMachineNumber: '07' }))).toBe(printed);
+  });
+
+  it('treats technician free text LITERALLY — a `$&` in the value never splices the matched underscores back in', () => {
+    // The exact defect `resolveTemplateTitle`'s function-form replacement
+    // exists to prevent, now reachable from a technician's keyboard rather
+    // than only an admin's.
+    expect(documentTitle(titleFixture({ title: 'Record KW___', titleMachineNumber: 'A$&B' }))).toBe(
+      'Record KWA$&B',
+    );
+  });
+
+  it('passes markup through UNESCAPED — escaping is pdf-html-template.ts’s job, and this proves it is not double-handled here', () => {
+    // `esc(input.documentTitle)` in `pdf-html-template.ts` is the single
+    // escaping point (see that file's own injection tests). Escaping here as
+    // well would double-encode every `&` in a legitimate title.
+    expect(
+      documentTitle(
+        titleFixture({ title: 'Record KW___', titleMachineNumber: '<script>x</script>' }),
+      ),
+    ).toBe('Record KW<script>x</script>');
+  });
+});
+
 describe('PdfRecordAssemblyService#buildChecklist', () => {
   it('fails CLOSED for an item result whose template item was soft-removed (active: false, so absent from the frozen-revision include) — never silently in scope', () => {
     const job = {

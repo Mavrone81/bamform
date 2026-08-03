@@ -505,6 +505,58 @@ describe('GET /records/{recordId}/pdf (E-11, PR-116/117/118)', () => {
     expect(text).not.toContain('KW___');
   }, 30_000);
 
+  /**
+   * Slice 31-TITLEBLANK. The sibling above proves the admin-set fallback still
+   * prints; this proves the rule that supersedes it — the TECHNICIAN's own
+   * per-record entry wins. Both are asserted in ONE render, with the two
+   * values deliberately DIFFERENT, so a regression that silently reverted to
+   * the admin value cannot pass by coincidence.
+   */
+  it('the signed record shows the TECHNICIAN’s captured form number in the title, in preference to the admin-set one', async () => {
+    const { jobId, maintainerId } = await makeArchivedRecord();
+
+    await adminPool.query(
+      `UPDATE "form_template" SET "title" = 'Preventive Maintenance Record KW___'
+         FROM "template_revision" tr, "job" j
+        WHERE tr.id = j."template_revision_id"
+          AND "form_template".id = tr."form_template_id"
+          AND j.id = $1`,
+      [jobId],
+    );
+    await adminPool.query(
+      `UPDATE "asset_document" SET "machine_number" = '13'
+         FROM "job" j
+        WHERE "asset_document".id = j."asset_document_id"
+          AND j.id = $1`,
+      [jobId],
+    );
+    // Written directly, with `job_archived_immutable_trg` disabled for exactly
+    // this statement: the record is already ARCHIVED by the fixture, and the
+    // API route (correctly) refuses to write to it. What is under test here is
+    // the RENDER's precedence rule, not the capture route — that has its own
+    // spec (`jobs-title-machine-number.spec.ts`), which also proves an
+    // archived record cannot be rewritten through the API.
+    await adminPool.query('ALTER TABLE "job" DISABLE TRIGGER "job_archived_immutable_trg"');
+    try {
+      await adminPool.query(`UPDATE "job" SET "title_machine_number" = '21' WHERE id = $1`, [
+        jobId,
+      ]);
+    } finally {
+      await adminPool.query('ALTER TABLE "job" ENABLE TRIGGER "job_archived_immutable_trg"');
+    }
+
+    const token = await mintAccessToken(app, maintainerId, ['MAINTAINER']);
+    const res = await request(app.getHttpServer())
+      .get(`/api/v1/records/${jobId}/pdf`)
+      .set(...authHeader(token))
+      .expect(200);
+    const text = await extractPdfText(Buffer.from(res.body as Buffer));
+
+    expect(text).toContain('KW21');
+    expect(text).not.toContain('KW13');
+    expect(text).not.toContain('KW___');
+  }, 30_000);
+
   it('the footer digest matches GET /records/{recordId}/integrity for the SAME record (PR-118 — reused, not invented)', async () => {
     const { jobId, maintainerId } = await makeArchivedRecord();
     const token = await mintAccessToken(app, maintainerId, ['MAINTAINER']);

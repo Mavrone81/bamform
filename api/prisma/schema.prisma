@@ -731,6 +731,15 @@ model Job {
   voidedBy            String?      @map("voided_by") @db.Uuid
   voidedAt            DateTime?    @map("voided_at") @db.Timestamptz(6)
   draftVersion        Int          @default(0) @map("draft_version")
+  /// Slice 31-TITLEBLANK. What the TECHNICIAN wrote into the blank in this
+  /// record's title (`ED____` -> `ED01`), captured per record like any other
+  /// field on the form. NULL until they fill it — never pre-filled from the
+  /// machine code, and required only at SUBMIT, and only where the title
+  /// actually carries a fillable run (`titleHasFillableRun`). Substituted at
+  /// RENDER (`resolveTemplateTitle`), never stored resolved; the PDF prefers
+  /// it over the admin-set `asset_document.machine_number`, which stays the
+  /// fallback for every record signed before this column existed.
+  titleMachineNumber  String?      @map("title_machine_number")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)

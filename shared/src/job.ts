@@ -210,10 +210,76 @@ export const approvalStepSchema = z.object({
 });
 export type ApprovalStep = z.infer<typeof approvalStepSchema>;
 
+// ------------------------------------------------- job.title_machine_number
+
+/**
+ * The value the TECHNICIAN writes into the blank in the form's title
+ * (`ED____` -> `ED01`). Bounds deliberately identical to
+ * `asset.ts#assetDocumentCreateSchema.machineNumber`, the admin-set value it
+ * overrides: trimmed, 1..50 — one blank, one set of rules, whoever fills it.
+ */
+export const titleMachineNumberSchema = z
+  .string()
+  .trim()
+  .min(1, 'form number must not be empty')
+  .max(50, 'form number must be 50 characters or fewer');
+
+/**
+ * `PUT /jobs/{id}/title-machine-number` request body — the per-record capture
+ * of the title's blank.
+ *
+ * Explicitly NULLABLE and never required here: a draft may be saved, and a
+ * whole shift worked offline, with the blank still empty (the paper form is
+ * filled in the same order). `null` is how a mistyped value is CLEARED — an
+ * empty string is rejected rather than quietly stored, so nothing can put a
+ * zero-width value into a controlled title. The requirement bites at SUBMIT
+ * (`submission.service.ts`), and only for a title that actually carries a
+ * fillable run (`titleHasFillableRun`).
+ */
+export const titleMachineNumberInputSchema = z.object({
+  titleMachineNumber: titleMachineNumberSchema.nullable(),
+});
+export type TitleMachineNumberInput = z.infer<typeof titleMachineNumberInputSchema>;
+
 // ------------------------------------------------------------------------- job
 
 export const jobSchema = jobSummarySchema.extend({
   draftVersion: z.number().int().optional(),
+  /**
+   * What the technician wrote into the title's blank ON THIS RECORD, or null
+   * while it is still empty. NOT pre-filled from the machine code: deciding
+   * which part of `AVS35-01` belongs in `AVS 35-____` is unverifiable and
+   * wrong on two of the eight real shapes, so the box starts empty and the
+   * technician types what is printed on the machine.
+   *
+   * Substituted at RENDER (`resolveTemplateTitle`), never stored resolved.
+   * The PDF prefers this over the admin-set `asset_document.machineNumber`,
+   * which remains the fallback so every record signed before this field
+   * existed keeps printing exactly as it did.
+   */
+  titleMachineNumber: z.string().nullable().optional(),
+  /**
+   * Whether this record's title carries a fillable run of underscores, and so
+   * whether the technician is offered a box for it at all. DERIVED per
+   * response from the frozen revision's template title
+   * (`titleHasFillableRun`), never stored — the same shape and the same
+   * reasoning as `assetDocumentSchema.titleHasFillableRun`, which the admin
+   * screen already keys its form-number field off.
+   *
+   * It exists so the ONE implementation of "is there a blank" stays
+   * server-side: a second copy of that regex in the client is exactly the
+   * drift slice 26 had to unpick for stage labels, and the title of a
+   * controlled document is not the place to repeat it. A form with the number
+   * pre-printed (EP01, PM01) or with no machine designation at all reports
+   * false, and a technician is never shown a box that does nothing.
+   *
+   * There is deliberately NO `resolvedTitle` counterpart here (unlike
+   * `AssetDocument`): a cached job's resolved title is whatever the server
+   * last said, which goes stale the moment the technician types a number
+   * offline. Showing it would state a printed title that is not the one this
+   * record will print.
+   */
+  titleHasFillableRun: z.boolean().optional(),
   // Slice 17-VOID — the void ANNOTATION (never part of the signed record
   // content): populated only once a job is VOIDED. `voidedAt` is null for
   // voids that predate the column (slice 17's migration adds it).

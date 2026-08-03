@@ -37,6 +37,33 @@ describe('explainSubmitRejection', () => {
     expect(msg).toMatch(/updating itself/i);
   });
 
+  /**
+   * Slice 31-TITLEBLANK. The generic branch would render the server's
+   * `/titleMachineNumber` pointer literally — an API field name shown to
+   * someone holding a paper form, which names nothing they can find on it.
+   */
+  it('explains the unfilled title blank in the words of the form, not the API', () => {
+    const msg = explainSubmitRejection({
+      type: '/errors/incomplete-record',
+      title: 'Record is incomplete',
+      detail:
+        'The form number in the title has not been filled in — "BESi Die Attach Preventive Maintenance Record ED____".',
+      errors: [
+        {
+          pointer: '/titleMachineNumber',
+          message: 'Form number in the title is required',
+        },
+      ],
+    });
+    expect(msg).toMatch(/form number in the title/i);
+    // The actual printed title, so they can see WHICH blank.
+    expect(msg).toContain('ED____');
+    // Never the raw API field name.
+    expect(msg).not.toContain('titleMachineNumber');
+    // Their work must not read as lost.
+    expect(msg).toMatch(/safely held/i);
+  });
+
   it('names the failing FIELDS for any other validation error', () => {
     const msg = explainSubmitRejection({
       title: 'Validation failed',

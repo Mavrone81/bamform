@@ -1456,6 +1456,58 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /jobs/{jobId}/title-machine-number:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    put:
+      tags: [Jobs]
+      operationId: recordTitleMachineNumber
+      summary: Record the technician's entry for the blank in the form's title
+      description: |
+        Slice 31-TITLEBLANK. Eight of the twelve controlled templates carry a
+        blank in their TITLE (`ED____`, `KW___`, `AVS 35-____`, CE 95 050 00
+        01's bare `______`, ...). On paper the technician writes into it; this
+        is that entry, captured per record like any other field on the form.
+
+        NOT pre-filled from the machine code - deciding which part of
+        `AVS35-01` belongs in `AVS 35-____` is unverifiable and wrong on two
+        of the eight shapes, so the field starts empty. `null` clears a
+        mistyped value; an empty string is rejected.
+
+        Optional while drafting and offline, REQUIRED at
+        `POST /jobs/{jobId}/submit` when the title carries a fillable run
+        (`titleHasFillableRun`) - a form with the number already printed
+        (EP01, PM01) or with no machine designation at all is never asked for
+        one.
+
+        `Idempotency-Key` is REQUIRED (reachable from the offline outbox,
+        PR-API-16). UNVERSIONED, exactly like
+        `PUT /jobs/{jobId}/parts/{partId}`: it neither accepts `If-Match` nor
+        bumps `draftVersion`, and it does not transition the job's status.
+        Last write wins on a single scalar the one assigned technician types
+        on one device - see `title-machine-number.service.ts` for the measured
+        reason (a versioned shape produced self-inflicted 409s whenever the
+        debounced box flushed on blur in the same tick as the tap that caused
+        the blur).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TitleMachineNumberInput' }
+      responses:
+        '200':
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409':
+          description: The record is archived, or is no longer in a capturable state
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+
   /jobs/{jobId}/attachments:
     parameters:
       - $ref: '#/components/parameters/JobId'
@@ -3247,6 +3299,31 @@ components:
         - type: object
           properties:
             draftVersion: { type: integer }
+            titleMachineNumber:
+              type: [string, 'null']
+              minLength: 1
+              maxLength: 50
+              description: |
+                Slice 31-TITLEBLANK - what the TECHNICIAN wrote into the blank
+                in this record's title (`…Record ED____` + `01` ->
+                `…Record ED01`), or null while it is still empty. Substituted
+                at RENDER, never stored resolved. The PDF prefers this over
+                the admin-set `AssetDocument.machineNumber`, which remains the
+                fallback so records captured before this field existed print
+                exactly as they did.
+            titleHasFillableRun:
+              type: boolean
+              description: |
+                Whether this record's title carries a fillable run of
+                underscores, and so whether the technician is offered a box for
+                it at all. DERIVED per response from the frozen revision's
+                template title, never stored - the same shape and reasoning as
+                `AssetDocument.titleHasFillableRun`. A form with the number
+                pre-printed (EP01, PM01) or with no machine designation reports
+                false, and no box is shown. There is deliberately no
+                `resolvedTitle` counterpart on `Job`: a cached job's resolved
+                title goes stale the moment the technician types a number
+                offline.
             voidReason:
               type: [string, 'null']
               description: Slice 17 - the void ANNOTATION (never part of the signed record content). Populated only once the job is VOIDED.
@@ -3313,6 +3390,24 @@ components:
         recordedByName: { type: string }
         clientRecordedAt: { type: string, format: date-time }
         recordedAt: { type: string, format: date-time }
+
+    TitleMachineNumberInput:
+      type: object
+      required: [titleMachineNumber]
+      properties:
+        titleMachineNumber:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 50
+          description: |
+            Slice 31-TITLEBLANK. What the technician writes into the blank in
+            the form's title. Bounds are deliberately identical to
+            `AssetDocumentCreate.machineNumber`, the admin-set value this
+            overrides - one blank, one set of rules, whoever fills it.
+            Explicitly nullable: `null` CLEARS a mistyped value, while an
+            empty string is rejected so nothing zero-width can reach a
+            controlled title. Required in the body (the caller must say which
+            of the two it means); the VALUE is not required until submit.
 
     PartUsedInput:
       type: object

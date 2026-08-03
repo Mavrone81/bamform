@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect, signInAs } from '../support/fixtures';
-import { E2E_PASSWORD, E2E_TEMPLATES, E2E_USERS, type FakeServer } from '../support/fake-server';
+import { E2E_PASSWORD, E2E_TEMPLATES, E2E_USERS, FakeServer } from '../support/fake-server';
 import { currentTotpCode } from '../support/totp';
 import AxeBuilder from '@axe-core/playwright';
 
@@ -45,6 +45,44 @@ test('A-01: RecordCapture with the performer signature pad open has zero axe vio
   await expect(page.getByRole('heading', { name: 'PM-2026-000431' })).toBeVisible();
   await page.getByRole('button', { name: 'Sign and submit' }).click();
   await expect(page.getByTestId('performer-signature')).toBeVisible();
+  await expectNoViolations(page);
+});
+
+/**
+ * Slice 31-TITLEBLANK — the form-number box is a NEW interactive surface on
+ * the capture screen, and unlike the signature pad it is also a BLOCKING one:
+ * while it is empty the submit button is disabled and carries a different
+ * label. Both states are swept — empty (error text visible, submit disabled)
+ * and filled — at all three widths, because "why can I not submit" must be
+ * answerable to a screen reader, not only to a sighted user.
+ */
+test('A-01/A-05: the form-number box on the capture screen has zero axe violations, empty and filled', async ({
+  page,
+}) => {
+  const server = new FakeServer();
+  server.seedJob({
+    id: 'job-title',
+    jobNumber: 'PM-2026-000702',
+    assetCode: 'ED01',
+    frequency: 'M3',
+    dueOn: '2026-08-01',
+    title: 'BESi Die Attach Preventive Maintenance Record ED____',
+    items: [{ id: 'item-1', itemNo: 1, instruction: 'Check heater block temperature' }],
+  });
+  await server.install(page);
+  await signInAs(page);
+
+  await page.getByText('PM-2026-000702').click();
+  await expect(page.getByLabel('Form number in the title')).toBeVisible();
+  // Empty: the refusal is text, not colour alone (A-05).
+  await expect(page.getByText(/Fill this in before submitting/i)).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /Enter the form number above to submit/i }),
+  ).toBeDisabled();
+  await expectNoViolations(page);
+
+  await page.getByLabel('Form number in the title').fill('01');
+  await expect(page.getByRole('button', { name: 'Sign and submit' })).toBeEnabled();
   await expectNoViolations(page);
 });
 
