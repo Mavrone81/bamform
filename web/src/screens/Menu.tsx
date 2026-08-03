@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from '../router';
 import { getCurrentUser, onCurrentUserChange, logout } from '../auth';
 import { rolesGetQueueTab } from '../components/NavShell';
-import { rolesCanRaiseJob } from '../lib/permissions';
+import { rolesCanRaiseJob, rolesCanAdjustSchedule } from '../lib/permissions';
 import { getServices, getSyncUserId } from '../state/services';
 import { pendingCountForUser } from '../offline/outbox';
 
@@ -53,6 +53,7 @@ export function Menu() {
   const hasQueueTab = rolesGetQueueTab(user?.roles);
   const isAdmin = user?.roles.includes('ADMIN') ?? false;
   const canRaiseJob = rolesCanRaiseJob(user?.roles);
+  const canAdjustSchedule = rolesCanAdjustSchedule(user?.roles);
 
   const items: Array<{ label: string; to: string }> = [
     ...(hasQueueTab ? [] : [{ label: 'Verifier queue', to: '/queue' }]),
@@ -60,6 +61,13 @@ export function Menu() {
     // URL stays reachable for anyone and the server's `@Roles` gate is what
     // actually refuses (non-negotiable #6).
     ...(canRaiseJob ? [{ label: 'Raise a job', to: '/jobs/raise' }] : []),
+    // Slice 29-SCHEDULE-UI review IMPORTANT-2 — PLANNER/TEAM_LEADER/ENGINEER
+    // can adjust a schedule (`PUT /assets/{assetId}/schedule`) but are not
+    // ADMIN, so the "Administration" entry below never reaches them. This is
+    // the ONLY path to `MachineSchedules` that is not a typed-in URL; it
+    // grants nothing beyond that one write, and ADMIN gets it here too
+    // rather than only through the admin area.
+    ...(canAdjustSchedule ? [{ label: 'Machine schedules', to: '/schedule' }] : []),
     // `from=menu` lets the Delegations screen point its back link here
     // rather than at the queue (review D-4) — presentation only, the router
     // still matches on pathname alone.
