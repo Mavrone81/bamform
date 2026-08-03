@@ -175,7 +175,7 @@ describe('template-load parser — all 12 real workbooks (I-TL-05..16)', () => {
     );
   });
 
-  it('I-TL-09: doc 4 measurements — 20 rows in the source (TLP §5.1 says 21; discrepancy registered), sections inherited, B-04 corrected per client revision D, the -295 - -305 anomaly escalated as TEXT', () => {
+  it('I-TL-09: doc 4 measurements — 20 rows in the source (TLP §5.1 says 21; discrepancy registered), sections inherited, B-04 loaded verbatim as TEXT (the client correction was withdrawn), the -295 - -305 anomaly escalated as TEXT', () => {
     const asm = doc('CE 95 020 00 01');
     expect(asm.measurements).toHaveLength(20);
     expect(asm.ambiguities.some((a) => a.code === 'N-05' && /21/.test(a.message))).toBe(true);
@@ -185,23 +185,28 @@ describe('template-load parser — all 12 real workbooks (I-TL-05..16)', () => {
     expect(asm.measurements[1].section).toBe('Workholder Calibration');
     expect(asm.measurements[1].description).toBe('Vacuum Check with WCTP + LF');
 
-    // B-04 — the ONLY client-dispositioned correction (slice brief §0:
-    // corrected to 95–105 g by client revision D; never load the inverted
-    // range).
+    // B-04 — the correction was WITHDRAWN 2026-08-03 (owner ruled the signed
+    // records authoritative: every signed ASM Wire Bond specimen, and J66 of
+    // the workbook itself, prints "95 - 28 g"; the corrected "95 - 105 g"
+    // appeared in no source document). With no correction configured, this
+    // high-to-low printed range now goes through the same normal INV-04 path
+    // as every other unparseable spec — loaded verbatim as TEXT, escalated
+    // as N-01, never guessed (PR-TLP-05).
     const b04 = asm.measurements.find((m) =>
       m.description.includes('Bond Force Verification Input Force 100g'),
     );
     expect(b04).toBeDefined();
-    expect(b04!.specType).toBe('RANGE');
-    expect(b04!.lowerLimit).toBe(95);
-    expect(b04!.upperLimit).toBe(105);
-    expect(b04!.specDisplay).toBe('95 - 105 g');
-    expect(b04!.sourceSpecDisplay).toBe('95 - 28 g'); // the defective source text, trimmed, preserved
-    expect(b04!.correction).toContain('B-04');
+    expect(b04!.specType).toBe('TEXT');
+    expect(b04!.lowerLimit).toBeNull();
+    expect(b04!.upperLimit).toBeNull();
+    expect(b04!.specDisplay).toBe('95 - 28 g');
+    expect(b04!.sourceSpecDisplay).toBeUndefined(); // no correction applied — nothing to distinguish from specDisplay
+    expect(b04!.correction).toBeUndefined();
+    expect(asm.ambiguities.some((a) => a.code === 'N-01' && a.cells.includes('J66'))).toBe(true);
 
-    // The OTHER high-to-low printed range (' -295 - -305', no unit) has NO
-    // client disposition — loaded as TEXT verbatim and escalated (N-01),
-    // per PR-TLP-05 (never guess) with the B-04 option (b) mechanism.
+    // The OTHER high-to-low printed range (' -295 - -305', no unit) is
+    // likewise NOT client-dispositioned — loaded as TEXT verbatim and
+    // escalated (N-01), via the identical mechanism as B-04.
     const trackTop = asm.measurements.find((m) =>
       m.description.includes('Track Height Calibration, Top Plate'),
     );
@@ -209,7 +214,7 @@ describe('template-load parser — all 12 real workbooks (I-TL-05..16)', () => {
     expect(trackTop!.specDisplay).toBe('-295 - -305');
     expect(trackTop!.lowerLimit).toBeNull();
     expect(trackTop!.upperLimit).toBeNull();
-    expect(asm.ambiguities.some((a) => a.code === 'N-01')).toBe(true);
+    expect(asm.ambiguities.some((a) => a.code === 'N-01' && a.cells.includes('J61'))).toBe(true);
 
     // Representative parsed specs across the §4.2 forms:
     const byDesc = (s: string) => asm.measurements.find((m) => m.description.includes(s))!;
@@ -441,9 +446,9 @@ describe('template-load parser — all 12 real workbooks (I-TL-05..16)', () => {
     }
   });
 
-  it('I-TL-15: loaded revision codes — doc 4 loads as client revision D (B-04 correction); every other document loads at its printed revision', () => {
+  it('I-TL-15: loaded revision codes — every document, including doc 4, loads at its printed revision (the B-04 correction that once overrode doc 4 to revision D was withdrawn)', () => {
     expect(doc('CE 95 020 00 01').printedRevision).toBe('C');
-    expect(doc('CE 95 020 00 01').loadRevision).toBe('D');
+    expect(doc('CE 95 020 00 01').loadRevision).toBe('C');
     expect(doc('CE 95 010 00 01').printedRevision).toBe('E');
     expect(doc('CE 95 010 00 01').loadRevision).toBe('E');
     expect(doc('CE 95 012 00 01').loadRevision).toBe('0');
