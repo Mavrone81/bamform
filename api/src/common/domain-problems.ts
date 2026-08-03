@@ -153,6 +153,71 @@ export function recordImmutableProblem(): ConflictException {
   });
 }
 
+/**
+ * INV-09 — a write is refused because an already-ARCHIVED record would print
+ * something different as a result.
+ *
+ * ONE type for the whole defect class the owner ruled on, deliberately: a
+ * record's PDF is re-rendered live from current data on every request (nothing
+ * is frozen at archive — slice 23-PDFA is an unbuilt plan), so several
+ * long-lived configuration rows feed what an archived record prints. Currently
+ * raised by `PATCH /asset-documents/{id}` (`machineNumber` -> document title)
+ * and `PATCH /assets/{id}` (`code` -> machine code). A single type lets a
+ * client match the whole class.
+ *
+ * A SEPARATE type from `/errors/record-immutable`, also deliberately. That one
+ * says "the thing you addressed is frozen"; the caller addressed a job. Here
+ * the thing addressed — a machine, or a machine's long-lived document — is NOT
+ * frozen and stays editable in every other respect; what refuses is a
+ * downstream consequence on a different entity the caller never named.
+ * Collapsing the two would tell an engineer their machine is archived, which is
+ * false and unactionable.
+ *
+ * 409, matching every other state-based refusal in this file
+ * (`recordImmutableProblem`, `invalidTransitionProblem`): the request is
+ * well-formed, so it is a conflict with the current state of the record set,
+ * not a validation failure.
+ *
+ * `detail` names the blocking records BY JOB NUMBER and quotes the before/after
+ * of what would print, because the whole point is that the engineer can go and
+ * look: either the value is right and the archived record legitimately depends
+ * on it, or the archived record itself is wrong and needs a void-and-reissue,
+ * which is a different, deliberate, ADMIN-only act.
+ */
+export function archivedRecordDependencyProblem(input: {
+  /** What the caller tried to change, as it reads in a sentence — "the machine number". */
+  subject: string;
+  /** What it would do to the record — "\"…KW13\" would become \"…KW21\"". */
+  change: string;
+  /** JSON pointer(s) of the offending request field(s), for `errors[]`. */
+  pointer: string;
+  blockingJobNumbers: string[];
+}): ConflictException {
+  const { subject, change, pointer, blockingJobNumbers } = input;
+  const count = blockingJobNumbers.length;
+  // Bounded: a long-lived machine or document can accumulate hundreds of
+  // archived records, and an error detail is read by a human, not parsed.
+  const SHOWN = 5;
+  const shown = blockingJobNumbers.slice(0, SHOWN).join(', ');
+  const named = count > SHOWN ? `${shown} and ${count - SHOWN} more` : shown;
+  const s = count === 1 ? '' : 's';
+
+  return new ConflictException({
+    type: '/errors/archived-record-dependency',
+    title: 'An archived record depends on this value',
+    status: 409,
+    detail:
+      `Changing ${subject} would alter what ${count} archived record${s} print${count === 1 ? 's' : ''}: ` +
+      `${change}. An archived record is signed evidence, so its printed content cannot be ` +
+      `changed here. Affected record${s}: ${named}.`,
+    errors: blockingJobNumbers.slice(0, SHOWN).map((jobNumber) => ({
+      pointer,
+      code: 'ARCHIVED_RECORD_DEPENDENCY',
+      message: `Archived record ${jobNumber} prints ${subject}`,
+    })),
+  });
+}
+
 /** PR-API-18/PR-064: the job's `draftVersion` no longer matches the client's `If-Match`. */
 export function draftConflictProblem(currentDraftVersion: number): ConflictException {
   return new ConflictException({

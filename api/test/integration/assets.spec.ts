@@ -4,8 +4,11 @@ import request from 'supertest';
 import { adminPool, closeAll, resetDatabase } from './helpers/db';
 import {
   createArea,
+  createAsset,
   createAssetType,
   createFormTemplate,
+  createJob,
+  createTemplateRevision,
   createUser,
   getSeededApprovalRouteId,
   grantRole,
@@ -421,4 +424,163 @@ describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', ()
       .expect(201);
     return res.body.id as string;
   }
+
+  /**
+   * INV-09 — an archived record's PRINTED machine identity is immutable.
+   *
+   * `asset.code` is read live on every render and printed as the machine code
+   * in the PDF header and footer (and as `assetCode` in an export manifest) —
+   * nothing is frozen at archive. Renaming a machine therefore rewrote every
+   * archived record for it at once, and `/integrity` still said `intact: true`
+   * because the canonical record binds `job.assetId`, not the asset's
+   * descriptive columns.
+   *
+   * The ALLOW cases carry the weight here: `code` is the ONLY column of the row
+   * that reaches a rendered artefact, so describing, re-siting or retiring a
+   * machine must never be blocked.
+   */
+  describe('an archived record’s printed machine identity is immutable (INV-09)', () => {
+    async function machineWithArchivedRecord(): Promise<{ assetId: string; token: string }> {
+      const token = await engineerToken();
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+      const assetTypeId = await createAssetType(
+        formTemplateId,
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+      );
+      const assetId = await createAsset(assetTypeId, `AW-${randomUUID()}`);
+      const authorId = await createUser('revision-author');
+      const revisionId = await createTemplateRevision(formTemplateId, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+      });
+      await createJob({
+        assetId,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: `ARCH-${randomUUID().slice(0, 8)}`,
+        status: 'archived',
+        archivedAt: new Date(),
+      });
+      return { assetId, token };
+    }
+
+    async function storedAsset(assetId: string) {
+      const row = await adminPool.query(`SELECT code, description FROM "asset" WHERE id = $1`, [
+        assetId,
+      ]);
+      return row.rows[0] as { code: string; description: string | null };
+    }
+
+    it('refuses a code change, with the specific problem type', async () => {
+      const { assetId, token } = await machineWithArchivedRecord();
+      const before = await storedAsset(assetId);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${assetId}`)
+        .set(...authHeader(token))
+        .send({ code: 'AW99' })
+        .expect(409);
+
+      expect(res.body).toMatchObject({
+        type: '/errors/archived-record-dependency',
+        title: 'An archived record depends on this value',
+        status: 409,
+      });
+      expect(res.body.detail).toContain('the machine code');
+      expect(res.body.detail).toContain(before.code);
+      expect(res.body.detail).toContain('AW99');
+      expect(res.body.errors[0]).toMatchObject({
+        pointer: '/code',
+        code: 'ARCHIVED_RECORD_DEPENDENCY',
+      });
+
+      // And it actually refused.
+      expect((await storedAsset(assetId)).code).toBe(before.code);
+    });
+
+    it('ALLOWS a description change — description is not rendered on the record', async () => {
+      // Measured, not assumed: `pdf-html-template.ts` emits exactly one
+      // asset-derived value, `esc(input.machineCode)`. `assetDescription` is
+      // assembled into `PdfRecordInput` and then never printed, and it is not
+      // in the export manifest either. Refusing here would 409 an engineer
+      // fixing a typo with a message claiming archived records would print
+      // differently — which would be false.
+      const { assetId, token } = await machineWithArchivedRecord();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${assetId}`)
+        .set(...authHeader(token))
+        .send({ description: 'Rewritten description' })
+        .expect(200);
+
+      expect((await storedAsset(assetId)).description).toBe('Rewritten description');
+    });
+
+    it('ALLOWS the same edit on a machine with no archived record', async () => {
+      // Someone fixing a typo on a new machine must never be blocked.
+      const assetTypeId = await makeAssetType();
+      const token = await engineerToken();
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/assets')
+        .set(...authHeader(token))
+        .send({ code: `AW-${randomUUID()}`, assetTypeId, scheduleAnchorDate: '2026-01-01' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${created.body.id}`)
+        .set(...authHeader(token))
+        .send({ code: 'AW42', description: 'Corrected' })
+        .expect(200);
+      expect(await storedAsset(created.body.id)).toMatchObject({
+        code: 'AW42',
+        description: 'Corrected',
+      });
+    });
+
+    it('ALLOWS editing fields that do not print, even with an archived record', async () => {
+      // `description`, `manufacturer`, `model`, `locationDetail`, `status` and
+      // `active` never reach the PDF, so describing, re-siting or retiring a
+      // machine stays ordinary work.
+      const { assetId, token } = await machineWithArchivedRecord();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${assetId}`)
+        .set(...authHeader(token))
+        .send({
+          description: 'Redescribed',
+          manufacturer: 'ASM',
+          model: 'Eagle60',
+          locationDetail: 'Bay 4',
+          status: 'UNDER_REPAIR',
+          active: false,
+        })
+        .expect(200);
+    });
+
+    it('ALLOWS a no-op re-send of the same printed value', async () => {
+      const { assetId, token } = await machineWithArchivedRecord();
+      const before = await storedAsset(assetId);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${assetId}`)
+        .set(...authHeader(token))
+        .send({ code: before.code })
+        .expect(200);
+    });
+
+    it('ALLOWS the change when the archived record belongs to ANOTHER machine', async () => {
+      const { token } = await machineWithArchivedRecord();
+      const assetTypeId = await makeAssetType();
+      const otherId = await createAsset(assetTypeId, `AW-${randomUUID()}`);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/assets/${otherId}`)
+        .set(...authHeader(token))
+        .send({ code: 'AW77' })
+        .expect(200);
+      expect((await storedAsset(otherId)).code).toBe('AW77');
+    });
+  });
 });

@@ -325,6 +325,29 @@ export class UsersService {
    * existing soft-remove convention. Produces a separate
    * `permission_change` audit event (API_SPECIFICATION.md §10.9) distinct
    * from the `update` event any other field change produces.
+   *
+   * ##### INV-09: why `fullName` is NOT guarded here #####
+   * Changing `fullName` used to rewrite the signatory printed on every archived
+   * record that person had ever signed, because
+   * `pdf-record-assembly.service.ts` JOINED the name from `app_user` at render
+   * time and a record's PDF is re-rendered live from current data.
+   * `/integrity` could not see it — the canonical record binds `actor_id`, not
+   * the name.
+   *
+   * That is fixed at the OTHER end, deliberately: the name is now snapshotted
+   * onto `approval_step.actor_name_ct` in the signing transaction
+   * (`ApprovalRepository#snapshotSignatoryNames`), so an archived record keeps
+   * the name that was true when it was signed and this endpoint can no longer
+   * reach it.
+   *
+   * A guard here would have been the WRONG fix. A person's name legitimately
+   * changes — marriage, deed poll, or simply a typo caught after their first
+   * signature — and refusing the edit would have left the system permanently
+   * unable to represent the correct name of anyone who had ever signed
+   * anything, with no way out through the API. Snapshotting protects the record
+   * AND keeps the person's own row editable; a guard could only ever have done
+   * the first. `users.spec.ts` proves a rename leaves an archived record's
+   * printed signatory untouched.
    */
   async update(id: string, dto: UserUpdate, actor: ActorMeta): Promise<User> {
     const existing = await this.findOrThrow(id);

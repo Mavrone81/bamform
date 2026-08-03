@@ -377,8 +377,26 @@ any number of machines. Both directions were previously forbidden.
 NULL, the title renders with its blank intact, exactly as the paper form reads before
 someone writes on it. Supplied for a title with no blank, it is stored and simply has
 nothing to substitute into. Substitution happens **at render, never stored resolved**, so a
-revision that changes the title stays correct; slice 23-PDFA freezes the rendered result at
-archive, so an archived record keeps the title it was signed under.
+revision that changes the title stays correct.
+
+> **An archived record's title is not frozen.** This section previously claimed "slice
+> 23-PDFA freezes the rendered result at archive, so an archived record keeps the title it
+> was signed under". That was never true: slice 23-PDFA is an **unbuilt plan**
+> (`docs/superpowers/plans/2026-07-29-slice-23-pdfa.md`), and a record's PDF is
+> **re-rendered live from current data on every request** (`pdf-render.service.ts` →
+> `pdf-record-assembly.service.ts`). Editing `machine_number` therefore rewrites the title
+> printed on records signed months earlier, and `GET /records/{id}/integrity` does **not**
+> detect it — neither the machine number nor the resolved title is part of the canonical
+> signed record (`canonical-job-record.ts`).
+>
+> Immutability rests on write-side guards instead. `PATCH /asset-documents/{id}` refuses a
+> `machine_number` change when any **ARCHIVED** job on that document would render a
+> different title (`/errors/archived-record-dependency`, 409). The document is *not*
+> frozen by the mere existence of an archived record: a change is refused only when it
+> would actually alter printed output, so a title with no fillable run, a record carrying
+> its own captured number, and a document with no archived records yet all stay editable.
+> **That guard covers that one endpoint** — it is not a general property of archived
+> records, and every other write path feeding the PDF assembly needs its own.
 
 **Deactivation, never deletion.** INV-16 forbids DELETE on record tables, and a document
 that has generated jobs must remain resolvable. `active = false` stops future job
@@ -406,7 +424,10 @@ The `title` may carry a **fillable run** — two or more consecutive underscores
 "…Record KW___" — into which `asset_document.machine_number` is substituted **at render**.
 8 of the 12 controlled documents carry one; `EP01` and `PM01` have the number printed
 already, and two have no machine designation at all. Never stored resolved, so a revision
-that changes the title stays correct; slice 23-PDFA freezes the rendered result at archive.
+that changes the title stays correct. The rendered result is **not** frozen at archive —
+see §6.8a's note: slice 23-PDFA is unbuilt, the PDF re-renders live from current data, and
+what protects an archived record's title is the write-side guard on
+`PATCH /asset-documents/{id}`.
 
 ---
 
@@ -783,7 +804,7 @@ the archive (DP-5).
 | INV-06 | Asset code unique | `UNIQUE (code)` | UR-003, defect B-09 |
 | INV-07 | Document number unique | `UNIQUE (document_number)` | UR-009 |
 | INV-08 | One result per item per job | `UNIQUE (job_id, template_item_id)` | Data integrity |
-| INV-09 | Archived jobs immutable | Trigger raising an exception on `UPDATE` where `OLD.status='archived'` | UR-055, PR-041 |
+| INV-09 | Archived jobs immutable | Trigger raising an exception on `UPDATE` where `OLD.status='archived'` — **see the scope warning below** | UR-055, PR-041 |
 | INV-10 | Audit chain unbroken | `hash` computed by trigger from `prev_hash`; `UPDATE`/`DELETE` revoked | UR-077, PR-097 |
 | INV-11 | Approval steps append-only | `UPDATE`/`DELETE` revoked from application role | UR-048, PR-099 |
 | INV-12 | Void requires a reason | `CHECK (status <> 'voided' OR length(void_reason) >= 10)` | UR-054, PR-046 |
@@ -791,6 +812,44 @@ the archive (DP-5).
 | INV-14 | Delegation window valid | `CHECK (valid_to > valid_from)` | UR-052 |
 | INV-15 | Blind index unique per email | `UNIQUE (email_bidx)` | PR-108 |
 | INV-16 | No hard delete anywhere | `DELETE` revoked from application role on all record tables | DP-2, UR-054, UR-075 |
+
+### INV-09 scope warning — the trigger protects `job`, and nothing else
+
+**`prevent_archived_job_update()` / `job_archived_immutable_trg` is attached to the `job`
+table only.** It says nothing about the other tables an archived record's *printed content*
+is assembled from, and there is no equivalent trigger on any of them. This matters more
+than it looks, because **a record's PDF is re-rendered live from current data on every
+request** — slice 23-PDFA, which several comments once claimed freezes the artefact at
+archive, is an unbuilt plan. An archived job row can therefore be perfectly immutable while
+the document it prints changes underneath it.
+
+Everything below feeds `pdf-record-assembly.service.ts`. Only the first column is covered by
+the trigger:
+
+| Printed from | Table | Protected by |
+|---|---|---|
+| checklist / measurement results, parts, attachments, status, due date | `job`, `item_result`, … | INV-09 trigger + `assertJobWritable` |
+| document title's machine number | `asset_document.machine_number` | **application guard only** — `PATCH /asset-documents/{id}` (`/errors/archived-record-dependency`) |
+| machine code (PDF header + footer, and the `assetCode` column of an export manifest) | `asset.code` | **application guard only** — `PATCH /assets/{id}` (same problem type) |
+| signatory names | `app_user.full_name_ct` | **snapshotted at signing** onto `approval_step.actor_name_ct` / `on_behalf_of_name_ct` — but only for steps signed AFTER migration `20260801000000`. Earlier rows, and any step whose snapshot failed soft, have NULL there and still resolve the name live, so a later rename *does* reach those. No backfill is possible: today's `app_user` value is not evidence of what was true at signing |
+| stage caption, actor role | `approval_step.stage_label`, `.actor_role_code` | snapshotted at signing |
+| document number, template title, revision code, standing content, checklist instructions, measurement specs | `form_template`, `template_revision`, `template_item`, `template_measurement` | **nothing explicit — safe only incidentally** |
+
+That last row is the one to read twice. Those tables are currently unreachable after a job
+is generated *only* because the authoring workflow refuses to edit anything but a `draft`
+revision, and a job binds to a `current` one which can never return to `draft`. **That is a
+side effect of the authoring rules, not an archived-record guard.** The moment anyone adds
+an edit path for an approved or superseded revision — or any write to `form_template.title`
+or `.document_number` — it will silently rewrite already-signed records, and
+`GET /records/{id}/integrity` will keep reporting `intact: true`, because the canonical
+signed record binds `template_revision_id` and `form_template_id` but none of their
+descriptive columns (`canonical-job-record.ts`).
+
+**If you are adding such a path, add a guard with it**, following
+`AssetDocumentsService#assertNoArchivedRecordDependsOnMachineNumber` or
+`AssetsService#assertNoArchivedRecordDependsOnPrintedFields`: refuse only when an ARCHIVED
+job would actually render differently, comparing rendered output rather than freezing the
+row outright.
 
 ## 7.1 Database roles and grants
 

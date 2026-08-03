@@ -511,7 +511,26 @@ export interface paths {
     head?: never;
     /**
      * Update an asset. Deactivation only, never deletion.
-     * @description ENGINEER or ADMIN. `status`/`active` are the only removal mechanism (deactivation).
+     * @description ENGINEER or ADMIN. `status`/`active` are the only removal mechanism
+     *     (deactivation).
+     *
+     *     `code` is PRINTED on every record raised against this machine — as the
+     *     machine code in the PDF header and footer, and in the `assetCode` column
+     *     of a bulk export's manifest — and a record's PDF is re-rendered live
+     *     from current data on every request, so nothing is frozen at archive.
+     *     Changing `code` is therefore REFUSED with
+     *     `/errors/archived-record-dependency` (409) when the machine has any
+     *     ARCHIVED record.
+     *
+     *     `code` is the ONLY field this applies to. `description`, `manufacturer`,
+     *     `model`, `areaId`, `locationDetail`, `status` and `active` do not appear
+     *     on the rendered record and are never refused, so describing, re-siting
+     *     or retiring a machine always works. A machine with no archived records
+     *     is freely editable, and re-sending the same `code` is never refused.
+     *
+     *     Note: once a machine has an archived record, an auto-generated
+     *     `codeProvisional` code can no longer be confirmed, because confirming it
+     *     requires a `code` change.
      */
     patch: operations['updateAsset'];
     trace?: never;
@@ -626,10 +645,21 @@ export interface paths {
     head?: never;
     /**
      * Change a tagged document's form number, or deactivate it
-     * @description ADMIN only. There is deliberately NO DELETE: INV-16 forbids DELETE on
-     *     record tables, and a document that has already generated jobs must stay
-     *     resolvable. `active: false` stops future job generation and leaves the
-     *     history intact.
+     * @description ENGINEER or ADMIN. There is deliberately NO DELETE: INV-16 forbids
+     *     DELETE on record tables, and a document that has already generated jobs
+     *     must stay resolvable. `active: false` stops future job generation and
+     *     leaves the history intact.
+     *
+     *     `machineNumber` is substituted into the template title at RENDER, and a
+     *     record's PDF is re-rendered live from current data on every request —
+     *     nothing is frozen at archive. A change is therefore REFUSED with
+     *     `/errors/archived-record-dependency` (409) when any ARCHIVED job
+     *     on this document would print a different title as a result. The
+     *     document is not frozen by the existence of archived records: the change
+     *     is allowed when the title carries no fillable run, when the archived
+     *     records carry their own captured number, and when no archived record
+     *     exists. Toggling `active` is never refused — it changes nothing any
+     *     record prints.
      */
     patch: operations['updateAssetDocument'];
     trace?: never;
@@ -3727,6 +3757,7 @@ export interface operations {
         };
       };
       404: components['responses']['Problem'];
+      409: components['responses']['Problem'];
       422: components['responses']['Problem'];
     };
   };
@@ -3893,6 +3924,7 @@ export interface operations {
       };
       403: components['responses']['Problem'];
       404: components['responses']['Problem'];
+      409: components['responses']['Problem'];
       422: components['responses']['Problem'];
     };
   };

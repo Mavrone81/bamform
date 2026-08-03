@@ -90,3 +90,150 @@ describe('PdfRecordAssemblyService#buildChecklist', () => {
     expect(checklist[0].inScope).toBe(true);
   });
 });
+
+/**
+ * INV-09 — the signatory name printed on a record comes from the SNAPSHOT
+ * taken at signing (`approval_step.actor_name_ct`), not from a live
+ * `app_user` join, so `PATCH /users/{id}` can no longer rewrite who an
+ * archived record says signed it.
+ *
+ * `buildSignatures` is exercised through its private handle for the same
+ * reason `buildChecklist` is above: the decision under test is a pure
+ * preference between two already-fetched values. `prisma.appUser.findMany`
+ * (the fallback path) and `fieldEncryption` are stubbed so the test states
+ * exactly which source won.
+ */
+type Signature = { actorName: string; onBehalfOfName: string | null };
+
+function buildSignatures(
+  job: unknown,
+  opts: { liveNames?: Record<string, string>; snapshots?: Record<string, string> } = {},
+): Promise<Signature[]> {
+  const liveNames = opts.liveNames ?? {};
+  const snapshots = opts.snapshots ?? {};
+
+  const prisma = {
+    appUser: {
+      findMany: async () =>
+        Object.keys(liveNames).map((id) => ({ id, fullNameCt: Buffer.from(id), dekVersion: 1 })),
+    },
+  };
+  const fieldEncryption = {
+    // Stands in for BOTH decrypt paths. The AAD column tells them apart:
+    // `full_name_ct` is the live `app_user` read, anything else is a step
+    // snapshot. A key absent from `snapshots` throws, standing in for "no
+    // snapshot readable" so the fallback is genuinely exercised.
+    decrypt: (stored: Uint8Array, _v: number, ctx: { column: string; rowId: string }) => {
+      if (ctx.column === 'full_name_ct') {
+        const name = liveNames[Buffer.from(stored).toString()];
+        if (name === undefined) throw new Error('no live name');
+        return name;
+      }
+      const name = snapshots[`${ctx.rowId}:${ctx.column}`];
+      if (name === undefined) throw new Error('no snapshot');
+      return name;
+    },
+  };
+
+  const service = new PdfRecordAssemblyService(
+    prisma as never,
+    fieldEncryption as never,
+  ) as unknown as { buildSignatures: (job: JobFullRow) => Promise<Signature[]> };
+  return service.buildSignatures(job as JobFullRow);
+}
+
+const STEP = {
+  id: 'step-1',
+  stageOrdinal: 1,
+  stageLabel: 'Verified By',
+  action: 'verified',
+  actorId: 'user-1',
+  onBehalfOfId: null,
+  actorRoleCode: 'ENGINEER',
+  actedAt: new Date('2026-01-01T00:00:00Z'),
+  reason: null,
+  drawnSignatureCt: null,
+  drawnSignatureDekVersion: null,
+  actorNameCt: null,
+  onBehalfOfNameCt: null,
+  signatoryNameDekVersion: null,
+};
+
+describe('PdfRecordAssemblyService#buildSignatures — signatory name (INV-09)', () => {
+  it('prints the SNAPSHOT, not the current app_user name', async () => {
+    // The whole point: the user has since been renamed to "Bob Jones", and the
+    // archived record must still say who actually signed it.
+    const job = {
+      approvalSteps: [
+        {
+          ...STEP,
+          actorNameCt: Buffer.from('ct'),
+          signatoryNameDekVersion: 1,
+        },
+      ],
+    };
+
+    const [signature] = await buildSignatures(job, {
+      liveNames: { 'user-1': 'Bob Jones' },
+      snapshots: { 'step-1:actor_name_ct': 'Alice Smith' },
+    });
+
+    expect(signature.actorName).toBe('Alice Smith');
+  });
+
+  it('falls back to the live name for a step signed before the snapshot existed', async () => {
+    // Not dead code: every approval_step written before the column existed has
+    // a NULL snapshot and must keep rendering exactly as it did before.
+    const job = { approvalSteps: [{ ...STEP }] };
+
+    const [signature] = await buildSignatures(job, { liveNames: { 'user-1': 'Alice Smith' } });
+
+    expect(signature.actorName).toBe('Alice Smith');
+  });
+
+  it('falls back to the live name when the snapshot cannot be decrypted', async () => {
+    // A snapshot that will not decrypt must never make an archived record
+    // unprintable — an auditor still has to be able to produce it.
+    const job = {
+      approvalSteps: [{ ...STEP, actorNameCt: Buffer.from('ct'), signatoryNameDekVersion: 1 }],
+    };
+
+    const [signature] = await buildSignatures(job, {
+      liveNames: { 'user-1': 'Alice Smith' },
+      snapshots: {}, // decrypt throws
+    });
+
+    expect(signature.actorName).toBe('Alice Smith');
+  });
+
+  it('falls back to the raw actor id when neither a snapshot nor a live name resolves', async () => {
+    const job = { approvalSteps: [{ ...STEP }] };
+    const [signature] = await buildSignatures(job, {});
+    expect(signature.actorName).toBe('user-1');
+  });
+
+  it('prefers the snapshot for the on-behalf-of signatory too', async () => {
+    const job = {
+      approvalSteps: [
+        {
+          ...STEP,
+          onBehalfOfId: 'user-2',
+          actorNameCt: Buffer.from('ct'),
+          onBehalfOfNameCt: Buffer.from('ct2'),
+          signatoryNameDekVersion: 1,
+        },
+      ],
+    };
+
+    const [signature] = await buildSignatures(job, {
+      liveNames: { 'user-1': 'Renamed A', 'user-2': 'Renamed B' },
+      snapshots: {
+        'step-1:actor_name_ct': 'Alice Smith',
+        'step-1:on_behalf_of_name_ct': 'Carol White',
+      },
+    });
+
+    expect(signature.actorName).toBe('Alice Smith');
+    expect(signature.onBehalfOfName).toBe('Carol White');
+  });
+});

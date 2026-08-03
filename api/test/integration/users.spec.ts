@@ -2,7 +2,10 @@ import type { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { decodeIdentityField } from '../../src/auth/crypto/identity-codec';
+import { ApprovalRepository } from '../../src/jobs/approval.repository';
+import { PrismaService } from '../../src/prisma/prisma.service';
 import { adminPool, closeAll, resetDatabase } from './helpers/db';
+import { createJobFixture } from './helpers/fixtures';
 import { createLoginableUser, loadFieldEncryptionService } from './helpers/auth-fixtures';
 import { authHeader, mintAccessToken } from './helpers/test-auth';
 import { createTestApp } from './helpers/app';
@@ -597,5 +600,106 @@ describe('Users/roles administration — /users, /roles', () => {
         'TEAM_LEADER',
       ].sort(),
     );
+  });
+  /**
+   * INV-09 — renaming a person must NOT rewrite the signatory printed on
+   * records they have already signed.
+   *
+   * The name used to be JOINED from `app_user.full_name_ct` at render time,
+   * and a record's PDF is re-rendered live from current data on every request,
+   * so a rename retroactively changed who every archived record said had
+   * signed it — undetectably, since the canonical signed record binds
+   * `actor_id`, not the name.
+   *
+   * The fix is a SNAPSHOT taken in the signing transaction, not a guard on
+   * this endpoint. A guard would have been wrong: a person's name legitimately
+   * changes, and refusing the edit would leave the system permanently unable
+   * to represent the correct name of anyone who had ever signed anything.
+   * These tests pin both halves — the rename still succeeds, and the record
+   * does not follow it.
+   */
+  describe('renaming a signatory leaves archived records untouched (INV-09)', () => {
+    async function signedStep(fullName: string) {
+      const { jobId } = await createJobFixture(`JOB-${randomUUID().slice(0, 8)}`, 'archived', {
+        archivedAt: new Date(),
+      });
+      const { userId } = await createLoginableUser({
+        email: `signatory-${randomUUID()}@example.com`,
+        password: 'Correct horse battery staple 1',
+        fullName,
+      });
+
+      // The REAL production write path — `ApprovalRepository` resolved from the
+      // running app, with real field encryption against the real database. A
+      // hand-rolled INSERT here would prove nothing about the snapshot.
+      const stepId = randomUUID();
+      await app.get(ApprovalRepository).createApprovalStep(app.get(PrismaService), {
+        id: stepId,
+        jobId,
+        stageOrdinal: 1,
+        stageLabel: 'Verified By',
+        action: 'verified',
+        actorId: userId,
+        onBehalfOfId: null,
+        actorRoleCode: 'ENGINEER',
+        reason: null,
+        actedAt: new Date(),
+        contentHash: Buffer.alloc(32, 1),
+        signature: Buffer.alloc(64, 2),
+        signingKeyId: 'test-key',
+        stepUpVerifiedAt: null,
+        drawnSignatureCt: null,
+        drawnSignatureDekVersion: null,
+      });
+      return { stepId, userId };
+    }
+
+    async function snapshottedName(stepId: string): Promise<string | null> {
+      const row = await adminPool.query(
+        `SELECT actor_name_ct, signatory_name_dek_version FROM "approval_step" WHERE id = $1`,
+        [stepId],
+      );
+      const { actor_name_ct: ct, signatory_name_dek_version: v } = row.rows[0];
+      if (!ct || v === null) return null;
+      return loadFieldEncryptionService().decrypt(ct, v, {
+        table: 'approval_step',
+        column: 'actor_name_ct',
+        rowId: stepId,
+      });
+    }
+
+    it('captures the signatory name at signing time', async () => {
+      const { stepId } = await signedStep('Alice Smith');
+      expect(await snapshottedName(stepId)).toBe('Alice Smith');
+    });
+
+    it('ALLOWS the rename, and the archived record still names the original signatory', async () => {
+      const { stepId, userId } = await signedStep('Alice Smith');
+      const token = await adminToken();
+
+      // Not refused — a legitimate name change must remain possible.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/users/${userId}`)
+        .set(...authHeader(token))
+        .send({ fullName: 'Alice Jones' })
+        .expect(200);
+
+      // The user really was renamed...
+      const user = await adminPool.query(
+        `SELECT full_name_ct, dek_version FROM "app_user" WHERE id = $1`,
+        [userId],
+      );
+      expect(
+        decodeIdentityField(
+          user.rows[0].full_name_ct,
+          user.rows[0].dek_version,
+          { column: 'full_name_ct', rowId: userId },
+          loadFieldEncryptionService(),
+        ),
+      ).toBe('Alice Jones');
+
+      // ...and the signed record did NOT follow. This is the whole defect.
+      expect(await snapshottedName(stepId)).toBe('Alice Smith');
+    });
   });
 });

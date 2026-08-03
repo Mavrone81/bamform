@@ -1,0 +1,64 @@
+-- BamForm — INV-09, signatory-name snapshot. Forward-only, additive DDL.
+--
+-- Reversal:
+--   ALTER TABLE "approval_step"
+--     DROP COLUMN "actor_name_ct",
+--     DROP COLUMN "on_behalf_of_name_ct",
+--     DROP COLUMN "signatory_name_dek_version";
+--   (Safe for the schema and for `/integrity` — these columns are not part of
+--   the canonical signed record, so no signature is invalidated. It LOSES every
+--   snapshot taken since deployment: those records revert to printing the
+--   signatory's CURRENT name, reopening the defect described below. Renderers
+--   already fall back to the live `app_user` join when the column is NULL, so
+--   dropping it degrades gracefully rather than breaking a read.)
+--
+-- No audit_event row: this migration adds columns and changes no data. The
+-- UR-076 / DBD §10.1 rule is that migrations which TOUCH RECORDS write one;
+-- asserting a record change that did not happen would be worse than silence.
+--
+-- DATA PROTECTION — a new property, deliberately accepted: a person's name is
+-- now DUPLICATED out of `app_user` into `approval_step`, which has `UPDATE` and
+-- `DELETE` revoked from `bamform_app` (INV-11/INV-16, DBD §7.1). A snapshotted
+-- name therefore cannot be corrected, rectified or erased through the
+-- application — only by a migration. That is the intended trade (it is exactly
+-- what makes an archived record's signatory immutable), but it means a
+-- rectification or erasure request touching a name someone has signed under is
+-- a DDL operation, not an API call. The value is still per-row AAD-bound
+-- ciphertext readable only with the DEK, so key destruction remains a
+-- crypto-erasure route.
+--
+-- ============================================================ Why
+--
+-- `pdf-record-assembly.service.ts#buildSignatures` JOINED the name from
+-- `app_user.full_name_ct` at render time, and a record's PDF is re-rendered
+-- live from current data on every request (nothing is frozen at archive —
+-- slice 23-PDFA is an unbuilt plan). So `PATCH /users/{id}` retroactively
+-- rewrote the signatory printed on every archived record that person had ever
+-- signed, and `GET /records/{id}/integrity` still reported `intact: true`,
+-- because the canonical signed record binds `actor_id`, not the name.
+--
+-- This mirrors 20260729010000_approval_step_stage_label_snapshot exactly, one
+-- level down: that froze the stage CAPTION so an administrator relabelling a
+-- stage could not rewrite an archived record; this freezes the PERSON'S NAME
+-- for the same reason. Encrypted, because it is personal data (PR-106/107) —
+-- the plaintext must not become readable here when it is not readable in
+-- `app_user`. AAD binds each value to `('approval_step', <column>, id)`, so a
+-- ciphertext moved between rows will not decrypt.
+--
+-- Deliberately NOT added to the canonical signed record
+-- (`CanonicalApprovalStepInput`): that would change the signed content's key
+-- set and invalidate every stored signature — an owner-visible migration of
+-- its own, as `canonical-job-record.ts` states. This is a presentation
+-- snapshot, exactly like `actor_role_code` and `stage_label` beside it.
+--
+-- No backfill. Existing rows stay NULL and keep rendering via the live lookup
+-- (`buildSignatures` falls back), so behaviour for already-archived records is
+-- byte-identical to before this migration. A backfill would be WRONG: the
+-- current `app_user.full_name_ct` is not evidence of what was true at signing.
+-- The corollary, and the limit of this fix: it protects records signed AFTER it
+-- deploys. Every step written before it still resolves its name live, and a
+-- later rename still reaches those.
+ALTER TABLE "approval_step"
+  ADD COLUMN "actor_name_ct" bytea,
+  ADD COLUMN "on_behalf_of_name_ct" bytea,
+  ADD COLUMN "signatory_name_dek_version" smallint;

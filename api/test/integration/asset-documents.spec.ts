@@ -7,6 +7,8 @@ import {
   createAsset,
   createAssetDocument,
   createAssetType,
+  createJob,
+  createTemplateRevision,
   createUser,
   getSeededApprovalRouteId,
   grantRole,
@@ -370,6 +372,286 @@ describe('Asset documents — GET/POST /assets/{assetId}/documents, PATCH /asset
         docId,
       ]);
       expect(row.rows[0].active).toBe(true);
+    });
+  });
+
+  /**
+   * INV-09 — an archived record's PRINTED TITLE cannot be rewritten through
+   * this endpoint.
+   *
+   * The defect these pin: `asset_document.machine_number` is substituted into
+   * the template title at RENDER (`resolveTemplateTitle`), and a record's PDF
+   * is re-rendered live from current data on every request — slice 23-PDFA,
+   * which several comments claimed freezes the artefact at archive, is an
+   * unbuilt plan. So this one field rewrote the title on records signed months
+   * earlier, and `GET /records/{id}/integrity` still reported `intact: true`,
+   * because neither the machine number nor the resolved title is part of the
+   * canonical signed record.
+   *
+   * The ALLOW cases matter as much as the refusal: a machine's document is
+   * long-lived, and freezing it the moment one record archives would block the
+   * ordinary correction of a typo.
+   */
+  describe('an archived record’s printed title is immutable (INV-09)', () => {
+    /**
+     * A machine carrying one document, plus `archivedJobNumbers.length`
+     * ARCHIVED records raised against that document.
+     */
+    async function machineWithArchivedRecords(
+      title: string,
+      machineNumber: string | null,
+      archivedJobNumbers: string[] = ['ARCH-0001'],
+    ) {
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const assetTypeId = await createAssetType(
+        await createTitledTemplate('Unused family template'),
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+      );
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`, {
+        skipDefaultDocument: true,
+      });
+      const templateId = await createTitledTemplate(title);
+      const docId = await createAssetDocument(assetId, templateId, { machineNumber });
+      const authorId = await createUser('revision-author');
+      const revisionId = await createTemplateRevision(templateId, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+      });
+      for (const [index, jobNumber] of archivedJobNumbers.entries()) {
+        await createJob({
+          assetId,
+          assetDocumentId: docId,
+          templateRevisionId: revisionId,
+          approvalRouteId,
+          jobNumber,
+          status: 'archived',
+          archivedAt: new Date(),
+          // Distinct due dates: `job_asset_document_frequency_scope_due_on_scheduled_key`
+          // is unique on (asset_document_id, frequency_scope, due_on) for
+          // non-voided scheduled jobs, so two archived records on one document
+          // are two different months' work, as they would be in reality.
+          dueOn: `2026-0${index + 1}-15`,
+        });
+      }
+      return { assetId, templateId, docId, revisionId, approvalRouteId };
+    }
+
+    async function storedMachineNumber(docId: string): Promise<string | null> {
+      const row = await adminPool.query(
+        `SELECT machine_number FROM "asset_document" WHERE id = $1`,
+        [docId],
+      );
+      return row.rows[0].machine_number as string | null;
+    }
+
+    it('refuses a machineNumber change an archived record would print differently', async () => {
+      const { docId } = await machineWithArchivedRecords(
+        'KNS Wire Bond Preventive Maintenance Record KW___',
+        '13',
+      );
+      const t = await tokens();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '21' })
+        .expect(409);
+
+      // The SPECIFIC problem type, not a generic 4xx: an engineer hitting this
+      // has to be able to tell it apart from a validation failure or a
+      // "your document is archived" message, which would be false.
+      expect(res.body).toMatchObject({
+        type: '/errors/archived-record-dependency',
+        title: 'An archived record depends on this value',
+        status: 409,
+      });
+      // The message names WHAT is blocking and WHY — the record, and both titles.
+      expect(res.body.detail).toContain('ARCH-0001');
+      expect(res.body.detail).toContain('KNS Wire Bond Preventive Maintenance Record KW13');
+      expect(res.body.detail).toContain('KNS Wire Bond Preventive Maintenance Record KW21');
+      expect(res.body.errors).toContainEqual(
+        expect.objectContaining({
+          pointer: '/machineNumber',
+          code: 'ARCHIVED_RECORD_DEPENDENCY',
+        }),
+      );
+
+      // And it actually refused — the archived record still prints KW13.
+      expect(await storedMachineNumber(docId)).toBe('13');
+    });
+
+    it('refuses for an ENGINEER too — the endpoint is open to ENGINEER, not just ADMIN', async () => {
+      const { docId } = await machineWithArchivedRecords(
+        'BESI Die Attach Preventive Maintenance Record ED____',
+        '02',
+      );
+      const t = await tokens();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.engineer))
+        .send({ machineNumber: '03' })
+        .expect(409);
+
+      expect(res.body.type).toBe('/errors/archived-record-dependency');
+      expect(await storedMachineNumber(docId)).toBe('02');
+    });
+
+    it('refuses filling a blank an archived record printed empty', async () => {
+      const { docId } = await machineWithArchivedRecords(
+        'MB Encapsulation Preventive Maintenance Record MB_____',
+        null,
+      );
+      const t = await tokens();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '07' })
+        .expect(409);
+      expect(await storedMachineNumber(docId)).toBeNull();
+    });
+
+    it('names every blocking record, not just the first', async () => {
+      const { docId } = await machineWithArchivedRecords(
+        'KNS Wire Bond Preventive Maintenance Record KW___',
+        '13',
+        ['ARCH-0001', 'ARCH-0002'],
+      );
+      const t = await tokens();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '21' })
+        .expect(409);
+
+      expect(res.body.detail).toContain('ARCH-0001');
+      expect(res.body.detail).toContain('ARCH-0002');
+    });
+
+    // ---- the ALLOW cases: the document is NOT frozen ----
+
+    it('ALLOWS the change when the document has no archived record yet', async () => {
+      // Correcting a typo on a document nothing has been signed against is
+      // ordinary work. A blunter "any archived record anywhere" rule would
+      // have broken it.
+      const assetId = await makeMachine();
+      const templateId = await createTitledTemplate(
+        'KNS Wire Bond Preventive Maintenance Record KW___',
+      );
+      const docId = await createAssetDocument(assetId, templateId, { machineNumber: '13' });
+      const t = await tokens();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '21' })
+        .expect(200);
+
+      expect(res.body).toMatchObject({
+        machineNumber: '21',
+        resolvedTitle: 'KNS Wire Bond Preventive Maintenance Record KW21',
+      });
+    });
+
+    it('ALLOWS the change when the only records on the document are not archived', async () => {
+      const { docId, assetId, revisionId, approvalRouteId } = await machineWithArchivedRecords(
+        'KNS Wire Bond Preventive Maintenance Record KW___',
+        '13',
+        [], // no archived records
+      );
+      await createJob({
+        assetId,
+        assetDocumentId: docId,
+        templateRevisionId: revisionId,
+        approvalRouteId,
+        jobNumber: 'OPEN-0001',
+        status: 'in_progress',
+      });
+      const t = await tokens();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '21' })
+        .expect(200);
+      expect(await storedMachineNumber(docId)).toBe('21');
+    });
+
+    it('ALLOWS the change when the title carries no fillable run', async () => {
+      // EP01 prints its number into the document already, so
+      // `resolveTemplateTitle` has nothing to substitute — the archived record
+      // prints identically either way and must not block the edit.
+      const { docId } = await machineWithArchivedRecords(
+        'Preventive Maintenance Record EP01',
+        '13',
+      );
+      const t = await tokens();
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '21' })
+        .expect(200);
+      expect(res.body).toMatchObject({
+        machineNumber: '21',
+        resolvedTitle: 'Preventive Maintenance Record EP01',
+      });
+    });
+
+    it('ALLOWS a no-op re-send of the unchanged value', async () => {
+      const { docId } = await machineWithArchivedRecords(
+        'KNS Wire Bond Preventive Maintenance Record KW___',
+        '13',
+      );
+      const t = await tokens();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '13' })
+        .expect(200);
+    });
+
+    it('ALLOWS retiring the document — active toggling changes nothing any record prints', async () => {
+      const { docId } = await machineWithArchivedRecords(
+        'KNS Wire Bond Preventive Maintenance Record KW___',
+        '13',
+      );
+      const t = await tokens();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${docId}`)
+        .set(...authHeader(t.admin))
+        .send({ active: false })
+        .expect(200);
+
+      // ...and the machine number is untouched, so the archived record still
+      // prints KW13.
+      expect(await storedMachineNumber(docId)).toBe('13');
+    });
+
+    it('ALLOWS the change when the archived record belongs to a DIFFERENT document', async () => {
+      // The guard is per-document, not per-machine: a sibling document's
+      // history must not freeze this one.
+      const { assetId } = await machineWithArchivedRecords(
+        'KNS Wire Bond Preventive Maintenance Record KW___',
+        '13',
+      );
+      const otherTemplateId = await createTitledTemplate('pH Meter Check Record MB_____');
+      const otherDocId = await createAssetDocument(assetId, otherTemplateId, {
+        machineNumber: '02',
+      });
+      const t = await tokens();
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/asset-documents/${otherDocId}`)
+        .set(...authHeader(t.admin))
+        .send({ machineNumber: '05' })
+        .expect(200);
+      expect(await storedMachineNumber(otherDocId)).toBe('05');
     });
   });
 
