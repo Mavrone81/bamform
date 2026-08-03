@@ -193,21 +193,21 @@ describe('runImport — I4 review fix: a completed rule is never rewound on re-r
 });
 
 /**
- * Owner decision 2026-08-03 (fix round 2): a surplus frequency means the
- * MACHINE ONLY is created — its PM document must NOT be attached, because
- * attaching it would let the scheduler's bootstrap sweep
+ * Owner decision 2026-08-03, following a whole-branch review: a surplus
+ * frequency means the MACHINE ONLY is created — its PM document must NOT be
+ * attached, because attaching it would let the scheduler's bootstrap sweep
  * (`schedule-rule-bootstrap.service.ts`, called from every `SchedulerService`
  * sweep) materialise a full schedule for it on the very next sweep,
  * including the surplus frequency the owner reserved for a planner. An
  * earlier version of this module attached the document and merely skipped
- * the schedule GET — that premise was false and has been retracted (see
- * `import.ts`'s file header). This runs the REAL `runImport` end to end,
- * both as a dry run and under `--apply` against a mock `fetch` that THROWS
- * if a surplus row ever reaches the document or schedule endpoints, so a
- * regression back to the old (wrong) behaviour fails loudly instead of
- * silently reappearing.
+ * the schedule GET — the whole-branch review found that premise false (see
+ * `import.ts`'s file header), and the owner then ruled to withhold the
+ * document itself. This runs the REAL `runImport` end to end, both as a dry
+ * run and under `--apply` against a mock `fetch` that THROWS if a surplus
+ * row ever reaches the document or schedule endpoints, so a regression back
+ * to the old (wrong) behaviour fails loudly instead of silently reappearing.
  */
-describe('runImport — surplus decision 2026-08-03 (fix round 2): no document is attached', () => {
+describe('runImport — surplus decision 2026-08-03 (whole-branch review): no document is attached', () => {
   const templates: Record<string, ImportTemplateRef> = {
     ASSET_A: { documentNumber: 'DOC-A', title: 'Some Record ___' },
   };
@@ -302,8 +302,9 @@ describe('runImport — surplus decision 2026-08-03 (fix round 2): no document i
         });
       }
       // A surplus row must NEVER reach the document or schedule endpoints
-      // (owner decision 2026-08-03, fix round 2) — fail LOUDLY if it does,
-      // rather than let a regression back to the old behaviour pass silently.
+      // (owner decision 2026-08-03, following a whole-branch review) — fail
+      // LOUDLY if it does, rather than let a regression back to the old
+      // behaviour pass silently.
       if (/\/documents(\?.*)?$/.test(path) || /\/schedule(\?.*)?$/.test(path)) {
         throw new Error(
           `REGRESSION: surplus row called ${method} ${path} — must not attach a document`,

@@ -382,15 +382,20 @@ This is the artefact to diff against the paper masterlist, row by row, **before*
   columns.
 - **Left unplanned for a planner** — machines where the PM document defines a frequency the
   plan does not schedule (a "surplus"). **Only the machine is created — its PM document is
-  deliberately NOT attached** (owner decision 2026-08-03, fix round 2). Attaching it would let
-  the scheduler's bootstrap sweep (`schedule-rule-bootstrap.service.ts`, invoked from every
-  `SchedulerService` sweep — hourly, on by default) materialise a full schedule for the machine
-  within the hour, dated in the past, including the surplus frequency the owner reserved for a
-  planner. With no document attached there is nothing for that sweep to iterate, so the schedule
-  genuinely stays empty — no `schedule_rule` rows exist for it. A planner must (1) attach the
-  document the evidence file names for that row (the one that WOULD have been attached), then
-  (2) set each frequency's date. On the reference dataset this is exactly **3 machines: `AW06`,
-  `BD01`, `EP01`**. This is intentional, not a defect.
+  deliberately NOT attached** — a whole-branch review found that an earlier "attach the document,
+  just skip the schedule GET" approach could not work (attaching the document alone is enough to
+  get a full schedule), and the owner then ruled on 2026-08-03 to withhold the document itself.
+  Attaching it would let the scheduler's bootstrap sweep (`schedule-rule-bootstrap.service.ts`,
+  invoked from every `SchedulerService` sweep — hourly, on by default) materialise a full
+  schedule for the machine within the hour, dated in the past, including the surplus frequency
+  the owner reserved for a planner. With no document attached there is nothing for that sweep to
+  iterate, so the schedule genuinely stays empty — no `schedule_rule` rows exist for it. A
+  planner must (1) attach the document the evidence file names for that row (the one that WOULD
+  have been attached), using the evidence file's `Machine #` value for that row as the
+  machineNumber to enter when attaching it (`·` there means that document's title has no
+  fillable blank, so there is nothing to enter), then (2) set each frequency's date. On the
+  reference dataset this is exactly **3 machines: `AW06`, `BD01`, `EP01`**. This is intentional,
+  not a defect.
 - **Skipped** — `DDA 03` only. It is deliberately absent: the owner confirmed the machine is not
   on site, and it is matched by its label so it cannot silently reappear under a different code.
 - **Unmapped / hard-error** — rows the importer could not place without guessing (no asset-type

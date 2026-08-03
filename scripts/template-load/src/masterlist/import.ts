@@ -11,12 +11,13 @@
  * — really `PUT`s, see the note below — the planned due dates afterwards.
  *
  * SURPLUS (Task 3 §6 — the form defines a frequency the plan does not
- * schedule) means the MACHINE ONLY is created, per owner decision
- * 2026-08-03 (fix round 2): "create the machine only; do not attach the PM
- * document." An earlier draft of this module attached the document as
- * normal and relied on skipping `GET /assets/{id}/schedule` to keep the
- * schedule blank — that premise was FALSE and has been retracted after a
- * whole-branch review. `SchedulerService`'s sweep (`scheduler.service.ts:44`)
+ * schedule) means the MACHINE ONLY is created. An earlier draft of this
+ * module attached the document as normal and relied on skipping
+ * `GET /assets/{id}/schedule` to keep the schedule blank — a whole-branch
+ * review found that premise FALSE (attaching the document is enough on its
+ * own; the GET was never load-bearing), and the owner then ruled 2026-08-03:
+ * "create the machine only; do not attach the PM document."
+ * `SchedulerService`'s sweep (`scheduler.service.ts:44`)
  * calls `ScheduleRuleBootstrapService.ensureForAllActiveAssets()` at the
  * start of EVERY sweep (hourly; `SCHEDULER_ENABLED` defaults true), and that
  * bootstrap (`schedule-rule-bootstrap.service.ts:58-66`) iterates every
@@ -183,11 +184,11 @@ export interface MachineImportResult {
    *  writing something the API cannot honestly represent. See `message`. */
   blocked: boolean;
   assetId?: string;
-  /** False exactly when `leftUnplanned` (surplus decision, 2026-08-03 fix
-   *  round 2): no document is attached for a surplus row, precisely because
-   *  attaching one would let the scheduler's bootstrap sweep materialise a
-   *  full schedule for it on the next sweep — see the file header. True
-   *  otherwise. */
+  /** False exactly when `leftUnplanned` (surplus decision, owner ruling
+   *  2026-08-03 following a whole-branch review): no document is attached
+   *  for a surplus row, precisely because attaching one would let the
+   *  scheduler's bootstrap sweep materialise a full schedule for it on the
+   *  next sweep — see the file header. True otherwise. */
   documentAttached: boolean;
   /** True when the machine was deliberately left with NO document and
    *  therefore no schedule (`surplus` non-empty) — see the file header for
@@ -476,12 +477,13 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   const anchorDate = Object.values(dueDates).sort()[0];
   const machineNumber = machineNumberFor(template.title, row.code);
 
-  // Owner decision 2026-08-03 (fix round 2): a surplus frequency means the
-  // MACHINE ONLY is created for a planner — not resolved at migration time.
-  // No conflict prompt, no callback. The document is deliberately NOT
-  // attached (see the file header for why the earlier "attach it, just skip
-  // the schedule GET" approach was wrong), so no schedule_rule rows can ever
-  // materialise for this machine until a planner attaches one.
+  // Owner decision 2026-08-03, following a whole-branch review: a surplus
+  // frequency means the MACHINE ONLY is created for a planner — not
+  // resolved at migration time. No conflict prompt, no callback. The
+  // document is deliberately NOT attached (see the file header for why the
+  // earlier "attach it, just skip the schedule GET" approach was wrong), so
+  // no schedule_rule rows can ever materialise for this machine until a
+  // planner attaches one.
   const leaveUnplanned = r.surplus.length > 0;
 
   if (ctx.dryRun) {
@@ -573,16 +575,17 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   }
 
   // ---- Surplus: create the machine only; no document is attached ----------
-  // Owner decision 2026-08-03 (fix round 2): attaching the document here
-  // would let the scheduler's bootstrap sweep (`schedule-rule-bootstrap.
-  // service.ts`, called from every `SchedulerService` sweep) materialise a
-  // FULL schedule for this machine — the surplus frequency the owner
-  // reserved for a planner included — within the hour, dated in the past.
-  // The only way to leave a machine genuinely unplanned is to leave it with
-  // NO active document at all, so this module stops HERE: no document POST,
-  // no schedule GET, no schedule PUT. See the file header for the full
-  // reasoning (this replaces an earlier, incorrect version of this comment
-  // that claimed skipping the schedule GET alone was sufficient).
+  // Owner decision 2026-08-03, following a whole-branch review: attaching
+  // the document here would let the scheduler's bootstrap sweep
+  // (`schedule-rule-bootstrap.service.ts`, called from every
+  // `SchedulerService` sweep) materialise a FULL schedule for this machine
+  // — the surplus frequency the owner reserved for a planner included —
+  // within the hour, dated in the past. The only way to leave a machine
+  // genuinely unplanned is to leave it with NO active document at all, so
+  // this module stops HERE: no document POST, no schedule GET, no schedule
+  // PUT. See the file header for the full reasoning (this replaces an
+  // earlier, incorrect version of this comment that claimed skipping the
+  // schedule GET alone was sufficient).
   if (leaveUnplanned) {
     ctx.log(
       `NOTE    ${row.label} (${row.code}) — surplus (${r.surplus.join(', ')}): machine created, ` +
