@@ -12,9 +12,10 @@ Generated with the AC-01 evidence pack (BAMFORM-TLP-001 §7.2). Regenerate with
 | X-3 | Each asset type maps to exactly one template | PASS (12 distinct codes) |
 | X-4 | Every supplied asset code exists and is correctly typed | PENDING — B-09: the real asset list is a client deliverable; this slice creates clearly-marked provisional SAMPLE machines only (decision 2026-07-27) |
 | X-5 | Cascade produces the correct item set for a Y job | Proven per asset type by the loader e2e (api/test/integration/template-load/load-e2e.spec.ts, U-CAS-08) |
-| X-6 | No template has an unparsed or inverted specification | **ATTENTION — 5 specification(s) escalated as TEXT pending client decisions (no inverted range is ever loaded):** |
+| X-6 | No template has an unparsed or inverted specification | **ATTENTION — 6 specification(s) escalated as TEXT pending client decisions (no inverted range is ever loaded):** |
 
 - CE 95 020 00 01 — "Track Height Calibration, Top Plate": `-295 - -305` (printed range is high-to-low (-295 > -305) — inverted per INV-04; client decision required)
+- CE 95 020 00 01 — "Bond Force Verification Input Force 100g": `95 - 28 g` (printed range is high-to-low (95 > 28) — inverted per INV-04; client decision required)
 - CE 95 020 00 03 — "Maximum Window Clamp Opening": `75 mils` (specification does not match any TLP §4.2 printed form)
 - CE 95 020 00 03 — "Rail Width Measurement": `35mm Plate` (specification does not match any TLP §4.2 printed form)
 - CE 95 020 00 03 — "Rail Height Calibration": `Optimal` (qualitative specification with no numeric content)
@@ -24,7 +25,7 @@ Total measurements across the set: 84.
 
 ## Outstanding client decisions (TLP §8.2, updated by this load)
 
-- [x] **B-04** — decided: corrected to 95 – 105 g, loaded as client revision D of CE 95 020 00 01.
+- [x] **B-04** — WITHDRAWN 2026-08-03: the 95 – 105 g correction and its client revision D are reverted. The owner ruled the signed records authoritative, and every signed ASM Wire Bond specimen prints "95 - 28 g", as does the workbook cell itself. Now loaded verbatim as TEXT (the INV-04 mechanism); CE 95 020 00 01 is CURRENT at revision C.
 - [ ] B-02 — confirm the wording of the revision-gap note on CE 95 010 00 01.
 - [ ] B-03 — confirm the as-printed treatment of out-of-order revision dates (doc CE 95 055 00 01 per the TLP, and the same anomaly found on CE 95 020 00 02, CE 95 030 00 01, CE 95 050 00 01).
 - [ ] B-05 — confirm the mapping of short approver names (Sara/Suren) to individuals; history entries are loaded verbatim as free text.
@@ -59,10 +60,10 @@ Total measurements across the set: 84.
 ### CE 95 020 00 01 — ASM Wire Bond
 
 - **N-11** [B58, B59]: section label "BH Setup & Calibration Heater Block Setup" was space-joined from 2 printed labels ("BH Setup & Calibration", "Heater Block Setup") in the group starting at row 58. TLP §4.1's rule is "verbatim; blank inherits the section above", which for a genuinely two-section group would instead read "BH Setup & Calibration" then "Heater Block Setup" as SEPARATE sections. Where the label merely wrapped across rows the join is correct. Client to confirm per group: accept the joined label, or split per §4.1 (a parser change + regeneration).
-- **B-04** [J66]: specification at J66 printed as "95 - 28 g" — loaded as "95 - 105 g" per B-04 (client revision D).
 - **N-11** [B68, B69, B70]: section label "Wire Clamp Calibration Wire Clamp Force Verification" was space-joined from 3 printed labels ("Wire Clamp Calibration", "Wire Clamp Force", "Verification") in the group starting at row 68. TLP §4.1's rule is "verbatim; blank inherits the section above", which for a genuinely two-section group would instead read "Wire Clamp Calibration" then "Wire Clamp Force" then "Verification" as SEPARATE sections. Where the label merely wrapped across rows the join is correct. Client to confirm per group: accept the joined label, or split per §4.1 (a parser change + regeneration).
 - **N-11** [B71, B72]: section label "Transducer Calibration (TVC)" was space-joined from 2 printed labels ("Transducer Calibration", "(TVC)") in the group starting at row 71. TLP §4.1's rule is "verbatim; blank inherits the section above", which for a genuinely two-section group would instead read "Transducer Calibration" then "(TVC)" as SEPARATE sections. Where the label merely wrapped across rows the join is correct. Client to confirm per group: accept the joined label, or split per §4.1 (a parser change + regeneration).
 - **N-01** [J61]: "Track Height Calibration, Top Plate" specification printed as "-295 - -305" — high-to-low printed range with no unit; inverted per INV-04 and NOT client-dispositioned (unlike B-04). Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client decision. PR-TLP-05.
+- **N-01** [J66]: "Bond Force Verification Input Force 100g" specification printed as "95 - 28 g" — high-to-low printed range with no unit; inverted per INV-04 and NOT client-dispositioned (unlike B-04). Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client decision. PR-TLP-05.
 - **N-05**: TLP §5.1 states 21 calibration measurements; the source sheet has 20 measurement rows. The source wins; discrepancy recorded.
 
 ### CE 95 020 00 02 — Besi Esec Wire Bond

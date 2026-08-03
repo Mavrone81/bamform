@@ -93,24 +93,15 @@ const DOC_CONFIG: Record<string, DocConfig> = {
     measurementLayout: { kind: 'section-table' },
     tlpItemCount: 14,
     tlpMeasurementCount: 21,
-    loadRevisionOverride: {
-      code: 'D',
-      reason:
-        'B-04: Bond Force Verification Input Force 100g specification printed as "95 - 28 g" ' +
-        '(inverted, INV-04). Client decision (TLP §3 option (a)): corrected to 95 - 105 g and ' +
-        'loaded as new revision D through the normal authoring workflow.',
-    },
-    corrections: [
-      {
-        cell: 'J66',
-        sourceText: '95 - 28 g',
-        correctedDisplay: '95 - 105 g',
-        lowerLimit: 95,
-        upperLimit: 105,
-        unit: 'g',
-        reference: 'B-04 (client revision D)',
-      },
-    ],
+    // B-04 WITHDRAWN 2026-08-03. This config used to override the load
+    // revision to D and rewrite J66 from the printed "95 - 28 g" to
+    // "95 - 105 g". The owner ruled the signed records authoritative: every
+    // signed ASM Wire Bond specimen prints "95 - 28 g", and so does cell J66
+    // of the workbook itself, so the corrected value existed in no source
+    // document. With no override here, `spec.ts` parses the inverted range
+    // through its normal INV-04 path and emits it VERBATIM as spec_type
+    // TEXT — which is what the committed YAML now contains, so a
+    // regeneration reproduces it rather than resurrecting revision D.
   },
   'CE 95 020 00 02': {
     assetTypeCode: 'BESI_ESEC_WIRE_BOND',
