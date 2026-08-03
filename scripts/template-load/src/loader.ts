@@ -359,7 +359,15 @@ export function buildRevisionPlan(doc: ParsedDocument): PlannedRevision[] {
 
   const notes = doc.notes.length ? ` | Load notes: ${doc.notes.join(' || ')}` : '';
   if (finalIsBeyondHistory) {
-    // Doc 4: client revision D (B-04 correction) — beyond the printed history.
+    // A synthetic revision beyond the printed history — e.g. a future
+    // client-decided correction with its own `loadRevisionOverride` in
+    // DOC_CONFIG. No current document uses this path: doc 4's B-04
+    // correction (which once loaded here as a synthetic client revision D)
+    // was WITHDRAWN 2026-08-03 — the owner ruled the signed records
+    // authoritative (every signed ASM Wire Bond specimen, and cell J66 of
+    // the workbook itself, prints "95 - 28 g") — so CE 95 020 00 01 now
+    // takes the `else` branch below and ends CURRENT at its printed
+    // revision C, same as every other document.
     plan.push({
       revisionCode: doc.loadRevision,
       changeDescription:

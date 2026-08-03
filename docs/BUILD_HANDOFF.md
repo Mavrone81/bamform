@@ -92,7 +92,7 @@ Each has a CI tripwire, but do not rely on tripping it:
 Apply these on top of the issued Rev 0.1/0.2 documents — they postdate them:
 
 - **ISO 13485 confirmed (OI-01).** Validation plan is `docs/VALIDATION_PLAN.md`. **MFA moves into Release 1** (SEC RS-3 is withdrawn). Build TOTP enrolment in slice 13; step-up before signing remains as well.
-- **B-04**: the `95 - 28 g` spec on `CE 95 020 00 01` is corrected to **95–105 g via client-issued revision D** before load. Your TLP tooling loads revision D; do not code a workaround for the inverted range — INV-04 stays.
+- **B-04 WITHDRAWN 2026-08-03**: the `95 - 28 g` spec on `CE 95 020 00 01` was briefly corrected to 95–105 g via a synthetic client revision D; that correction is reverted. The owner ruled the signed records authoritative — every signed specimen of both ASM Wire Bond forms prints `95 - 28 g`, and so does cell J66 of the workbook itself, so the corrected value existed in no source document. The TLP tooling now loads the value verbatim as `spec_type: TEXT` via the normal INV-04 path (the same mechanism already used for the `-295 - -305` case on the same document); `CE 95 020 00 01` is CURRENT at printed revision C, and there is no revision D.
 - **Effort baseline is ~40 engineer-weeks**, not 34.
 - **Open**: 21 CFR Part 11 (if yes: signature-meaning statement at enrolment + at signing — extend PR-096); machine count (OI-02); recon output (ports still `${WEB_PORT:?}`/`${API_PORT:?}` — leave them failing-fast until assigned).
 
