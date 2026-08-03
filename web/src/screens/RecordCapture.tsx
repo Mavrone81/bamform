@@ -233,6 +233,16 @@ async function mergedParts(
  * regardless of what order Dexie returned them in. `null` is a real value —
  * the technician CLEARED the box — so absence is expressed by returning
  * `undefined`, not by folding it into null.
+ *
+ * Only rows STILL ON THEIR WAY count (review M-3). A `conflict` or `failed`
+ * row is one the server REFUSED; hydrating the box from it would show a value
+ * the record does not have and, worse, would satisfy the client-side submit
+ * gate with it. Today `needsRecovery` blocks submit for those rows anyway, so
+ * nothing is visibly wrong — which is exactly why it is worth pinning now
+ * rather than relying on a second mechanism to keep covering for this one.
+ *
+ * Once a row is ACKED it is deleted from the outbox, and the cached job
+ * snapshot carries the value instead — see `outbox.ts#confirmAckIntoCachedJob`.
  */
 export function pendingTitleMachineNumber(
   jobId: string,
@@ -242,6 +252,7 @@ export function pendingTitleMachineNumber(
   let latest: string | null | undefined;
   for (const row of [...outboxRows].sort((a, b) => a.sequence - b.sequence)) {
     if (row.method !== 'PUT' || row.path !== path) continue;
+    if (row.status !== 'pending' && row.status !== 'sending') continue;
     const body = row.body as { titleMachineNumber?: string | null } | null;
     latest = body?.titleMachineNumber ?? null;
   }
@@ -286,6 +297,13 @@ export function RecordCapture({ jobId }: { jobId: string }) {
    * Kept as typed (not trimmed on every keystroke) for the same reason
    * `readings` is: an in-progress entry must round-trip through the input. */
   const [titleMachineNumber, setTitleMachineNumber] = useState('');
+  /** Slice 31-TITLEBLANK — the last form-number entry could not be written to
+   * the device's outbox for a reason that is NOT "storage full" (a closed or
+   * faulted IndexedDB; `append()` re-throws those rather than returning).
+   * Separate from `quotaBanner` because telling a technician their storage is
+   * full when it is not sends them to free up space that was never the
+   * problem. */
+  const [titleSaveFailed, setTitleSaveFailed] = useState(false);
 
   /**
    * Slice 22-SELFUPDATE: hold the self-update's reload while this screen is
@@ -329,19 +347,36 @@ export function RecordCapture({ jobId }: { jobId: string }) {
           readingValues[m.templateMeasurementId] = String(m.readingNumeric);
       }
       setReadings(readingValues);
-      // Slice 31-TITLEBLANK. Hydrated HERE, not in `refreshState`, and for
-      // the same reason `readings` is: `refreshState` re-runs after every
-      // mutation and after every drain, and a drain deletes the acked outbox
-      // row WITHOUT updating the cached job snapshot (only a bootstrap does
-      // that). Re-deriving there would make the box visibly revert to the
-      // pre-sync value the instant the entry was successfully sent.
+      // Slice 31-TITLEBLANK. Hydrated HERE, on mount, and NOT in
+      // `refreshState` — for the same reason `readings` is not. `refreshState`
+      // re-runs after every mutation and every drain, including during the
+      // 400ms debounce window in which the technician has typed but nothing
+      // has been queued yet. In that window neither source knows the new value
+      // (no outbox row, stale snapshot), so re-deriving there would yank the
+      // box back to the old value under their fingers.
       //
-      // The outbox wins over the snapshot while a row is still queued — a
-      // reload mid-shift, offline, must show what the technician typed, not
-      // an empty box that silently blocks Submit. `null` is a real value (the
-      // box was cleared), so only `undefined` falls through to the snapshot.
-      const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
-      const pending = pendingTitleMachineNumber(jobId, rows);
+      // The outbox wins over the snapshot while a row is still QUEUED — a
+      // reload mid-shift, offline, must show what the technician typed, not an
+      // empty box that silently blocks Submit. Once the row is ACKED it is
+      // deleted, and `outbox.ts#confirmAckIntoCachedJob` has already written
+      // the value into the snapshot, so the fallback below is then the correct
+      // answer rather than a stale one (review I-1). `null` is a real value
+      // (the box was cleared), so only `undefined` falls through.
+      //
+      // The outbox read is guarded on its own because it is the one hydration
+      // source not already in hand from `getCachedJob` above: an IndexedDB
+      // that faults between the two would otherwise reject INTO NOTHING
+      // (`loadCached` is `void`ed by its effect) and leave the screen stuck on
+      // "Loading…" with no explanation. Degrading to the server snapshot is
+      // the honest fallback — it is what the record actually says server-side
+      // — and the submit gate is enforced there regardless.
+      let pending: string | null | undefined;
+      try {
+        const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
+        pending = pendingTitleMachineNumber(jobId, rows);
+      } catch {
+        pending = undefined;
+      }
       setTitleMachineNumber((pending !== undefined ? pending : job.job.titleMachineNumber) ?? '');
       // Parts are hydrated in `refreshState`, not here — see that
       // function's comment. It runs alongside this effect on every mount,
@@ -466,34 +501,53 @@ export function RecordCapture({ jobId }: { jobId: string }) {
    * on this route would strand the row as `failed` and block Submit. `null`
    * is the legitimate "cleared it again" value.
    *
-   * `versioned: false`, exactly like a part upsert. `TitleMachineNumberService`
-   * neither checks `If-Match` nor bumps `draftVersion`, so predicting a
-   * version here would leave the prediction ahead of reality and 409 the next
-   * real mutation. It also removes the reverse failure, which was measured
-   * rather than theorised: this box flushes on blur, blurring it is almost
-   * always caused by TAPPING A CHECKLIST BUTTON, and two versioned appends in
-   * one tick both read the same predicted version — the second 409'd against
-   * the first on the very first interaction of the offline journey.
+   * `versioned: false`, the same mechanism a part upsert uses (though not the
+   * same exposure — see `title-machine-number.service.ts`).
+   * `TitleMachineNumberService` neither checks `If-Match` nor bumps
+   * `draftVersion`, so predicting a version here would leave the prediction
+   * ahead of reality and 409 the next real mutation. It also removes the
+   * reverse failure, which was measured rather than theorised: this box
+   * flushes on blur, blurring it is almost always caused by TAPPING A
+   * CHECKLIST BUTTON, and two versioned appends in one tick both read the
+   * same predicted version — the second 409'd against the first on the very
+   * first interaction of the offline journey.
    */
   async function sendTitleMachineNumber(rawValue: string) {
     const { db, transport } = getServices();
     const userId = getSyncUserId();
     if (!userId) return;
     const trimmed = rawValue.trim();
-    const result = await appendJobMutation(db, {
-      userId,
-      jobId,
-      method: 'PUT',
-      path: `/jobs/${jobId}/title-machine-number`,
-      body: { titleMachineNumber: trimmed === '' ? null : trimmed },
-      clientRecordedAt: new Date().toISOString(),
-      versioned: false,
-    });
+    let result: Awaited<ReturnType<typeof appendJobMutation>>;
+    try {
+      result = await appendJobMutation(db, {
+        userId,
+        jobId,
+        method: 'PUT',
+        path: `/jobs/${jobId}/title-machine-number`,
+        body: { titleMachineNumber: trimmed === '' ? null : trimmed },
+        clientRecordedAt: new Date().toISOString(),
+        versioned: false,
+      });
+    } catch {
+      // Review M-1. `outbox.append()` RETURNS a result for a quota refusal but
+      // RE-THROWS everything else (a closed or faulted IndexedDB). This
+      // function is invoked from a `void`ed timer AND from the unmount flush,
+      // so an uncaught throw here is an unhandled rejection rather than
+      // anything a technician ever sees — it is already visible in the web
+      // unit run as `DatabaseClosedError`, which vitest reports without
+      // failing. The entry did NOT land, so the one thing that must not happen
+      // is it looking saved: the failure is stated where the field is, and
+      // when the screen has already gone this at least stops being a silent
+      // rejection.
+      setTitleSaveFailed(true);
+      return;
+    }
     if (!result.ok) {
       setQuotaBanner(true);
       return;
     }
     setQuotaBanner(false);
+    setTitleSaveFailed(false);
     void refreshState();
     triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
   }
@@ -1117,6 +1171,12 @@ export function RecordCapture({ jobId }: { jobId: string }) {
                   <>Required before you can submit. Type what is printed on the machine.</>
                 )}
               </p>
+              {titleSaveFailed && (
+                <p className="field-error" role="alert">
+                  This form number could NOT be held on this device — retype it and check it stays.
+                  Nothing else you have entered is affected.
+                </p>
+              )}
               {titleMachineNumberMissing && (
                 <p className="field-error" role="status">
                   Fill this in before submitting — the printed record would otherwise show the blank

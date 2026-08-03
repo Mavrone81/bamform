@@ -1418,8 +1418,13 @@ export class FakeServer {
     // carries a blank that was never filled (422 `/errors/incomplete-record`,
     // pointer `/titleMachineNumber`), so the fake does too: a screen that
     // stops capturing it must fail the suite rather than sail through.
-    // Checked BEFORE the idempotency replay for the same reason the signature
-    // is: a rejected submission commits nothing to replay.
+    //
+    // Review M-4: this is checked before the idempotency replay only because
+    // it is simpler to write that way. The REAL ordering is the opposite —
+    // `submission.service.ts` checks the replay first, then loads the job,
+    // then the outstanding-items gate, then this one. The difference is not
+    // observable: a refused submission never reaches `recordWithin`, so no
+    // replay entry for it can exist to be returned early.
     const seededJob = this.jobs.get(jobId);
     if (
       seededJob &&

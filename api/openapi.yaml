@@ -1482,14 +1482,18 @@ paths:
         one.
 
         `Idempotency-Key` is REQUIRED (reachable from the offline outbox,
-        PR-API-16). UNVERSIONED, exactly like
+        PR-API-16). UNVERSIONED, in the same shape as
         `PUT /jobs/{jobId}/parts/{partId}`: it neither accepts `If-Match` nor
         bumps `draftVersion`, and it does not transition the job's status.
-        Last write wins on a single scalar the one assigned technician types
-        on one device - see `title-machine-number.service.ts` for the measured
-        reason (a versioned shape produced self-inflicted 409s whenever the
-        debounced box flushed on blur in the same tick as the tap that caused
-        the blur).
+        Last write wins, with no conflict prompt - and unlike a part, which is
+        keyed per row, this is ONE SCALAR PER JOB, so any two concurrent
+        editors of a record always collide rather than only when they touch
+        the same row. What makes that acceptable is the access rule (one
+        record is one assignee's to fill, and only while it is still theirs),
+        not the parts precedent. See `title-machine-number.service.ts` for the
+        measured reason a versioned shape was rejected: it produced
+        self-inflicted 409s whenever the debounced box flushed on blur in the
+        same tick as the tap that caused the blur.
       requestBody:
         required: true
         content:

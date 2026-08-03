@@ -44,13 +44,23 @@ import { toJob } from './mappers';
  * it is almost always caused by TAPPING SOMETHING ELSE on the same screen (a
  * checklist button), so those two appends land in one tick every time. It was
  * reproducible on the first interaction of the offline journey (O-23a) before
- * this route was unversioned. Last-write-wins on a single scalar the one
- * assigned technician types on one device is the correct trade, and it is the
- * same one slice 30 made for parts.
+ * this route was unversioned.
  *
- * For the same reason there is no ASSIGNED -> IN_PROGRESS transition here
- * (that too is a `job` write, and parts do not do it either). Submit requires
- * IN_PROGRESS, which recording any result already produces.
+ * WHAT IS GIVEN UP, stated exactly (review M-8). Last-write-wins with no
+ * conflict prompt. This is the same MECHANISM as `upsertPart`, but NOT the
+ * same exposure, and the two should not be conflated: a part is keyed per
+ * row, so two editors only collide when they touch the SAME part, whereas
+ * this is one scalar per job — any two concurrent editors of one record
+ * always collide, and the later write silently wins. What makes it acceptable
+ * is not the parts precedent but the access rule: `loadForMutation` admits
+ * only the assignee (or a role that can reach the job), one record is one
+ * technician's to fill, and the field is writable only while the record is
+ * still theirs. It is a real trade, made knowingly, against a conflict the
+ * versioned shape provoked on the first two taps of every session.
+ *
+ * There is likewise no ASSIGNED -> IN_PROGRESS transition here: that too is a
+ * `job` write, and doing it would reintroduce the same coupling. Submit
+ * requires IN_PROGRESS, which recording any result already produces.
  *
  * NOT validated here for presence: an empty blank is legitimate all the way
  * through drafting and a whole offline shift. The requirement bites once, at

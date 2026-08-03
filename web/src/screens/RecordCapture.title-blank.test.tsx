@@ -117,6 +117,17 @@ function failNextOutboxWrite() {
 }
 
 const field = () => screen.getByLabelText('Form number in the title');
+/**
+ * Wait for the box to hold `value`. Deliberately NOT
+ * `expect(await findByLabelText(...)).toHaveValue(...)`: `findBy*` waits for
+ * the ELEMENT, and the element renders immediately with an empty value while
+ * `loadCached`'s hydration is still in flight. That form of the assertion
+ * passed locally and failed under the parallel full-suite run — it was racing
+ * the very thing these tests exist to check. The generous timeout costs a
+ * passing test nothing and buys headroom on a loaded CI runner.
+ */
+const expectFieldValue = (value: string) =>
+  waitFor(() => expect(field()).toHaveValue(value), { timeout: 5000 });
 /** The entry is debounced by 400ms, so the row lands later than a bare tick. */
 const untilOutbox = (count: number) =>
   waitFor(
@@ -136,6 +147,14 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup();
+  // Let the screen's `void`ed effects (`loadCached`/`refreshState`) settle
+  // before the database goes. Deleting it underneath an in-flight Dexie read
+  // makes vitest report a `DatabaseClosedError` that is an artefact of
+  // teardown, not of the code under test — and vitest reports unhandled
+  // rejections WITHOUT failing the run, so a noisy suite is a suite whose
+  // real signal is easy to miss (review M-1 was found in exactly that noise).
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
   await db.delete();
   vi.unstubAllGlobals();
 });
@@ -180,7 +199,7 @@ describe('RecordCapture — the blank in the form title (slice 31-TITLEBLANK)', 
     // belongs in it is exactly the inference this slice refuses to make.
     await seedJob(makeJob());
     renderScreen();
-    expect(await screen.findByLabelText('Form number in the title')).toHaveValue('');
+    await expectFieldValue('');
   });
 
   it('shows the RAW title, blank and all, so the technician can see which blank they are filling', async () => {
@@ -192,7 +211,7 @@ describe('RecordCapture — the blank in the form title (slice 31-TITLEBLANK)', 
   it('hydrates from a value the server already acknowledged', async () => {
     await seedJob(makeJob({ titleMachineNumber: '01' }));
     renderScreen();
-    expect(await screen.findByLabelText('Form number in the title')).toHaveValue('01');
+    await expectFieldValue('01');
   });
 
   it('typing enqueues an UNVERSIONED PUT to /jobs/{jobId}/title-machine-number', async () => {
@@ -289,7 +308,7 @@ describe('RecordCapture — the blank in the form title (slice 31-TITLEBLANK)', 
 
       renderScreen();
 
-      expect(await screen.findByLabelText('Form number in the title')).toHaveValue('01');
+      await expectFieldValue('01');
       // Not blocked on the blank any more — the remaining block is the
       // ordinary "still sending" one, which resolves on its own.
       expect(screen.queryByText(/fill this in before submitting/i)).not.toBeInTheDocument();
@@ -305,8 +324,27 @@ describe('RecordCapture — the blank in the form title (slice 31-TITLEBLANK)', 
 
       renderScreen();
 
-      expect(await screen.findByLabelText('Form number in the title')).toHaveValue('02');
+      await expectFieldValue('02');
     });
+
+    /**
+     * Review M-3. A `conflict`/`failed` row is one the server REFUSED. Today
+     * `needsRecovery` blocks submit for those anyway, so hydrating from one
+     * looks harmless — which is exactly why it is pinned here rather than left
+     * depending on a second mechanism to keep covering for this one.
+     */
+    it.each(['conflict', 'failed'] as const)(
+      'a %s row does NOT hydrate the box — that value is one the server refused',
+      async (status) => {
+        await seedJob(makeJob({ titleMachineNumber: null }));
+        await seedOutboxRow({ status, body: { titleMachineNumber: '99' } });
+
+        renderScreen();
+        await screen.findByText('PM-2026-000001');
+
+        await expectFieldValue('');
+      },
+    );
 
     it('a queued CLEAR beats an acknowledged value — and re-blocks submit, as the server would', async () => {
       await seedJob(makeJob({ titleMachineNumber: '01' }));
@@ -314,9 +352,114 @@ describe('RecordCapture — the blank in the form title (slice 31-TITLEBLANK)', 
 
       renderScreen();
 
-      expect(await screen.findByLabelText('Form number in the title')).toHaveValue('');
+      await expectFieldValue('');
       expect(await screen.findByText(/fill this in before submitting/i)).toBeInTheDocument();
     });
+  });
+
+  /**
+   * Review I-1 — the defect this pins is the mirror image of the offline one
+   * above, and it is the one that survived the first round precisely BECAUSE
+   * every offline-survival test deliberately keeps the row queued.
+   *
+   * `drain()` deletes an acked row and, before slice 31's
+   * `confirmAckIntoCachedJob`, nothing wrote the value into the cached job:
+   * `bootstrap()` is the only writer of `CachedJob.job`, and a title-only
+   * change satisfies no clause of the server's `sinceOrConditions`, so no
+   * delta bootstrap re-sends it either. The technician typed the number
+   * ONLINE, it synced successfully, and coming back to the record showed an
+   * EMPTY box with Submit disabled — telling them to fill in something they
+   * had already filled in and the server already had.
+   */
+  describe('after a SUCCESSFUL sync (review I-1)', () => {
+    beforeEach(() => {
+      // Online, so the entry really drains rather than sitting in the outbox.
+      vi.stubGlobal('navigator', { onLine: true });
+    });
+
+    /** The outbox drains to EMPTY, which is the acknowledgement itself —
+     * `drain()` deletes a row if and only if the server said `applied: true`
+     * (non-negotiable #1: nothing else ever clears one). Asserted rather than
+     * assumed, so a test that silently stopped syncing could not pass. */
+    const untilSynced = (expected: string | null) =>
+      waitFor(
+        async () => {
+          expect(await db.outbox.where('jobId').equals('job-1').count()).toBe(0);
+          expect((await db.jobs.get(['user-1', 'job-1']))?.job.titleMachineNumber).toBe(expected);
+        },
+        { timeout: 3000 },
+      );
+
+    it('writes the acknowledged value into the cached job snapshot', async () => {
+      await seedJob(makeJob({ titleMachineNumber: null }));
+      renderScreen();
+      await screen.findByLabelText('Form number in the title');
+
+      fireEvent.change(field(), { target: { value: '01' } });
+
+      await untilSynced('01');
+    });
+
+    it('the box still shows the value on a REMOUNT, and submit stays available', async () => {
+      await seedJob(makeJob({ titleMachineNumber: null }));
+      const view = renderScreen();
+      await screen.findByLabelText('Form number in the title');
+
+      fireEvent.change(field(), { target: { value: '01' } });
+      await untilSynced('01');
+
+      // Leaving and re-opening the record: a fresh screen, hydrating from the
+      // cached snapshot alone — the outbox row is gone, correctly.
+      view.unmount();
+      renderScreen();
+
+      await expectFieldValue('01');
+      expect(screen.queryByText(/fill this in before submitting/i)).not.toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: 'Sign and submit' })).toBeEnabled();
+    });
+
+    it('an acknowledged CLEAR is written through too — the snapshot never keeps a value the server dropped', async () => {
+      await seedJob(makeJob({ titleMachineNumber: '01' }));
+      const view = renderScreen();
+      await screen.findByLabelText('Form number in the title');
+
+      fireEvent.change(field(), { target: { value: '' } });
+      await untilSynced(null);
+
+      view.unmount();
+      renderScreen();
+      await expectFieldValue('');
+      expect(await screen.findByText(/fill this in before submitting/i)).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * Review M-1. `outbox.append()` RETURNS a result for a quota refusal but
+   * RE-THROWS anything else. This function is called from a `void`ed timer and
+   * from the unmount flush, so an uncaught throw was an unhandled rejection —
+   * already visible in this very suite's output as `DatabaseClosedError`,
+   * which vitest reports WITHOUT failing the run.
+   */
+  it('a non-quota IndexedDB failure is caught, is NOT reported as full storage, and never shows as saved', async () => {
+    await seedJob(makeJob());
+    renderScreen();
+    await screen.findByLabelText('Form number in the title');
+
+    const original = db.outbox.add.bind(db.outbox);
+    db.outbox.add = (() => {
+      db.outbox.add = original;
+      throw new Error('DatabaseClosedError: Database has been closed');
+    }) as typeof db.outbox.add;
+
+    fireEvent.change(field(), { target: { value: '01' } });
+
+    expect(
+      await screen.findByText(/could NOT be held on this device/i, undefined, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    // Not the storage-full message — that would send them to free up space
+    // that was never the problem.
+    expect(screen.queryByText(/device storage is full/i)).not.toBeInTheDocument();
+    expect(await db.outbox.where('jobId').equals('job-1').count()).toBe(0);
   });
 
   it('quota-exceeded: shows the banner and enqueues NOTHING (non-negotiable #1)', async () => {

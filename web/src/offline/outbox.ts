@@ -185,6 +185,60 @@ async function refreshJobPendingFlag(db: BamFormDB, userId: string, jobId: strin
   if (job) await db.jobs.put({ ...job, hasPendingOutbox: remaining > 0 });
 }
 
+/**
+ * Fold an ACKNOWLEDGED mutation's own body back into the cached job snapshot.
+ *
+ * WHY THIS EXISTS (slice 31-TITLEBLANK, review I-1). `bootstrap()` is the only
+ * writer of `CachedJob.job`; every other `db.jobs.put` in this codebase spreads
+ * `...existing` and touches flags only. So between a successful drain and the
+ * next bootstrap, the snapshot still says what the server said BEFORE the
+ * mutation — and `drain()` deletes the acked outbox row, which was the only
+ * other place that value lived. Any screen that hydrates from
+ * "outbox row ?? snapshot" therefore reads a stale value the moment a
+ * successful sync completes.
+ *
+ * For most captured fields that window closes on its own: recording an item
+ * result, a measurement, a part or a lifecycle change all satisfy a clause of
+ * `sinceOrConditions` (`api/src/jobs/jobs.repository.ts`), so the next delta
+ * bootstrap re-sends the job. `job.title_machine_number` satisfies NONE of
+ * them — it is a scalar on `job` itself, and that predicate deliberately does
+ * not key off `job.updated_at`. A record whose form number is the only thing
+ * entered so far can sit stale indefinitely, and because that field GATES
+ * SUBMIT, a stale snapshot does not merely look wrong: it disables the button
+ * and tells the technician to fill in something they already filled in.
+ *
+ * Scoped deliberately to that one route rather than made general. An acked
+ * body is only safe to fold in where it is the WHOLE truth about a field, and
+ * where re-deriving it is not already handled: item/measurement results carry
+ * server-assigned ids and timestamps this body does not have, and parts have
+ * their own `sinceOrConditions` clause. Widening this is a change to what the
+ * device believes the server said, and must be argued per field.
+ *
+ * Never throws into the drain. The ack has already been honoured (the row is
+ * deleted, and the server really does hold the value); a failure to update the
+ * local snapshot leaves exactly the pre-existing staleness and must not turn a
+ * successful drain into a failed one.
+ */
+async function confirmAckIntoCachedJob(db: BamFormDB, row: OutboxEntry): Promise<void> {
+  if (row.method !== 'PUT' || !TITLE_MACHINE_NUMBER_PATH.test(row.path)) return;
+  const body = row.body as { titleMachineNumber?: string | null } | null;
+  if (body == null || !('titleMachineNumber' in body)) return;
+  try {
+    const job = await db.jobs.get([row.userId, row.jobId]);
+    if (!job) return;
+    await db.jobs.put({
+      ...job,
+      job: { ...job.job, titleMachineNumber: body.titleMachineNumber ?? null },
+    });
+  } catch {
+    /* see the doc comment — a drain is never failed by this */
+  }
+}
+
+/** `PUT /jobs/{jobId}/title-machine-number` — mirrors the server's own
+ * allowlist regex in `api/src/sync/outbox-dispatch.ts`. */
+const TITLE_MACHINE_NUMBER_PATH = /^\/jobs\/[^/]+\/title-machine-number$/;
+
 export interface DrainSummary {
   attempted: number;
   acked: number;
@@ -286,6 +340,7 @@ export async function drain(
     if (result?.applied === true) {
       // The ONLY path that removes a row from the outbox.
       await db.outbox.delete(row.id);
+      await confirmAckIntoCachedJob(db, row);
       acked++;
       continue;
     }
