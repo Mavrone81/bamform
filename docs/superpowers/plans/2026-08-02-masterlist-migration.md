@@ -143,9 +143,28 @@ export function parseMasterlist(path: string): MasterlistRow[] {
     if (colOf(ref) !== 'A' || rowOf(ref) < 6) continue;
     const label = sheet.cells[ref].replace(/\s+/g, ' ').trim();
     if (label === '') continue;
+    // Column A holds three shapes and all three must yield the plant's real
+    // machine code, because that code becomes the asset's identifier in the
+    // register and appears on every printed record:
+    //
+    //   `ESEC 2008 sc3 plus -- ED01`   separator present  -> ED01
+    //   `ConnX-Elite Lite KW01`        no separator       -> KW01  (last token)
+    //   `EP01`                         single token       -> EP01
+    //
+    // Reading the whole string as the code when there is no separator gives 18
+    // machines identifiers like `ConnX-Elite Lite KW01` — wrong in the register
+    // and wrong on the record.
     const sep = label.indexOf('--');
-    const model = (sep === -1 ? label : label.slice(0, sep)).trim();
-    const code = (sep === -1 ? label : label.slice(sep + 2)).trim();
+    let model: string;
+    let code: string;
+    if (sep !== -1) {
+      model = label.slice(0, sep).trim();
+      code = label.slice(sep + 2).trim();
+    } else {
+      const parts = label.split(/\s+/);
+      code = parts[parts.length - 1];
+      model = parts.length > 1 ? parts.slice(0, -1).join(' ') : label;
+    }
     byRow.set(rowOf(ref), { label, model, code, visits: [] });
   }
 
@@ -192,13 +211,13 @@ git commit -m "feat(masterlist): parse the work-week matrix into machine rows"
 ```ts
 export function workWeekToDate(workWeek: number, year: number): string; // 'YYYY-MM-DD'
 export function assetTypeCodeForModel(model: string, code: string): string | null;
-export const SKIPPED_CODES: readonly string[]; // ['DDA 03']
+export const SKIPPED_LABELS: readonly string[]; // ['DDA 03']
 ```
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-import { workWeekToDate, assetTypeCodeForModel, SKIPPED_CODES } from './mapping';
+import { workWeekToDate, assetTypeCodeForModel, SKIPPED_LABELS } from './mapping';
 
 describe('workWeekToDate — calendar weeks, owner decision 2026-08-02', () => {
   it('puts week 1 on 1 January', () => {
@@ -246,7 +265,7 @@ describe('assetTypeCodeForModel', () => {
   });
 
   it('lists DDA 03 as skipped', () => {
-    expect(SKIPPED_CODES).toContain('DDA 03');
+    expect(SKIPPED_LABELS).toContain('DDA 03');
   });
 });
 ```
@@ -272,8 +291,14 @@ export function workWeekToDate(workWeek: number, year: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Owner decision: the machine is not on site, so it is not imported at all. */
-export const SKIPPED_CODES = ['DDA 03'] as const;
+/**
+ * Owner decision: the machine is not on site, so it is not imported at all.
+ *
+ * Matched against the row's LABEL, not its code. Since Task 1's parse fix the
+ * code is the last token, so `DDA 03` yields the code `03` — checking the code
+ * would silently stop skipping it and import a machine called `03`.
+ */
+export const SKIPPED_LABELS = ['DDA 03'] as const;
 
 /**
  * ORDER MATTERS. `Besi ESEC 3xxx` (wire bond) must be tested before the
@@ -386,21 +411,20 @@ describe('machineNumberFor', () => {
  */
 export function machineNumberFor(templateTitle: string, code: string): string | null {
   if (!/_{2,}/.test(templateTitle)) return null;
-  const trimmed = code.trim();
-  // A real machine code is a single token — ED01, KW13, AVS35-01. A label with
-  // a space in it is a model-plus-station string like `MS-620 ST01`, whose
-  // trailing digits belong to the station, not to a machine number. Taking
-  // them would print `…Record 01` on a controlled record for a machine that
-  // has no number at all.
-  if (/\s/.test(trimmed)) return null;
-  const tail = /(\d+)\s*$/.exec(trimmed);
+  const tail = /(\d+)\s*$/.exec(code.trim());
   return tail ? tail[1] : null;
 }
 ```
 
-**The whitespace guard is not optional.** Without it this function contradicts
-its own test above: `MS-620 ST01` matches `/(\d+)\s*$/` on the `01` of `ST01`
-and returns `"01"` where the test requires `null`.
+**No whitespace guard.** An earlier attempt rejected any code containing a
+space, to make `MS-620 ST01` return null — but by then `parseMasterlist` was
+handing this function whole labels like `ConnX-Elite Lite KW01`, so the guard
+silently nulled 18 real machine numbers across the KNS and Pre-Mixer families.
+The root cause was the parse rule, now fixed in Task 1: the code is the last
+token, so this function receives `KW01` and the guard is unnecessary.
+`MS-620 ST01` now arrives as `ST01` and yields `01` — harmless, because that
+machine maps to no asset type and is imported with no document, so
+`machineNumber` is never read for it.
 
 - [ ] **Step 4: Verify against every real template**
 
@@ -625,7 +649,7 @@ export function plannedDueDates(
 
 Per reconciled row, in this order — the document must exist before the schedule `GET`, because the bootstrap iterates documents:
 
-1. Skip if `SKIPPED_CODES` contains the code. Record it.
+1. Skip if `SKIPPED_LABELS` contains the code. Record it.
 2. If `assetTypeCode` is null → create the machine with **no document**, record it, continue.
 3. If `missing` is non-empty → **do not import**; record a hard error.
 4. Resolve `surplus` by prompting (Task 5).
