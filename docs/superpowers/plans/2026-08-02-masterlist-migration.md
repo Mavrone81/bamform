@@ -48,7 +48,7 @@ These supersede the task text below wherever they conflict.
 - **Idempotent.** Re-running must not duplicate a machine or overwrite a schedule a human has adjusted. Re-check state before writing; never swallow a 409 blindly.
 - **Never guess a mapping.** An unmapped model, a missing template or an unparseable label is reported and that machine is skipped — it is never assigned an arbitrary asset type.
 - **Secrets come from the environment**, never argv — matching `cli-load.ts` (`BAMFORM_BASE_URL`, `BAMFORM_AUTHOR_EMAIL`, `BAMFORM_AUTHOR_PASSWORD`).
-- **`DDA 03` is skipped** by owner decision (machine not on site). `MS-620 ST01` is imported **without** a document.
+- **`DDA 03` is skipped** by owner decision (machine not on site). `MS-620 ST01` maps to `MB_E_TEST` and is imported normally — see Decision 1 above.
 - Work weeks are **calendar weeks in 2026**: week *n* begins `1 Jan 2026 + (n−1) × 7` days.
 - No new npm dependency. No migration. `npm run format:check` before every commit.
 
