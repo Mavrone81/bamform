@@ -123,15 +123,39 @@ function loadTemplateCatalogue(yamlDir: string): {
 /**
  * Row-level log-line prefixes `import.ts` emits UNINDENTED, one per
  * fully-resolved row outcome (skip / dry-run preview / unmapped-reuse /
- * unmapped-block / hard-error / apply-mode left-unplanned). An ordinary
- * successful `--apply` import does NOT get one of these — see `writeOpCount`
- * below — so this undercounts machines in that specific case; it is used
- * only as a lower-bound diagnostic in the mid-run failure path, never
- * presented as an exact machine count.
+ * unmapped-block / hard-error / apply-mode left-unplanned). Requires 2+
+ * spaces after the keyword (review fix round 2, MINOR) so this does NOT
+ * match the run-level header line `DRY RUN (default) — …`, which has only
+ * one space before "RUN" — every genuine row-outcome line is padded to
+ * align (`DRY     `, `SKIP    `, `ERROR   `, …), so this is unambiguous.
+ * `import.ts` also deliberately keeps its two PER-FREQUENCY diagnostic
+ * lines (schedule_rule missing after bootstrap / already manually
+ * adjusted) INDENTED so they never match this pattern — a machine can
+ * revisit those up to 4 times in the schedule-writing loop, which would
+ * otherwise make this over-count rather than under-count. An ordinary
+ * successful `--apply` import does not get an unindented line at all, so
+ * this remains a LOWER BOUND on rows processed, never an exact count.
  */
-const ROW_OUTCOME_RE = /^(?:DRY|SKIP|ERROR|BLOCK|REUSE|NOTE)\s/;
-/** Indented lines recording an actual network write (`POST`/`PUT`). */
-const WRITE_OP_RE = /^\s+(?:POST|PUT)\s/;
+const ROW_OUTCOME_RE = /^(?:DRY|SKIP|ERROR|BLOCK|REUSE|NOTE)\s{2,}/;
+
+/**
+ * The four state-changing calls in `import.ts` (`POST /assets`,
+ * `POST /assets/{id}/documents`, `GET /assets/{id}/schedule` — it
+ * materialises bootstrap rows as a side effect, so it counts too — and
+ * `PUT /assets/{id}/schedule`) are each logged TWICE: "— attempting"
+ * immediately before the network call, "— done" immediately after it
+ * resolves (review fix round 2, IMPORTANT). If the process dies mid-call,
+ * the "attempting" line survives in the log but the "done" line never
+ * gets written — so `attempted > confirmed` is the signal that the LAST
+ * state-changing call's outcome is genuinely unknown (it may have applied
+ * on the server even though this run never saw that happen). This is
+ * deliberately a distinct, narrower pattern than "any POST/PUT/GET line"
+ * — ordinary read-only listing calls (`GET /assets?assetTypeId=…`, the
+ * unfiltered `GET /assets`, etc.) are NOT tagged `WRITE` and must never be
+ * counted as a write attempt.
+ */
+const WRITE_ATTEMPT_RE = /^\s+WRITE\s.*— attempting$/;
+const WRITE_DONE_RE = /^\s+WRITE\s.*— done$/;
 
 async function main(): Promise<void> {
   const { apply, year, file } = parseArgs(process.argv.slice(2));
@@ -175,11 +199,15 @@ async function main(): Promise<void> {
     // this run are lost, but every row already processed was already
     // logged above as it happened. Report that plainly rather than letting
     // a bare stack trace be the only sign a migration died partway through
-    // — and report it ACCURATELY: a raw log-line count conflates a header
-    // line with a row outcome (review fix round 1, IMPORTANT-2), so count
-    // the two things that actually mean something instead.
+    // — and report it ACCURATELY (review fix round 1 IMPORTANT-2, round 2
+    // IMPORTANT): a raw log-line count conflates a header line with a row
+    // outcome, and "no write LINES were logged" is not the same claim as
+    // "nothing was written" — a write logged "attempting" but not yet
+    // "done" may have applied on the server regardless. Never assert more
+    // than the log actually supports.
     const rowOutcomes = logLines.filter((l) => ROW_OUTCOME_RE.test(l)).length;
-    const writeOps = logLines.filter((l) => WRITE_OP_RE.test(l)).length;
+    const attempted = logLines.filter((l) => WRITE_ATTEMPT_RE.test(l)).length;
+    const confirmed = logLines.filter((l) => WRITE_DONE_RE.test(l)).length;
 
     console.error('');
     console.error('='.repeat(78));
@@ -193,16 +221,26 @@ async function main(): Promise<void> {
         '/ left-unplanned) — a LOWER BOUND on rows processed: an ordinary successful --apply ' +
         'write logs no single summary line, so this can under-count.',
     );
-    console.error(`  ${writeOps} write call(s) (POST/PUT) were logged.`);
-    if (apply && writeOps > 0) {
-      console.error(
-        '  Because at least one write was logged, some machines above may already exist, ' +
-          'partially or fully, in the system.',
-      );
-    } else if (apply) {
-      console.error(
-        '  No writes were logged — nothing above appears to have been created or changed.',
-      );
+    if (apply) {
+      if (attempted === 0) {
+        console.error(
+          '  No state-changing call (asset/document create, schedule read-or-materialise, ' +
+            'schedule write) was even ATTEMPTED — nothing above appears to have been created ' +
+            'or changed.',
+        );
+      } else if (attempted > confirmed) {
+        console.error(
+          `  ${confirmed} of ${attempted} attempted write(s) were confirmed done. The LAST ` +
+            'attempted write never logged as done — its outcome is UNKNOWN: it may have ' +
+            'applied on the server even though this run never saw that happen. Treat the ' +
+            'system as possibly already changed by that one call.',
+        );
+      } else {
+        console.error(
+          `  ${confirmed} write(s) were attempted AND confirmed before the failure — some ` +
+            'machines above already exist, partially or fully, in the system.',
+        );
+      }
     }
     console.error(
       'The importer is idempotent (it re-checks state before writing, and never blindly ' +

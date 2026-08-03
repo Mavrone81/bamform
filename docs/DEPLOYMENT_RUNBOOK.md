@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.5 |
+| Revision | 0.6 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -26,6 +26,7 @@
 | 0.3 | 2 Aug 2026 | §3.5 added — recover a lost password via the `reset-password` entrypoint (PR-RUN-23, PR-RUN-24), after a live lockout with five accounts and no known credentials; corrected the `psql` role in §3.3 and §7 from the non-existent `bamform` to `bamform_migrate` | Lead Engineer | _(pending)_ |
 | 0.4 | 3 Aug 2026 | §3.6 added — one-time PM masterlist import via `npm run import:masterlist` (PR-RUN-25, PR-RUN-26): dry run first, read the evidence file, then `--apply`; idempotent and safe to re-run; `DDA 03` deliberately absent; `AW06`/`BD01`/`EP01` deliberately left unplanned for a planner | Lead Engineer | _(pending)_ |
 | 0.5 | 3 Aug 2026 | §3.6 fix round 1 (quality review): removed the incorrect "re-run the dry run to verify `--apply`" claim from PR-RUN-26 — a dry run makes zero network calls and cannot detect prior writes — and replaced it with a Step 4 verification procedure (machines-screen count, one imported/one left-unplanned spot-check, confirm `DDA 03` absent); added explicit run-location and checkout/Node/HTTPS preconditions (this is a workstation CLI, not a container entrypoint); corrected "77 machines" to 76 and the wrong §3.4 template-load cross-reference | Lead Engineer | _(pending)_ |
+| 0.6 | 3 Aug 2026 | §3.6 fix round 2 (quality re-review): the mid-run-failure banner could report a false "no writes were logged" all-clear when the process died DURING a write (writes are now logged before AND after the network call, so an in-flight write shows as "outcome unknown" instead); Step 4.1 now says to keep the ORIGINAL pre-`--apply` machine-count baseline across a retry, not a freshly recorded one | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -412,10 +413,14 @@ byte-identical output whether or not `--apply` already ran. Verify instead, in t
 
 **Step 4 — verify**
 
-1. **Whole-set count.** Before `--apply`, record the machine count on `/admin/machines`. After
-   `--apply`, confirm it rose by exactly the evidence file's "Imported total" (76 on the
-   reference dataset) — do not hardcode an absolute total, since the environment may already
-   hold machines.
+1. **Whole-set count.** Before the FIRST `--apply` attempt, record the machine count on
+   `/admin/machines`. After `--apply` succeeds, confirm it rose by exactly the evidence file's
+   "Imported total" (76 on the reference dataset) from that ORIGINAL baseline — do not hardcode
+   an absolute total, since the environment may already hold machines. If `--apply` fails
+   partway and is re-run (see below), keep using the SAME original baseline, not a freshly
+   recorded one: the importer reuses whatever the failed attempt already created, so a baseline
+   re-recorded just before the retry will legitimately show a rise of fewer than 76 even though
+   nothing is wrong.
 2. **One imported machine.** Open one machine from the "Machines imported with a schedule"
    section (e.g. `ED01` on the reference dataset: 6M due `2026-01-29`, 3M due `2026-04-30`, Y
    due `2026-07-23`) and confirm `GET /assets/{id}/schedule` returns those dates, and that a job
@@ -426,14 +431,22 @@ byte-identical output whether or not `--apply` already ran. Verify instead, in t
 4. **The skip.** Confirm `DDA 03` is absent from `/admin/machines`.
 
 **If the command fails partway through** (for example, a network blip mid-`--apply`), it prints
-an `IMPORT FAILED mid-run` banner reporting how many rows reached a logged final outcome and how
-many write calls (`POST`/`PUT`) were logged before the failure — it distinguishes "nothing was
-written" from "some writes may already have happened" rather than reporting a raw, misleading
-line count — then exits non-zero without writing an evidence file for that run. Per-row
-*results* are lost once this happens (only the log survives), but nothing already written is
-corrupted or duplicated. Because the import is idempotent (PR-RUN-26), the fix is simply:
-resolve the underlying problem, then re-run the exact same command, and use Step 4 above — not
-a second dry run — to confirm the end state.
+an `IMPORT FAILED mid-run` banner and exits non-zero without writing an evidence file for that
+run. It reports one of three honest states, never a bare "nothing was written" guess:
+
+- **No state-changing call was even attempted** — nothing above appears to have been created or
+  changed.
+- **Every attempted write was confirmed done** before the failure — some machines already exist,
+  partially or fully, in the system.
+- **The LAST attempted write's outcome is unknown** — it was logged as attempted but never
+  logged as done, so it may have applied on the server even though this run never saw that
+  happen. Treat the system as possibly already changed by that one call.
+
+Per-row *results* are lost once this happens (only the log survives), but nothing already
+written is corrupted or duplicated. Because the import is idempotent (PR-RUN-26), the fix is
+simply: resolve the underlying problem, then re-run the exact same command, and use Step 4
+above — not a second dry run — to confirm the end state, keeping the ORIGINAL baseline count
+from before the first `--apply` attempt (Step 4.1).
 
 ---
 

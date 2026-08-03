@@ -526,6 +526,13 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   const assetsOfType = ctx.assetsByType.get(assetType.id)!;
   let asset = assetsOfType.find((a) => sameUnderContract(a.code, row.code));
   if (!asset) {
+    // Logged BEFORE the await, not after (review fix round 2, IMPORTANT):
+    // if the process dies while this call is in flight, the CLI's mid-run
+    // failure handler must be able to see that a write was ATTEMPTED even
+    // though it never got the chance to log completion — a network failure
+    // mid-write is exactly the case the operator most needs to be warned
+    // about, not the case most likely to be silently miscounted as "safe".
+    ctx.log(`  WRITE POST /assets code=${row.code} — attempting`);
     asset = await client.post<Asset>('/api/v1/assets', {
       code: row.code,
       assetTypeId: assetType.id,
@@ -533,7 +540,7 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       scheduleAnchorDate: anchorDate,
     });
     assetsOfType.push(asset);
-    ctx.log(`  POST /assets code=${row.code} -> ${asset.id}`);
+    ctx.log(`  WRITE POST /assets code=${row.code} -> ${asset.id} — done`);
   } else {
     ctx.log(`  REUSE asset ${asset.id} (code=${row.code})`);
   }
@@ -566,11 +573,12 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   );
   let assetDocument = tagged.data.find((d) => d.formTemplateId === liveTemplate.id);
   if (!assetDocument) {
+    ctx.log(`  WRITE POST /assets/${asset.id}/documents (${template.documentNumber}) — attempting`);
     assetDocument = await client.post<AssetDocument>(`/api/v1/assets/${asset.id}/documents`, {
       formTemplateId: liveTemplate.id,
       machineNumber,
     });
-    ctx.log(`  POST /assets/${asset.id}/documents -> ${template.documentNumber}`);
+    ctx.log(`  WRITE POST /assets/${asset.id}/documents -> ${template.documentNumber} — done`);
   } else {
     ctx.log(`  REUSE document ${assetDocument.id} (${template.documentNumber})`);
   }
@@ -604,8 +612,16 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   }
 
   // ---- Step 7: materialise the schedule rules ------------------------------
+  // This GET is NOT a pure read (review fix round 2, IMPORTANT part 2): it
+  // lazily materialises the bootstrap `schedule_rule` rows on the server
+  // (`schedule-rule-bootstrap.service`) as a side effect of being called —
+  // see the identical comment on the `leaveUnplanned` branch above, which
+  // exists PRECISELY BECAUSE calling this GET has that effect. Tagged
+  // WRITE/attempting/done like the POST/PUT calls so a mid-run failure
+  // handler counts it as state-changing, not as a safe no-op read.
+  ctx.log(`  WRITE GET /assets/${asset.id}/schedule (materialises bootstrap rules) — attempting`);
   const rules = await client.get<ScheduleRule[]>(`/api/v1/assets/${asset.id}/schedule`);
-  ctx.log(`  GET /assets/${asset.id}/schedule (${rules.length} rules)`);
+  ctx.log(`  WRITE GET /assets/${asset.id}/schedule (${rules.length} rules) — done`);
 
   // ---- Step 8: set each planned frequency's next due date -----------------
   for (const [frequency, nextDueOn] of Object.entries(dueDates)) {
@@ -613,8 +629,14 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       (rl) => rl.assetDocumentId === assetDocument!.id && rl.frequency === frequency,
     );
     if (!rule) {
+      // INDENTED deliberately (review fix round 2, MINOR): this fires PER
+      // FREQUENCY inside a loop, up to 4 times for one machine, so it is
+      // NOT a row-final-outcome line like the unindented ERROR/SKIP/BLOCK
+      // lines elsewhere in this module — a mid-run failure handler counting
+      // unindented lines as "rows processed" must not mistake several of
+      // these for several machines.
       ctx.log(
-        `ERROR   ${row.label} (${row.code}) — no ${frequency} schedule_rule after bootstrap; ` +
+        `  ERROR ${row.label} (${row.code}) — no ${frequency} schedule_rule after bootstrap; ` +
           'the form may not define this frequency (should have been caught by `missing`).',
       );
       continue;
@@ -623,8 +645,9 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     if (rule.adjustedReason && !rule.adjustedReason.startsWith(PROVENANCE_PREFIX)) {
       // A human adjusted this rule since the bootstrap default — never
       // overwrite a deliberate human decision (design doc §7 requirement).
+      // INDENTED for the same per-frequency reason as the ERROR case above.
       ctx.log(
-        `SKIP    ${row.label} (${row.code}) ${frequency} — already manually adjusted ` +
+        `  SKIP ${row.label} (${row.code}) ${frequency} — already manually adjusted ` +
           `("${rule.adjustedReason}"); migration does not override it.`,
       );
       continue;
@@ -635,14 +658,16 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     }
     // The brief calls this a PATCH; the real endpoint is `PUT
     // /api/v1/assets/{id}/schedule` (`asset-schedule.controller.ts`'s
-    // `@Put()`, `ScheduleAdjust`). Used here, not `client.patch`.
+    // `@Put()`, `ScheduleAdjust`). Used here, not `client.patch`. Logged
+    // before/after like the other writes above (review fix round 2).
+    ctx.log(`  WRITE PUT /assets/${asset.id}/schedule ${frequency} -> ${nextDueOn} — attempting`);
     await client.put(`/api/v1/assets/${asset.id}/schedule`, {
       assetDocumentId: assetDocument.id,
       frequency,
       nextDueOn,
       adjustedReason: wantedReason,
     });
-    ctx.log(`  PUT /assets/${asset.id}/schedule ${frequency} -> ${nextDueOn}`);
+    ctx.log(`  WRITE PUT /assets/${asset.id}/schedule ${frequency} -> ${nextDueOn} — done`);
   }
 
   return {
