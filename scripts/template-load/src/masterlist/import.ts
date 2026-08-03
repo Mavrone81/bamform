@@ -45,9 +45,24 @@
  * Idempotency is by RE-CHECK (list, then compare), never by swallowing a 409
  * — a real conflict (e.g. a duplicate code created out-of-band) must still
  * surface as an error, exactly as `loader.ts`'s own comment insists.
+ *
+ * MACHINE NUMBER is never computed or sent here. Eight of the twelve PM
+ * forms carry a blank in their title (`ED____`, `KW___`, etc.) that an
+ * earlier version of this module filled in on the caller's behalf
+ * (`mapping.ts`'s now-deleted `machineNumberFor`). Owner ruling: that blank
+ * is filled BY HAND by the technician when they complete the paper record —
+ * confirmed by a signed specimen (`April 2026/ED01.pdf` shows `01`
+ * handwritten into `ED____`) — not decided by this migration. `POST
+ * /assets/{id}/documents` is called below with no `machineNumber` field at
+ * all; the API defaults an omitted `machineNumber` to `null` exactly as it
+ * would for an explicit `null` (`asset-documents.service.ts`'s `dto.
+ * machineNumber ?? null`), so omitting it is a deliberate, not merely
+ * convenient, choice — it says nothing was computed, rather than asserting
+ * a value of nothing. See `evidence.ts` and `docs/DEPLOYMENT_RUNBOOK.md`
+ * §3.6 for what this means for a printed record today.
  */
 import { ApiClient, type Credentials } from '../client';
-import { machineNumberFor, SKIPPED_LABELS, workWeekToDate } from './mapping';
+import { SKIPPED_LABELS, workWeekToDate } from './mapping';
 import type { PlannedVisit } from './parse';
 import type { Reconciliation } from './reconcile';
 
@@ -150,10 +165,6 @@ const PROVENANCE_PREFIX = 'Migrated from ML-S-MFT-00015 Rev 21';
 export interface ImportTemplateRef {
   /** `FormTemplate.documentNumber`, e.g. `'CE 95 010 00 01'`. */
   documentNumber: string;
-  /** `FormTemplate.title`, needed for `machineNumberFor` (Task 2b) — also
-   *  what makes a DRY RUN able to show the computed machine number without
-   *  ever calling the network. */
-  title: string;
 }
 
 export interface ImportOptions {
@@ -205,14 +216,6 @@ export interface MachineImportResult {
    *  the owner cross-check a row directly instead of converting every date
    *  by hand. Same keys as `dueDates`; empty when `leftUnplanned`. */
   dueWeeks: Record<string, number>;
-  /** The value that would be (or was) written to `machineNumber` on the
-   *  asset-document (Task 2b's `machineNumberFor`) — `null` when the
-   *  template's title has no fillable blank, or when no template/mapping
-   *  was resolved for this row. Reported so the evidence file can surface
-   *  it: decision 4 flags a couple of templates as unverified against a
-   *  real specimen, and this is the one field an owner reviewing the
-   *  evidence file can actually catch a wrong guess on. */
-  machineNumber: string | null;
   /** Frequencies the form defines beyond the plan (Task 3's `surplus`) —
    *  informational; non-empty exactly when `leftUnplanned`. */
   surplus: string[];
@@ -321,7 +324,6 @@ async function processRow(r: Reconciliation, ctx: Ctx): Promise<MachineImportRes
       leftUnplanned: false,
       dueDates: {},
       dueWeeks: {},
-      machineNumber: null,
       surplus: [],
     };
   }
@@ -352,7 +354,6 @@ async function processRow(r: Reconciliation, ctx: Ctx): Promise<MachineImportRes
       leftUnplanned: false,
       dueDates: {},
       dueWeeks: {},
-      machineNumber: null,
       surplus: [],
       message: msg,
     };
@@ -393,7 +394,6 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
       leftUnplanned: false,
       dueDates: {},
       dueWeeks: {},
-      machineNumber: null,
       surplus: [],
       message: 'unmapped model — dry run cannot confirm whether it already exists',
     };
@@ -421,7 +421,6 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
       leftUnplanned: false,
       dueDates: {},
       dueWeeks: {},
-      machineNumber: null,
       surplus: [],
       message: 'reused an existing asset; unmapped model, so no document/schedule was touched',
     };
@@ -443,7 +442,6 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
     leftUnplanned: false,
     dueDates: {},
     dueWeeks: {},
-    machineNumber: null,
     surplus: [],
     message: msg,
   };
@@ -466,7 +464,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       leftUnplanned: false,
       dueDates: {},
       dueWeeks: {},
-      machineNumber: null,
       surplus: [],
       message: msg,
     };
@@ -475,7 +472,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   const dueDates = plannedDueDates(row.visits, ctx.year);
   const firstWeek = firstPlannedWeek(row.visits);
   const anchorDate = Object.values(dueDates).sort()[0];
-  const machineNumber = machineNumberFor(template.title, row.code);
 
   // Owner decision 2026-08-03, following a whole-branch review: a surplus
   // frequency means the MACHINE ONLY is created for a planner — not
@@ -499,8 +495,8 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       ctx.log(
         `DRY     ${row.label} (${row.code}) -> ${assetTypeCode} / ${template.documentNumber} — ` +
           `would GET/POST /api/v1/assets (code=${row.code}, scheduleAnchorDate=${anchorDate}), ` +
-          `GET/POST /assets/{id}/documents (machineNumber=${machineNumber ?? 'null'}), ` +
-          `GET /assets/{id}/schedule, then PUT it per frequency: ` +
+          'GET/POST /assets/{id}/documents (no machineNumber — the technician fills that in ' +
+          'by hand on the printed record), GET /assets/{id}/schedule, then PUT it per frequency: ' +
           Object.entries(dueDates)
             .map(([f, d]) => `${f}=${d} (WW${firstWeek[f]})`)
             .join(', '),
@@ -516,7 +512,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       leftUnplanned: leaveUnplanned,
       dueDates: leaveUnplanned ? {} : dueDates,
       dueWeeks: leaveUnplanned ? {} : firstWeek,
-      machineNumber,
       surplus: leaveUnplanned ? [...r.surplus] : [],
       message: leaveUnplanned
         ? `machine created only, no document attached (surplus: ${r.surplus.join(', ')}); a ` +
@@ -542,7 +537,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       leftUnplanned: false,
       dueDates: {},
       dueWeeks: {},
-      machineNumber,
       surplus: [],
       message: msg,
     };
@@ -599,7 +593,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       leftUnplanned: false,
       dueDates: {},
       dueWeeks: {},
-      machineNumber,
       surplus: [],
       message: msg,
     };
@@ -634,7 +627,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       leftUnplanned: true,
       dueDates: {},
       dueWeeks: {},
-      machineNumber,
       surplus: [...r.surplus],
       message:
         `machine created only, no document attached (surplus: ${r.surplus.join(', ')}); a ` +
@@ -651,7 +643,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     ctx.log(`  WRITE POST /assets/${asset.id}/documents (${template.documentNumber}) — attempting`);
     assetDocument = await client.post<AssetDocument>(`/api/v1/assets/${asset.id}/documents`, {
       formTemplateId: liveTemplate.id,
-      machineNumber,
     });
     ctx.log(`  WRITE POST /assets/${asset.id}/documents -> ${template.documentNumber} — done`);
   } else {
@@ -748,7 +739,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     leftUnplanned: false,
     dueDates,
     dueWeeks: firstWeek,
-    machineNumber,
     surplus: [],
   };
 }

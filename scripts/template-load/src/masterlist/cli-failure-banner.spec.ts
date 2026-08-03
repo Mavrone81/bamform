@@ -42,7 +42,7 @@ function reconciliation(
 }
 
 const templates: Record<string, ImportTemplateRef> = {
-  ASSET_A: { documentNumber: 'DOC-A', title: 'Some Record ___' },
+  ASSET_A: { documentNumber: 'DOC-A' },
 };
 
 // ---- Batch 1: DRY RUN — zero network calls, covers SKIP / ERROR(missing) /

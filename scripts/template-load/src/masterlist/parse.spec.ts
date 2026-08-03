@@ -27,8 +27,7 @@ describe('parseMasterlist', () => {
     // separator) and EP01 (single token) were exercised, so reading the
     // whole label as the code for `ConnX-Elite Lite KW01` went undetected —
     // it would have registered the machine as `ConnX-Elite Lite KW01`
-    // instead of `KW01`, and machineNumberFor would never see a bare code
-    // to extract a tail from.
+    // instead of the bare code `KW01`.
     const kw01 = rows.find((r) => r.label === 'ConnX-Elite Lite KW01')!;
     expect(kw01.code).toBe('KW01');
     expect(kw01.model).toBe('ConnX-Elite Lite');

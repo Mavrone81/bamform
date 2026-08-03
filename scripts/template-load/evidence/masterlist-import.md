@@ -21,95 +21,97 @@ The CLI's own terminal summary counts a left-unplanned machine as "imported" (it
 | Unmapped / hard-error — blocked, needs an owner decision | 0 |
 | **Total rows in the masterlist** | **77** |
 
+**Machine number.** The blank in a form's title is filled in by hand by the technician when they complete the record, so this migration deliberately leaves it unset — no field on the record-capture screen sets it yet either, so a printed record shows it blank until that capture exists.
+
 ## Machines imported with a schedule — 73
 
-One row per machine, in the order the masterlist lists them. `Frequencies` is the FIRST planned due date the importer set for each frequency in 2026, with the masterlist's own WORK WEEK in parentheses — the interval then carries each one forward from there. `Machine #` is the value filled into the template's blank (`machineNumberFor`, decision 4) — cross-check every row, including this column, against the same row of the spreadsheet before `--apply`.
+One row per machine, in the order the masterlist lists them. `Frequencies` is the FIRST planned due date the importer set for each frequency in 2026, with the masterlist's own WORK WEEK in parentheses — the interval then carries each one forward from there. There is no `Machine #` column — see "Machine number" above.
 
-| Source label (masterlist column A) | Code | Asset type | Document | Machine # | Frequencies (first due date, work week) |
-|---|---|---|---|---|---|
-| ESEC 2008 sc3 plus -- ED01 | ED01 | BESI_DIE_ATTACH | CE 95 010 00 01 | 01 | M3: 2026-04-30 (WW18); M6: 2026-01-29 (WW5); Y: 2026-07-23 (WW30) |
-| ESEC 2008 sc3 plus -- ED02 | ED02 | BESI_DIE_ATTACH | CE 95 010 00 01 | 02 | M3: 2026-02-05 (WW6); M6: 2026-10-29 (WW44); Y: 2026-05-07 (WW19) |
-| ESEC 2008 hsc3 plus -- ED03 | ED03 | BESI_DIE_ATTACH | CE 95 010 00 01 | 03 | M3: 2026-06-18 (WW25); M6: 2026-09-17 (WW38); Y: 2026-03-19 (WW12) |
-| ESEC 2008 hsc3 plus -- ED04 | ED04 | BESI_DIE_ATTACH | CE 95 010 00 01 | 04 | M3: 2026-02-19 (WW8); M6: 2026-05-14 (WW20); Y: 2026-10-29 (WW44) |
-| ESEC 2008 hsc3 plus -- ED05 | ED05 | BESI_DIE_ATTACH | CE 95 010 00 01 | 05 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
-| ESEC 2008 hsc3 plus -- ED06 | ED06 | BESI_DIE_ATTACH | CE 95 010 00 01 | 06 | M3: 2026-05-28 (WW22); M6: 2026-08-20 (WW34); Y: 2026-03-05 (WW10) |
-| ESEC 2008 hsc3 plus -- ED07 | ED07 | BESI_DIE_ATTACH | CE 95 010 00 01 | 07 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
-| ESEC 2008 hsc3 plus -- ED08 | ED08 | BESI_DIE_ATTACH | CE 95 010 00 01 | 08 | M3: 2026-04-16 (WW16); M6: 2026-07-16 (WW29); Y: 2026-01-15 (WW3) |
-| ESEC 2008 hsc3 plus -- ED09 | ED09 | BESI_DIE_ATTACH | CE 95 010 00 01 | 09 | M3: 2026-04-23 (WW17); M6: 2026-07-23 (WW30); Y: 2026-01-29 (WW5) |
-| ESEC 2008 hsc3 plus -- ED10 | ED10 | BESI_DIE_ATTACH | CE 95 010 00 01 | 10 | M3: 2026-05-14 (WW20); M6: 2026-08-06 (WW32); Y: 2026-02-19 (WW8) |
-| ESEC 2008 hsc3 plus -- ED11 | ED11 | BESI_DIE_ATTACH | CE 95 010 00 01 | 11 | M3: 2026-05-28 (WW22); M6: 2026-08-20 (WW34); Y: 2026-03-05 (WW10) |
-| ESEC 2008 hsc3 plus -- ED12 | ED12 | BESI_DIE_ATTACH | CE 95 010 00 01 | 12 | M3: 2026-01-01 (WW1); M6: 2026-09-10 (WW37); Y: 2026-03-26 (WW13) |
-| ESEC 2008 hsc3 plus -- ED13 | ED13 | BESI_DIE_ATTACH | CE 95 010 00 01 | 13 | M3: 2026-01-15 (WW3); M6: 2026-09-24 (WW39); Y: 2026-04-09 (WW15) |
-| ESEC 2008 hsc3 plus -- ED14 | ED14 | BESI_DIE_ATTACH | CE 95 010 00 01 | 14 | M3: 2026-01-29 (WW5); M6: 2026-10-08 (WW41); Y: 2026-04-23 (WW17) |
-| ESEC 2008 hsc3 plus -- ED15 | ED15 | BESI_DIE_ATTACH | CE 95 010 00 01 | 15 | M3: 2026-02-12 (WW7); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
-| ESEC 2008 hsc3 plus -- ED16 | ED16 | BESI_DIE_ATTACH | CE 95 010 00 01 | 16 | M3: 2026-02-26 (WW9); M6: 2026-11-05 (WW45); Y: 2026-05-21 (WW21) |
-| ESEC 2008 hsc3 plus -- ED17 | ED17 | BESI_DIE_ATTACH | CE 95 010 00 01 | 17 | M3: 2026-03-12 (WW11); M6: 2026-11-19 (WW47); Y: 2026-06-04 (WW23) |
-| ESEC 2008 hsc3 plus -- ED18 | ED18 | BESI_DIE_ATTACH | CE 95 010 00 01 | 18 | M3: 2026-03-26 (WW13); M6: 2026-01-01 (WW1); Y: 2026-06-18 (WW25) |
-| ESEC 2008 hsc3 plus -- ED19 | ED19 | BESI_DIE_ATTACH | CE 95 010 00 01 | 19 | M3: 2026-04-16 (WW16); M6: 2026-07-09 (WW28); Y: 2026-01-22 (WW4) |
-| ESEC 2008 hsc3 plus -- ED20 | ED20 | BESI_DIE_ATTACH | CE 95 010 00 01 | 20 | M3: 2026-04-23 (WW17); M6: 2026-07-16 (WW29); Y: 2026-01-29 (WW5) |
-| ASM Eagle Xtreme GoCu -- AW01 | AW01 | ASM_WIRE_BOND | CE 95 020 00 01 | · | M3: 2026-04-16 (WW16); M6: 2026-01-22 (WW4); Y: 2026-07-09 (WW28) |
-| ASM Eagle Xtreme GoCu -- AW02 | AW02 | ASM_WIRE_BOND | CE 95 020 00 01 | · | M3: 2026-01-29 (WW5); M6: 2026-04-23 (WW17); Y: 2026-10-08 (WW41) |
-| ASM Eagle Xtreme GoCu -- AW03 | AW03 | ASM_WIRE_BOND | CE 95 020 00 01 | · | M3: 2026-04-30 (WW18); M6: 2026-02-05 (WW6); Y: 2026-07-23 (WW30) |
-| ASM Eagle Xtreme GoCu -- AW04 | AW04 | ASM_WIRE_BOND | CE 95 020 00 01 | · | M3: 2026-02-12 (WW7); M6: 2026-05-07 (WW19); Y: 2026-10-22 (WW43) |
-| ASM Eagle Xtreme GoCu -- AW05 | AW05 | ASM_WIRE_BOND | CE 95 020 00 01 | · | M3: 2026-06-11 (WW24); M6: 2026-03-19 (WW12); Y: 2026-09-03 (WW36) |
-| ConnX-Elite Lite KW01 | KW01 | KNS_WIRE_BOND | CE 95 020 00 03 | 01 | M3: 2026-03-19 (WW12); M6: 2026-06-11 (WW24); Y: 2026-11-26 (WW48) |
-| ConnX-Elite Lite KW02 | KW02 | KNS_WIRE_BOND | CE 95 020 00 03 | 02 | M3: 2026-04-09 (WW15); M6: 2026-07-09 (WW28); Y: 2026-01-08 (WW2) |
-| ConnX-Elite Lite KW03 | KW03 | KNS_WIRE_BOND | CE 95 020 00 03 | 03 | M3: 2026-04-23 (WW17); M6: 2026-07-16 (WW29); Y: 2026-01-22 (WW4) |
-| ConnX-Elite Lite KW06 | KW06 | KNS_WIRE_BOND | CE 95 020 00 03 | 06 | M3: 2026-05-28 (WW22); M6: 2026-08-20 (WW34); Y: 2026-03-05 (WW10) |
-| ConnX-Elite Lite KW08 | KW08 | KNS_WIRE_BOND | CE 95 020 00 03 | 08 | M3: 2026-01-15 (WW3); M6: 2026-09-24 (WW39); Y: 2026-04-09 (WW15) |
-| ConnX-Elite Lite KW09 | KW09 | KNS_WIRE_BOND | CE 95 020 00 03 | 09 | M3: 2026-01-29 (WW5); M6: 2026-10-08 (WW41); Y: 2026-04-23 (WW17) |
-| ConnX-Elite Lite KW10 | KW10 | KNS_WIRE_BOND | CE 95 020 00 03 | 10 | M3: 2026-02-12 (WW7); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
-| ConnX-Elite Lite KW12 | KW12 | KNS_WIRE_BOND | CE 95 020 00 03 | 12 | M3: 2026-03-12 (WW11); M6: 2026-11-19 (WW47); Y: 2026-06-04 (WW23) |
-| ConnX-Elite Lite KW13 | KW13 | KNS_WIRE_BOND | CE 95 020 00 03 | 13 | M3: 2026-03-26 (WW13); M6: 2026-01-01 (WW1); Y: 2026-06-18 (WW25) |
-| ConnX-Elite Lite KW14 | KW14 | KNS_WIRE_BOND | CE 95 020 00 03 | 14 | M3: 2026-04-02 (WW14); M6: 2026-01-08 (WW2); Y: 2026-06-25 (WW26) |
-| ConnX-Elite Lite KW15 | KW15 | KNS_WIRE_BOND | CE 95 020 00 03 | 15 | M3: 2026-04-09 (WW15); M6: 2026-01-15 (WW3); Y: 2026-07-02 (WW27) |
-| ConnX-Elite Lite KW16 | KW16 | KNS_WIRE_BOND | CE 95 020 00 03 | 16 | M3: 2026-04-16 (WW16); M6: 2026-01-22 (WW4); Y: 2026-07-09 (WW28) |
-| ConnX-Elite Lite KW18 | KW18 | KNS_WIRE_BOND | CE 95 020 00 03 | 18 | M3: 2026-04-30 (WW18); M6: 2026-02-05 (WW6); Y: 2026-07-23 (WW30) |
-| Besi ESEC 3200 -- EW01 | EW01 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 01 | M3: 2026-04-16 (WW16); M6: 2026-07-16 (WW29); Y: 2026-01-22 (WW4) |
-| Besi ESEC 3100 plus -- EW02 | EW02 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 02 | M3: 2026-05-14 (WW20); M6: 2026-08-06 (WW32); Y: 2026-02-19 (WW8) |
-| Besi ESEC 3100 plus -- EW03 | EW03 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 03 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
-| Besi ESEC 3100 plus -- EW04 | EW04 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 04 | M3: 2026-03-05 (WW10); M6: 2026-11-12 (WW46); Y: 2026-05-28 (WW22) |
-| Besi ESEC 3100 -- EW05 | EW05 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 05 | M3: 2026-06-04 (WW23); M6: 2026-03-12 (WW11); Y: 2026-08-27 (WW35) |
-| Besi ESEC 3100 -- EW06 | EW06 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 06 | M3: 2026-03-19 (WW12); M6: 2026-11-26 (WW48); Y: 2026-06-11 (WW24) |
-| Besi ESEC 3100 plus -- EW07 | EW07 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 07 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
-| Besi ESEC 3100 plus -- EW08 | EW08 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 08 | M3: 2026-03-05 (WW10); M6: 2026-05-28 (WW22); Y: 2026-11-12 (WW46) |
-| Besi ESEC 3100 plus -- EW09 | EW09 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 09 | M3: 2026-02-19 (WW8); M6: 2026-10-29 (WW44); Y: 2026-05-14 (WW20) |
-| Besi ESEC 3100 plus -- EW10 | EW10 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 10 | M3: 2026-03-12 (WW11); M6: 2026-06-04 (WW23); Y: 2026-11-19 (WW47) |
-| Besi ESEC 3100 plus -- EW11 | EW11 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 11 | M3: 2026-02-12 (WW7); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
-| Besi ESEC 3100 plus -- EW12 | EW12 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | 12 | M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10); Y: 2026-08-20 (WW34) |
-| MB CME 3010 + TI2270 -- MB01 | MB01 | MB_ENCAPSULATION | CE 95 030 00 01 | 01 | M1: 2026-01-22 (WW4); M3: 2026-06-11 (WW24); M6: 2026-03-19 (WW12) |
-| MB CME 3060 + TI2280 -- MB02 | MB02 | MB_ENCAPSULATION | CE 95 030 00 01 | 02 | M1: 2026-01-01 (WW1); M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9) |
-| MB CME 3060 + TI2280 -- MB03 | MB03 | MB_ENCAPSULATION | CE 95 030 00 01 | 03 | M1: 2026-01-08 (WW2); M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10) |
-| MB CME 3060 + TI2280 -- MB04 | MB04 | MB_ENCAPSULATION | CE 95 030 00 01 | 04 | M1: 2026-02-19 (WW8); M3: 2026-01-22 (WW4); M6: 2026-04-16 (WW16) |
-| MB CME 3060 + TI2280 -- MB05 | MB05 | MB_ENCAPSULATION | CE 95 030 00 01 | 05 | M1: 2026-02-19 (WW8); M3: 2026-04-16 (WW16); M6: 2026-01-22 (WW4) |
-| MB CME 3060 + TI2280 -- MB06 | MB06 | MB_ENCAPSULATION | CE 95 030 00 01 | 06 | M1: 2026-01-08 (WW2); M3: 2026-04-30 (WW18); M6: 2026-02-05 (WW6) |
-| MB CME 3060 + TI2280 -- MB07 | MB07 | MB_ENCAPSULATION | CE 95 030 00 01 | 07 | M1: 2026-01-22 (WW4); M3: 2026-03-19 (WW12); M6: 2026-06-11 (WW24) |
-| MB CMT 6560 -- CM01 | CM01 | MB_E_TEST | CE 95 050 00 01 | CM01 | M1: 2026-01-01 (WW1); M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9) |
-| MB CMT 6530 -- CM02 | CM02 | MB_E_TEST | CE 95 050 00 01 | CM02 | M1: 2026-01-29 (WW5); M3: 2026-01-01 (WW1); M6: 2026-03-26 (WW13) |
-| MB CMT 6530 -- CM03 | CM03 | MB_E_TEST | CE 95 050 00 01 | CM03 | M1: 2026-01-15 (WW3); M3: 2026-02-12 (WW7); M6: 2026-05-07 (WW19) |
-| MB CMT 6530 -- T8 | T8 | MB_E_TEST | CE 95 050 00 01 | T8 | M1: 2026-01-01 (WW1); M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9) |
-| MB CMT 6530 -- T69 | T69 | MB_E_TEST | CE 95 050 00 01 | T69 | M1: 2026-01-08 (WW2); M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10) |
-| MS-620 ST01 [†](#contestable-mappings) | ST01 | MB_E_TEST | CE 95 050 00 01 | ST01 | M1: 2026-01-08 (WW2); M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10) |
-| OS Loading IMOS-01 | IMOS-01 | OS_LOADING | CE 95 050 00 03 | 1 | M1: 2026-01-22 (WW4); M3: 2026-02-19 (WW8); M6: 2026-05-14 (WW20) |
-| AVS35-01 | AVS35-01 | AVS_35 | CE 95 055 00 01 | 01 | M1: 2026-01-01 (WW1); M3: 2026-01-29 (WW5); M6: 2026-04-23 (WW17); Y: 2026-07-16 (WW29) |
-| AVS35-02 | AVS35-02 | AVS_35 | CE 95 055 00 01 | 02 | M1: 2026-01-01 (WW1); M3: 2026-01-29 (WW5); M6: 2026-04-23 (WW17); Y: 2026-07-16 (WW29) |
-| AVS35-03 | AVS35-03 | AVS_35 | CE 95 055 00 01 | 03 | M1: 2026-01-22 (WW4); M3: 2026-02-19 (WW8); M6: 2026-05-14 (WW20); Y: 2026-08-06 (WW32) |
-| Pre Mixer DP01 | DP01 | PRE_MIXER | CE 95 030 00 03 | 01 | M3: 2026-06-11 (WW24); M6: 2026-09-03 (WW36); Y: 2026-03-12 (WW11) |
-| Pre Mixer DP02 | DP02 | PRE_MIXER | CE 95 030 00 03 | 02 | M3: 2026-02-05 (WW6); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
-| Pre Mixer DP03 | DP03 | PRE_MIXER | CE 95 030 00 03 | 03 | M3: 2026-02-26 (WW9); M6: 2026-11-12 (WW46); Y: 2026-05-28 (WW22) |
-| Pre Mixer DP04 | DP04 | PRE_MIXER | CE 95 030 00 03 | 04 | M3: 2026-04-02 (WW14); M6: 2026-01-01 (WW1); Y: 2026-06-25 (WW26) |
-| Pre Mixer DP05 | DP05 | PRE_MIXER | CE 95 030 00 03 | 05 | M3: 2026-01-08 (WW2); M6: 2026-04-09 (WW15); Y: 2026-09-24 (WW39) |
-| PM01 | PM01 | POWATEC_MOUNTING | CE 95 012 00 02 | · | M1: 2026-01-01 (WW1) |
+| Source label (masterlist column A) | Code | Asset type | Document | Frequencies (first due date, work week) |
+|---|---|---|---|---|
+| ESEC 2008 sc3 plus -- ED01 | ED01 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-04-30 (WW18); M6: 2026-01-29 (WW5); Y: 2026-07-23 (WW30) |
+| ESEC 2008 sc3 plus -- ED02 | ED02 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-02-05 (WW6); M6: 2026-10-29 (WW44); Y: 2026-05-07 (WW19) |
+| ESEC 2008 hsc3 plus -- ED03 | ED03 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-06-18 (WW25); M6: 2026-09-17 (WW38); Y: 2026-03-19 (WW12) |
+| ESEC 2008 hsc3 plus -- ED04 | ED04 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-02-19 (WW8); M6: 2026-05-14 (WW20); Y: 2026-10-29 (WW44) |
+| ESEC 2008 hsc3 plus -- ED05 | ED05 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
+| ESEC 2008 hsc3 plus -- ED06 | ED06 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-05-28 (WW22); M6: 2026-08-20 (WW34); Y: 2026-03-05 (WW10) |
+| ESEC 2008 hsc3 plus -- ED07 | ED07 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
+| ESEC 2008 hsc3 plus -- ED08 | ED08 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-04-16 (WW16); M6: 2026-07-16 (WW29); Y: 2026-01-15 (WW3) |
+| ESEC 2008 hsc3 plus -- ED09 | ED09 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-04-23 (WW17); M6: 2026-07-23 (WW30); Y: 2026-01-29 (WW5) |
+| ESEC 2008 hsc3 plus -- ED10 | ED10 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-05-14 (WW20); M6: 2026-08-06 (WW32); Y: 2026-02-19 (WW8) |
+| ESEC 2008 hsc3 plus -- ED11 | ED11 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-05-28 (WW22); M6: 2026-08-20 (WW34); Y: 2026-03-05 (WW10) |
+| ESEC 2008 hsc3 plus -- ED12 | ED12 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-01-01 (WW1); M6: 2026-09-10 (WW37); Y: 2026-03-26 (WW13) |
+| ESEC 2008 hsc3 plus -- ED13 | ED13 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-01-15 (WW3); M6: 2026-09-24 (WW39); Y: 2026-04-09 (WW15) |
+| ESEC 2008 hsc3 plus -- ED14 | ED14 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-01-29 (WW5); M6: 2026-10-08 (WW41); Y: 2026-04-23 (WW17) |
+| ESEC 2008 hsc3 plus -- ED15 | ED15 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-02-12 (WW7); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
+| ESEC 2008 hsc3 plus -- ED16 | ED16 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-02-26 (WW9); M6: 2026-11-05 (WW45); Y: 2026-05-21 (WW21) |
+| ESEC 2008 hsc3 plus -- ED17 | ED17 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-03-12 (WW11); M6: 2026-11-19 (WW47); Y: 2026-06-04 (WW23) |
+| ESEC 2008 hsc3 plus -- ED18 | ED18 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-03-26 (WW13); M6: 2026-01-01 (WW1); Y: 2026-06-18 (WW25) |
+| ESEC 2008 hsc3 plus -- ED19 | ED19 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-04-16 (WW16); M6: 2026-07-09 (WW28); Y: 2026-01-22 (WW4) |
+| ESEC 2008 hsc3 plus -- ED20 | ED20 | BESI_DIE_ATTACH | CE 95 010 00 01 | M3: 2026-04-23 (WW17); M6: 2026-07-16 (WW29); Y: 2026-01-29 (WW5) |
+| ASM Eagle Xtreme GoCu -- AW01 | AW01 | ASM_WIRE_BOND | CE 95 020 00 01 | M3: 2026-04-16 (WW16); M6: 2026-01-22 (WW4); Y: 2026-07-09 (WW28) |
+| ASM Eagle Xtreme GoCu -- AW02 | AW02 | ASM_WIRE_BOND | CE 95 020 00 01 | M3: 2026-01-29 (WW5); M6: 2026-04-23 (WW17); Y: 2026-10-08 (WW41) |
+| ASM Eagle Xtreme GoCu -- AW03 | AW03 | ASM_WIRE_BOND | CE 95 020 00 01 | M3: 2026-04-30 (WW18); M6: 2026-02-05 (WW6); Y: 2026-07-23 (WW30) |
+| ASM Eagle Xtreme GoCu -- AW04 | AW04 | ASM_WIRE_BOND | CE 95 020 00 01 | M3: 2026-02-12 (WW7); M6: 2026-05-07 (WW19); Y: 2026-10-22 (WW43) |
+| ASM Eagle Xtreme GoCu -- AW05 | AW05 | ASM_WIRE_BOND | CE 95 020 00 01 | M3: 2026-06-11 (WW24); M6: 2026-03-19 (WW12); Y: 2026-09-03 (WW36) |
+| ConnX-Elite Lite KW01 | KW01 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-03-19 (WW12); M6: 2026-06-11 (WW24); Y: 2026-11-26 (WW48) |
+| ConnX-Elite Lite KW02 | KW02 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-04-09 (WW15); M6: 2026-07-09 (WW28); Y: 2026-01-08 (WW2) |
+| ConnX-Elite Lite KW03 | KW03 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-04-23 (WW17); M6: 2026-07-16 (WW29); Y: 2026-01-22 (WW4) |
+| ConnX-Elite Lite KW06 | KW06 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-05-28 (WW22); M6: 2026-08-20 (WW34); Y: 2026-03-05 (WW10) |
+| ConnX-Elite Lite KW08 | KW08 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-01-15 (WW3); M6: 2026-09-24 (WW39); Y: 2026-04-09 (WW15) |
+| ConnX-Elite Lite KW09 | KW09 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-01-29 (WW5); M6: 2026-10-08 (WW41); Y: 2026-04-23 (WW17) |
+| ConnX-Elite Lite KW10 | KW10 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-02-12 (WW7); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
+| ConnX-Elite Lite KW12 | KW12 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-03-12 (WW11); M6: 2026-11-19 (WW47); Y: 2026-06-04 (WW23) |
+| ConnX-Elite Lite KW13 | KW13 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-03-26 (WW13); M6: 2026-01-01 (WW1); Y: 2026-06-18 (WW25) |
+| ConnX-Elite Lite KW14 | KW14 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-04-02 (WW14); M6: 2026-01-08 (WW2); Y: 2026-06-25 (WW26) |
+| ConnX-Elite Lite KW15 | KW15 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-04-09 (WW15); M6: 2026-01-15 (WW3); Y: 2026-07-02 (WW27) |
+| ConnX-Elite Lite KW16 | KW16 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-04-16 (WW16); M6: 2026-01-22 (WW4); Y: 2026-07-09 (WW28) |
+| ConnX-Elite Lite KW18 | KW18 | KNS_WIRE_BOND | CE 95 020 00 03 | M3: 2026-04-30 (WW18); M6: 2026-02-05 (WW6); Y: 2026-07-23 (WW30) |
+| Besi ESEC 3200 -- EW01 | EW01 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-04-16 (WW16); M6: 2026-07-16 (WW29); Y: 2026-01-22 (WW4) |
+| Besi ESEC 3100 plus -- EW02 | EW02 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-05-14 (WW20); M6: 2026-08-06 (WW32); Y: 2026-02-19 (WW8) |
+| Besi ESEC 3100 plus -- EW03 | EW03 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
+| Besi ESEC 3100 plus -- EW04 | EW04 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-03-05 (WW10); M6: 2026-11-12 (WW46); Y: 2026-05-28 (WW22) |
+| Besi ESEC 3100 -- EW05 | EW05 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-06-04 (WW23); M6: 2026-03-12 (WW11); Y: 2026-08-27 (WW35) |
+| Besi ESEC 3100 -- EW06 | EW06 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-03-19 (WW12); M6: 2026-11-26 (WW48); Y: 2026-06-11 (WW24) |
+| Besi ESEC 3100 plus -- EW07 | EW07 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9); Y: 2026-08-13 (WW33) |
+| Besi ESEC 3100 plus -- EW08 | EW08 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-03-05 (WW10); M6: 2026-05-28 (WW22); Y: 2026-11-12 (WW46) |
+| Besi ESEC 3100 plus -- EW09 | EW09 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-02-19 (WW8); M6: 2026-10-29 (WW44); Y: 2026-05-14 (WW20) |
+| Besi ESEC 3100 plus -- EW10 | EW10 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-03-12 (WW11); M6: 2026-06-04 (WW23); Y: 2026-11-19 (WW47) |
+| Besi ESEC 3100 plus -- EW11 | EW11 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-02-12 (WW7); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
+| Besi ESEC 3100 plus -- EW12 | EW12 | BESI_ESEC_WIRE_BOND | CE 95 020 00 02 | M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10); Y: 2026-08-20 (WW34) |
+| MB CME 3010 + TI2270 -- MB01 | MB01 | MB_ENCAPSULATION | CE 95 030 00 01 | M1: 2026-01-22 (WW4); M3: 2026-06-11 (WW24); M6: 2026-03-19 (WW12) |
+| MB CME 3060 + TI2280 -- MB02 | MB02 | MB_ENCAPSULATION | CE 95 030 00 01 | M1: 2026-01-01 (WW1); M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9) |
+| MB CME 3060 + TI2280 -- MB03 | MB03 | MB_ENCAPSULATION | CE 95 030 00 01 | M1: 2026-01-08 (WW2); M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10) |
+| MB CME 3060 + TI2280 -- MB04 | MB04 | MB_ENCAPSULATION | CE 95 030 00 01 | M1: 2026-02-19 (WW8); M3: 2026-01-22 (WW4); M6: 2026-04-16 (WW16) |
+| MB CME 3060 + TI2280 -- MB05 | MB05 | MB_ENCAPSULATION | CE 95 030 00 01 | M1: 2026-02-19 (WW8); M3: 2026-04-16 (WW16); M6: 2026-01-22 (WW4) |
+| MB CME 3060 + TI2280 -- MB06 | MB06 | MB_ENCAPSULATION | CE 95 030 00 01 | M1: 2026-01-08 (WW2); M3: 2026-04-30 (WW18); M6: 2026-02-05 (WW6) |
+| MB CME 3060 + TI2280 -- MB07 | MB07 | MB_ENCAPSULATION | CE 95 030 00 01 | M1: 2026-01-22 (WW4); M3: 2026-03-19 (WW12); M6: 2026-06-11 (WW24) |
+| MB CMT 6560 -- CM01 | CM01 | MB_E_TEST | CE 95 050 00 01 | M1: 2026-01-01 (WW1); M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9) |
+| MB CMT 6530 -- CM02 | CM02 | MB_E_TEST | CE 95 050 00 01 | M1: 2026-01-29 (WW5); M3: 2026-01-01 (WW1); M6: 2026-03-26 (WW13) |
+| MB CMT 6530 -- CM03 | CM03 | MB_E_TEST | CE 95 050 00 01 | M1: 2026-01-15 (WW3); M3: 2026-02-12 (WW7); M6: 2026-05-07 (WW19) |
+| MB CMT 6530 -- T8 | T8 | MB_E_TEST | CE 95 050 00 01 | M1: 2026-01-01 (WW1); M3: 2026-05-21 (WW21); M6: 2026-02-26 (WW9) |
+| MB CMT 6530 -- T69 | T69 | MB_E_TEST | CE 95 050 00 01 | M1: 2026-01-08 (WW2); M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10) |
+| MS-620 ST01 [†](#contestable-mappings) | ST01 | MB_E_TEST | CE 95 050 00 01 | M1: 2026-01-08 (WW2); M3: 2026-05-28 (WW22); M6: 2026-03-05 (WW10) |
+| OS Loading IMOS-01 | IMOS-01 | OS_LOADING | CE 95 050 00 03 | M1: 2026-01-22 (WW4); M3: 2026-02-19 (WW8); M6: 2026-05-14 (WW20) |
+| AVS35-01 | AVS35-01 | AVS_35 | CE 95 055 00 01 | M1: 2026-01-01 (WW1); M3: 2026-01-29 (WW5); M6: 2026-04-23 (WW17); Y: 2026-07-16 (WW29) |
+| AVS35-02 | AVS35-02 | AVS_35 | CE 95 055 00 01 | M1: 2026-01-01 (WW1); M3: 2026-01-29 (WW5); M6: 2026-04-23 (WW17); Y: 2026-07-16 (WW29) |
+| AVS35-03 | AVS35-03 | AVS_35 | CE 95 055 00 01 | M1: 2026-01-22 (WW4); M3: 2026-02-19 (WW8); M6: 2026-05-14 (WW20); Y: 2026-08-06 (WW32) |
+| Pre Mixer DP01 | DP01 | PRE_MIXER | CE 95 030 00 03 | M3: 2026-06-11 (WW24); M6: 2026-09-03 (WW36); Y: 2026-03-12 (WW11) |
+| Pre Mixer DP02 | DP02 | PRE_MIXER | CE 95 030 00 03 | M3: 2026-02-05 (WW6); M6: 2026-10-22 (WW43); Y: 2026-05-07 (WW19) |
+| Pre Mixer DP03 | DP03 | PRE_MIXER | CE 95 030 00 03 | M3: 2026-02-26 (WW9); M6: 2026-11-12 (WW46); Y: 2026-05-28 (WW22) |
+| Pre Mixer DP04 | DP04 | PRE_MIXER | CE 95 030 00 03 | M3: 2026-04-02 (WW14); M6: 2026-01-01 (WW1); Y: 2026-06-25 (WW26) |
+| Pre Mixer DP05 | DP05 | PRE_MIXER | CE 95 030 00 03 | M3: 2026-01-08 (WW2); M6: 2026-04-09 (WW15); Y: 2026-09-24 (WW39) |
+| PM01 | PM01 | POWATEC_MOUNTING | CE 95 012 00 02 | M1: 2026-01-01 (WW1) |
 
 ## Left unplanned for a planner — 3
 
-Owner decision 2026-08-03, following a whole-branch review (the review found that the earlier "attach the document, just skip the schedule GET" approach could not work — attaching the document alone is enough to get a full schedule; the owner then ruled): when the PM document defines a frequency the plan does not schedule for this machine (a "surplus"), **only the machine is created — its PM document is deliberately NOT attached.** Attaching it would let the scheduler's bootstrap sweep (`schedule-rule-bootstrap.service.ts`, invoked from every `SchedulerService` sweep — hourly, on by default) materialise a FULL schedule for this machine within the hour, dated in the past, including the surplus frequency the owner reserved for a planner. With no document attached there is nothing for that sweep to iterate, so the schedule genuinely stays empty — no `schedule_rule` rows exist at all. **A planner must (1) attach the document named in the table below (the one that WOULD have been attached), using the `Machine #` value below as the machineNumber to enter when attaching it. If it is mistyped, it can be corrected afterwards with `PATCH /asset-documents/{id}` — the machine number is not fixed at attach time. Then (2) set each frequency's due date.** Until that happens, this machine has no PM document and no schedule. This is intentional, not a gap or a failure.
+Owner decision 2026-08-03, following a whole-branch review (the review found that the earlier "attach the document, just skip the schedule GET" approach could not work — attaching the document alone is enough to get a full schedule; the owner then ruled): when the PM document defines a frequency the plan does not schedule for this machine (a "surplus"), **only the machine is created — its PM document is deliberately NOT attached.** Attaching it would let the scheduler's bootstrap sweep (`schedule-rule-bootstrap.service.ts`, invoked from every `SchedulerService` sweep — hourly, on by default) materialise a FULL schedule for this machine within the hour, dated in the past, including the surplus frequency the owner reserved for a planner. With no document attached there is nothing for that sweep to iterate, so the schedule genuinely stays empty — no `schedule_rule` rows exist at all. **A planner must (1) attach the document named in the table below (the one that WOULD have been attached), then (2) set each frequency's due date.** Until that happens, this machine has no PM document and no schedule. This is intentional, not a gap or a failure. (There is no `Machine #` value to enter when attaching it — see "Machine number" above.)
 
-| Source label | Code | Asset type | Document to attach | Machine # (value to enter when attaching — not yet applied) | Surplus frequency (form defines it, plan does not schedule it) |
-|---|---|---|---|---|---|
-| ASM Eagle Xtreme GoCu -- AW06 | AW06 | ASM_WIRE_BOND | CE 95 020 00 01 | · (this document has no fillable blank for a machine number) | Y |
-| BD01 | BD01 | BUMP_DISPENSING | CE 95 043 00 01 | · (this document has no fillable blank for a machine number) | Y |
-| EP01 | EP01 | EMERALD_PICK_PLACE | CE 95 012 00 01 | · (this document has no fillable blank for a machine number) | M3 |
+| Source label | Code | Asset type | Document to attach | Surplus frequency (form defines it, plan does not schedule it) |
+|---|---|---|---|---|
+| ASM Eagle Xtreme GoCu -- AW06 | AW06 | ASM_WIRE_BOND | CE 95 020 00 01 | Y |
+| BD01 | BD01 | BUMP_DISPENSING | CE 95 043 00 01 | Y |
+| EP01 | EP01 | EMERALD_PICK_PLACE | CE 95 012 00 01 | M3 |
 
 ## Skipped — 1
 

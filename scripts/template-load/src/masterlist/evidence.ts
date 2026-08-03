@@ -8,8 +8,9 @@
  * template catalogue the CLI assembled from the committed YAML, so this
  * module never touches the filesystem or the network itself, and it renders
  * identically for a dry run or a completed apply — `MachineImportResult`
- * holds the same computed `dueDates`/`dueWeeks`/`machineNumber` either way
- * (see `import.ts`'s `processMapped`).
+ * holds the same computed `dueDates`/`dueWeeks` either way (see `import.ts`'s
+ * `processMapped`). It carries no machine number — see `MACHINE_NUMBER_NOTE`
+ * below for why.
  *
  * One row per machine, in the masterlist's own order, keyed by the SOURCE
  * LABEL (`MasterlistRow.label` — verbatim column A) rather than just the
@@ -47,6 +48,22 @@ const CONTESTABLE_MAPPINGS: Record<string, string> = {
     'ST01-1M.pdf", titled "MB E-Test Preventive Maintenance Record ST01", document ' +
     "CE 95 050 00 01. See `mapping.ts`'s `^ms-620` rule.",
 };
+
+/**
+ * Owner ruling 2026-08-03: the blank in eight of the twelve PM form titles
+ * (`ED____`, `KW___`, `EW_____`, `MB_____`, `DP_____`, `AVS 35-____`,
+ * `IMOS 0__`, `______`) is filled in by hand by the technician when they
+ * complete the record, not decided by this migration — confirmed by the
+ * signed specimen `April 2026/ED01.pdf`, which shows `01` handwritten into
+ * `ED____`. This migration does not compute or send a value for it (see
+ * `import.ts`'s file header); stated once, here, rather than repeated per
+ * table below.
+ */
+const MACHINE_NUMBER_NOTE =
+  "The blank in a form's title is filled in by hand by the technician when they complete " +
+  'the record, so this migration deliberately leaves it unset — no field on the ' +
+  'record-capture screen sets it yet either, so a printed record shows it blank until that ' +
+  'capture exists.';
 
 function dueDatesCell(m: MachineImportResult): string {
   const entries = Object.entries(m.dueDates).sort(([a], [b]) => sortFreq(a, b));
@@ -121,6 +138,8 @@ export function renderImportEvidence(report: ImportReport, meta: EvidenceMeta): 
     `| Unmapped / hard-error — blocked, needs an owner decision | ${blocked.length} |`,
     `| **Total rows in the masterlist** | **${report.machines.length}** |`,
     '',
+    `**Machine number.** ${MACHINE_NUMBER_NOTE}`,
+    '',
   );
 
   // ---- Imported, with a schedule ---------------------------------------------
@@ -130,18 +149,14 @@ export function renderImportEvidence(report: ImportReport, meta: EvidenceMeta): 
     'One row per machine, in the order the masterlist lists them. `Frequencies` is the FIRST ' +
       `planned due date the importer set for each frequency in ${year}, with the masterlist's ` +
       'own WORK WEEK in parentheses — the interval then carries each one forward from there. ' +
-      "`Machine #` is the value filled into the template's blank (`machineNumberFor`, decision " +
-      '4) — cross-check every row, including this column, against the same row of the ' +
-      'spreadsheet before `--apply`.',
+      'There is no `Machine #` column — see "Machine number" above.',
     '',
-    '| Source label (masterlist column A) | Code | Asset type | Document | Machine # | Frequencies (first due date, work week) |',
-    '|---|---|---|---|---|---|',
+    '| Source label (masterlist column A) | Code | Asset type | Document | Frequencies (first due date, work week) |',
+    '|---|---|---|---|---|',
   );
   for (const m of imported) {
     push(
-      `| ${labelCell(m)} | ${m.code} | ${m.assetTypeCode ?? '·'} | ${documentFor(m, templates)} | ${
-        m.machineNumber ?? '·'
-      } | ${dueDatesCell(m)} |`,
+      `| ${labelCell(m)} | ${m.code} | ${m.assetTypeCode ?? '·'} | ${documentFor(m, templates)} | ${dueDatesCell(m)} |`,
     );
   }
   push('');
@@ -162,20 +177,16 @@ export function renderImportEvidence(report: ImportReport, meta: EvidenceMeta): 
       'With no document attached there is nothing for that sweep to iterate, so the schedule ' +
       'genuinely stays empty — no `schedule_rule` rows exist at all. **A planner must (1) ' +
       'attach the document named in the table below (the one that WOULD have been attached), ' +
-      'using the `Machine #` value below as the machineNumber to enter when attaching it. If ' +
-      'it is mistyped, it can be corrected afterwards with `PATCH /asset-documents/{id}` — the ' +
-      "machine number is not fixed at attach time. Then (2) set each frequency's due date.** " +
-      'Until that happens, this machine has ' +
-      'no PM document and no schedule. This is intentional, not a gap or a failure.',
+      "then (2) set each frequency's due date.** Until that happens, this machine has " +
+      'no PM document and no schedule. This is intentional, not a gap or a failure. (There is ' +
+      'no `Machine #` value to enter when attaching it — see "Machine number" above.)',
     '',
-    '| Source label | Code | Asset type | Document to attach | Machine # (value to enter when attaching — not yet applied) | Surplus frequency (form defines it, plan does not schedule it) |',
-    '|---|---|---|---|---|---|',
+    '| Source label | Code | Asset type | Document to attach | Surplus frequency (form defines it, plan does not schedule it) |',
+    '|---|---|---|---|---|',
   );
   for (const m of leftUnplanned) {
     push(
-      `| ${labelCell(m)} | ${m.code} | ${m.assetTypeCode ?? '·'} | ${documentFor(m, templates)} | ${
-        m.machineNumber ?? '· (this document has no fillable blank for a machine number)'
-      } | ${m.surplus.join(', ') || '·'} |`,
+      `| ${labelCell(m)} | ${m.code} | ${m.assetTypeCode ?? '·'} | ${documentFor(m, templates)} | ${m.surplus.join(', ') || '·'} |`,
     );
   }
   push('');

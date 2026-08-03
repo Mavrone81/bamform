@@ -59,7 +59,7 @@ describe('plannedDueDates', () => {
 describe('runImport — I4 review fix: a completed rule is never rewound on re-run', () => {
   const BASE = 'http://fake-bamform-i4.test';
   const templates: Record<string, ImportTemplateRef> = {
-    ASSET_A: { documentNumber: 'DOC-A', title: 'Some Record ___' },
+    ASSET_A: { documentNumber: 'DOC-A' },
   };
 
   function row(label: string, code: string, visits: PlannedVisit[]): MasterlistRow {
@@ -209,7 +209,7 @@ describe('runImport — I4 review fix: a completed rule is never rewound on re-r
  */
 describe('runImport — surplus decision 2026-08-03 (whole-branch review): no document is attached', () => {
   const templates: Record<string, ImportTemplateRef> = {
-    ASSET_A: { documentNumber: 'DOC-A', title: 'Some Record ___' },
+    ASSET_A: { documentNumber: 'DOC-A' },
   };
 
   function row(label: string, code: string, visits: PlannedVisit[]): MasterlistRow {

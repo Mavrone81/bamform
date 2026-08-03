@@ -92,7 +92,6 @@ describe('computePastDueSummary', () => {
     leftUnplanned: false,
     dueDates: {},
     dueWeeks: {},
-    machineNumber: null,
     surplus: [],
   };
 

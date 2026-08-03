@@ -120,7 +120,7 @@ function loadTemplateCatalogue(yamlDir: string): {
   for (const file of files) {
     const doc = parseYaml(readFileSync(join(yamlDir, file), 'utf8'));
     formFrequencies[doc.assetTypeCode] = [...new Set(doc.items.map((i) => i.frequency as string))];
-    templates[doc.assetTypeCode] = { documentNumber: doc.documentNumber, title: doc.title };
+    templates[doc.assetTypeCode] = { documentNumber: doc.documentNumber };
   }
   return { formFrequencies, templates };
 }

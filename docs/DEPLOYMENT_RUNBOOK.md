@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.8 |
+| Revision | 0.9 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -29,6 +29,7 @@
 | 0.6 | 3 Aug 2026 | §3.6 fix round 2 (quality re-review): the mid-run-failure banner could report a false "no writes were logged" all-clear when the process died DURING a write (writes are now logged before AND after the network call, so an in-flight write shows as "outcome unknown" instead); Step 4.1 now says to keep the ORIGINAL pre-`--apply` machine-count baseline across a retry, not a freshly recorded one | Lead Engineer | _(pending)_ |
 | 0.7 | 3 Aug 2026 | §3.6 owner decisions: (1) a left-unplanned (surplus) machine now gets NO PM document attached, only the machine — the prior "skip the schedule GET" approach was proven wrong (the scheduler's bootstrap sweep materialises a full schedule for any active document regardless), so Step 2 and Step 4.3 are corrected; (2) the plan is imported with its true, mostly-historical dates as written — no rolling forward — so the CLI now prints a `PAST-DUE` count after every run (dry run and apply), and Step 3 gains a prominent pre-`--apply` warning that clearing the resulting backlog re-anchors each machine's schedule via `CompletionCascadeService`, flattening the masterlist's deliberate stagger | Lead Engineer | _(pending)_ |
 | 0.8 | 3 Aug 2026 | Final review fixes: (I1) Step 2's "left unplanned" wording no longer claims `machineNumber` can only be set at attach time — it names `PATCH /asset-documents/{id}` as the correction path, since the API accepts it there too; (M1) a surplus row now still hard-errors if its template is not loaded in the target environment (previously silently skipped that check); (M2) the CLI's past-due warning undercounted the first sweep's real impact — job generation fires within a lead-time window, not only for rules already past due — so it now prints BOTH counts, and Step 1's sample output and Step 3's STOP box are corrected from "181 of 220" alone to "181 past due / 193 on the first sweep, of 220" | Lead Engineer | _(pending)_ |
+| 0.9 | 3 Aug 2026 | Owner decision: this migration no longer computes or sends a `machineNumber` — the blank in eight of the twelve PM form titles is filled in BY HAND by the technician on the printed record, not decided by this migration (confirmed by the signed specimen `April 2026/ED01.pdf`). `mapping.ts`'s `machineNumberFor` is deleted; the evidence file's `Machine #` column is removed and replaced with a plain statement of the above. Step 2 is corrected accordingly, and now says plainly that the blank prints unfilled on every generated record today, since nothing — not this migration, not the record-capture screen — fills it | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -382,12 +383,21 @@ and writes `scripts/template-load/evidence/masterlist-import.md`.
 This is the artefact to diff against the paper masterlist, row by row, **before** anyone runs
 `--apply`. It has these sections:
 
+- **Machine number.** Owner ruling 2026-08-03: eight of the twelve PM forms carry a blank in
+  their title (`ED____`, `KW___`, `EW_____`, `MB_____`, `DP_____`, `AVS 35-____`, `IMOS 0__`,
+  `______`), and that blank is filled in **by hand by the technician** when they complete the
+  record — not decided by this migration. This is confirmed by the signed specimen `April
+  2026/ED01.pdf`, which shows `01` handwritten into `ED____`. This importer no longer computes
+  or sends a `machineNumber` at all (an earlier version did; that logic — `mapping.ts`'s
+  `machineNumberFor` — has been deleted). There is no field on the record-capture screen either,
+  so **the blank prints unfilled on every generated record today** — that is a known, separate
+  gap this migration deliberately does not paper over, not something to chase in the evidence
+  file. The evidence file has no `Machine #` column for the same reason.
 - **Machines imported with a schedule** — one row per machine: source label (verbatim column A,
-  so it matches the spreadsheet text directly), code, asset type, PM document, the
-  `machineNumber` that will print on every maintenance record, and every frequency with its
-  first planned due date **alongside the masterlist's own work week** (e.g. `M6: 2026-01-29
-  (WW5)`) — cross-check the work week, not the ISO date, against the spreadsheet's own WW
-  columns.
+  so it matches the spreadsheet text directly), code, asset type, PM document, and every
+  frequency with its first planned due date **alongside the masterlist's own work week** (e.g.
+  `M6: 2026-01-29 (WW5)`) — cross-check the work week, not the ISO date, against the
+  spreadsheet's own WW columns.
 - **Left unplanned for a planner** — machines where the PM document defines a frequency the
   plan does not schedule (a "surplus"). **Only the machine is created — its PM document is
   deliberately NOT attached** — a whole-branch review found that an earlier "attach the document,
@@ -399,11 +409,8 @@ This is the artefact to diff against the paper masterlist, row by row, **before*
   the owner reserved for a planner. With no document attached there is nothing for that sweep to
   iterate, so the schedule genuinely stays empty — no `schedule_rule` rows exist for it. A
   planner must (1) attach the document the evidence file names for that row (the one that WOULD
-  have been attached), using the evidence file's `Machine #` value for that row as the
-  machineNumber to enter when attaching it (`·` there means that document's title has no
-  fillable blank, so there is nothing to enter), then (2) set each frequency's date. On the
-  reference dataset this is exactly **3 machines: `AW06`, `BD01`, `EP01`**. This is intentional,
-  not a defect.
+  have been attached), then (2) set each frequency's date. On the reference dataset this is
+  exactly **3 machines: `AW06`, `BD01`, `EP01`**. This is intentional, not a defect.
 - **Skipped** — `DDA 03` only. It is deliberately absent: the owner confirmed the machine is not
   on site, and it is matched by its label so it cannot silently reappear under a different code.
 - **Unmapped / hard-error** — rows the importer could not place without guessing (no asset-type

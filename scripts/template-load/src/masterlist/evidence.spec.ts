@@ -4,27 +4,25 @@
  *
  * `renderImportEvidence` is pure (no filesystem/network access) and 161+
  * lines — exactly the kind of function CI should be pinning. Asserts every
- * mandated section renders (source label/code/asset type/document/machine
- * number/frequencies for the imported table, plus left-unplanned, skipped
- * and unmapped/hard-error sections) and that a machine's frequencies render
- * WITH their work week (review fix round 1, IMPORTANT-4).
+ * mandated section renders (source label/code/asset type/document for the
+ * imported table, plus left-unplanned, skipped and unmapped/hard-error
+ * sections) and that a machine's frequencies render WITH their work week
+ * (review fix round 1, IMPORTANT-4).
+ *
+ * Owner ruling 2026-08-03: the migration no longer computes or sends a
+ * `machineNumber` (the blank in a form's title is filled in by hand by the
+ * technician, not by this migration — see `import.ts`'s file header). There
+ * is therefore no `Machine #` column and no `machineNumber` field on
+ * `MachineImportResult` any more; the tests below assert the column is
+ * gone and that the explanatory note is present exactly once.
  */
 import type { ImportReport, ImportTemplateRef, MachineImportResult } from './import';
 import { renderImportEvidence } from './evidence';
 
 const templates: Record<string, ImportTemplateRef> = {
-  BESI_DIE_ATTACH: {
-    documentNumber: 'CE 95 010 00 01',
-    title: 'ESEC Preventive Maintenance Record ED___',
-  },
-  ASM_WIRE_BOND: {
-    documentNumber: 'CE 95 020 00 01',
-    title: 'ASM Preventive Maintenance Record AW___',
-  },
-  MB_E_TEST: {
-    documentNumber: 'CE 95 050 00 01',
-    title: 'MB E-Test Preventive Maintenance Record______',
-  },
+  BESI_DIE_ATTACH: { documentNumber: 'CE 95 010 00 01' },
+  ASM_WIRE_BOND: { documentNumber: 'CE 95 020 00 01' },
+  MB_E_TEST: { documentNumber: 'CE 95 050 00 01' },
 };
 
 const base: Omit<MachineImportResult, 'label' | 'code' | 'assetTypeCode' | 'status'> = {
@@ -33,7 +31,6 @@ const base: Omit<MachineImportResult, 'label' | 'code' | 'assetTypeCode' | 'stat
   leftUnplanned: false,
   dueDates: {},
   dueWeeks: {},
-  machineNumber: null,
   surplus: [],
 };
 
@@ -46,7 +43,6 @@ const imported: MachineImportResult = {
   documentAttached: true,
   dueDates: { M6: '2026-01-29', M3: '2026-04-30', Y: '2026-07-23' },
   dueWeeks: { M6: 5, M3: 18, Y: 30 },
-  machineNumber: '01',
 };
 
 const contestable: MachineImportResult = {
@@ -58,15 +54,8 @@ const contestable: MachineImportResult = {
   documentAttached: true,
   dueDates: { M1: '2026-01-08' },
   dueWeeks: { M1: 2 },
-  machineNumber: 'ST01',
 };
 
-// ASM_WIRE_BOND's real template title has no fillable blank ("ASM
-// Preventive Maintenance Record AW___" here IS the blank form, but the
-// real yaml title is just "ASM Wire Bond Preventive Maintenance Record" —
-// see mapping.ts's machineNumberFor doc comment), so `machineNumber` is
-// legitimately null for this row — not suppressed because it is
-// left-unplanned.
 const leftUnplanned: MachineImportResult = {
   ...base,
   label: 'ASM Eagle Xtreme GoCu -- AW06',
@@ -75,30 +64,10 @@ const leftUnplanned: MachineImportResult = {
   status: 'imported',
   documentAttached: false,
   leftUnplanned: true,
-  machineNumber: null,
   surplus: ['Y'],
   message:
     'machine created only, no document attached (surplus: Y); a planner must attach ' +
     'CE 95 020 00 01 and set the dates',
-};
-
-// A left-unplanned row whose document DOES have a fillable blank — proves
-// the machine number is still carried through and rendered (not
-// blanket-suppressed by `leftUnplanned`/`documentAttached: false`) whenever
-// `machineNumberFor` actually produces one.
-const leftUnplannedWithNumber: MachineImportResult = {
-  ...base,
-  label: 'ESEC 2008 sc3 plus -- ED99',
-  code: 'ED99',
-  assetTypeCode: 'BESI_DIE_ATTACH',
-  status: 'imported',
-  documentAttached: false,
-  leftUnplanned: true,
-  machineNumber: '99',
-  surplus: ['Y'],
-  message:
-    'machine created only, no document attached (surplus: Y); a planner must attach ' +
-    'CE 95 010 00 01 and set the dates',
 };
 
 const skipped: MachineImportResult = {
@@ -121,8 +90,8 @@ const blocked: MachineImportResult = {
 
 const report: ImportReport = {
   dryRun: true,
-  machines: [imported, contestable, leftUnplanned, leftUnplannedWithNumber, skipped, blocked],
-  counts: { skipped: 1, unmapped: 1, hardError: 0, imported: 4, blocked: 1, leftUnplanned: 2 },
+  machines: [imported, contestable, leftUnplanned, skipped, blocked],
+  counts: { skipped: 1, unmapped: 1, hardError: 0, imported: 3, blocked: 1, leftUnplanned: 1 },
 };
 
 describe('renderImportEvidence', () => {
@@ -152,9 +121,36 @@ describe('renderImportEvidence', () => {
     expect(out).toContain('Y: 2026-07-23 (WW30)');
   });
 
-  it('shows the machine number column', () => {
-    // ED01's row: "... | CE 95 010 00 01 | 01 | M3: ..."
-    expect(out).toMatch(/CE 95 010 00 01 \| 01 \|/);
+  it('does not render a Machine # column in any table header (owner ruling 2026-08-03: technician-filled, not migration-set)', () => {
+    const headerRows = out.split('\n').filter((l) => l.startsWith('| Source label'));
+    expect(headerRows.length).toBeGreaterThan(0);
+    for (const header of headerRows) {
+      expect(header).not.toContain('Machine #');
+    }
+    expect(out).not.toContain('machineNumber');
+  });
+
+  it('states plainly, exactly once, that the blank is filled in by hand by the technician', () => {
+    const needle = 'filled in by hand by the technician when they complete';
+    const occurrences = out.split(needle).length - 1;
+    expect(occurrences).toBe(1);
+    expect(out).toContain(
+      "The blank in a form's title is filled in by hand by the technician when they complete " +
+        'the record, so this migration deliberately leaves it unset',
+    );
+    // Honest about the consequence: nothing fills it today, not even the app.
+    expect(out).toMatch(/no field on the.*record-capture screen sets it/);
+  });
+
+  it("the imported table's header row has no Machine # column", () => {
+    const headerRow = out
+      .split('\n')
+      .find((l) => l.startsWith('| Source label (masterlist column A)'));
+    expect(headerRow).toBeDefined();
+    expect(headerRow).not.toContain('Machine #');
+    expect(headerRow).toBe(
+      '| Source label (masterlist column A) | Code | Asset type | Document | Frequencies (first due date, work week) |',
+    );
   });
 
   it('lists the left-unplanned machine with its surplus frequency and reason', () => {
@@ -174,30 +170,17 @@ describe('renderImportEvidence', () => {
     expect(section).toContain('CE 95 020 00 01');
   });
 
-  it("renders a left-unplanned row's real machine number, when its template has one, as the value to enter when attaching — not suppressed to '·'", () => {
-    // ED99's document (BESI_DIE_ATTACH) DOES have a fillable blank, so the
-    // computed value ('99') must still show up on this row even though the
-    // document was never attached.
-    const row = out.split('\n').find((l) => l.startsWith('| ESEC 2008 sc3 plus -- ED99'));
-    expect(row).toBeDefined();
-    expect(row).toContain('| 99 |');
-    expect(row).toContain('| Y |');
-  });
-
-  it("renders AW06's row with an explanatory placeholder, not a bare '·', for the row that genuinely has no machine number", () => {
-    const row = out.split('\n').find((l) => l.startsWith('| ASM Eagle Xtreme GoCu -- AW06'));
-    expect(row).toBeDefined();
-    expect(row).toContain('no fillable blank');
-  });
-
-  it('the left-unplanned table header explains the Machine # column is a value to enter, not an already-applied fact', () => {
+  it("the left-unplanned table's header row has no Machine # column", () => {
     const section = out.slice(
       out.indexOf('## Left unplanned for a planner'),
       out.indexOf('## Skipped'),
     );
     const header = section.split('\n').find((l) => l.startsWith('| Source label'));
     expect(header).toBeDefined();
-    expect(header).toMatch(/to enter when attaching/);
+    expect(header).not.toContain('Machine #');
+    expect(header).toBe(
+      '| Source label | Code | Asset type | Document to attach | Surplus frequency (form defines it, plan does not schedule it) |',
+    );
   });
 
   it('lists the skipped and blocked rows with their reasons', () => {
