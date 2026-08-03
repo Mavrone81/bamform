@@ -68,6 +68,14 @@ export function Menu() {
     // grants nothing beyond that one write, and ADMIN gets it here too
     // rather than only through the admin area.
     ...(canAdjustSchedule ? [{ label: 'Machine schedules', to: '/schedule' }] : []),
+    // Slice 31-PLANNER — the year grid across every machine. Same gate as
+    // "Machine schedules" above and for the same reason: it is the screen
+    // where a PM plan is actually laid out, and the visits it opens are moved
+    // through the very same `PUT /assets/{assetId}/schedule`. Offering it to a
+    // role that cannot move anything would be offering a read-only wall chart
+    // under a planning menu. Presentation only — `GET /schedule` itself is
+    // open to every authenticated caller, and the URL stays reachable.
+    ...(canAdjustSchedule ? [{ label: 'Maintenance plan', to: '/planner' }] : []),
     // `from=menu` lets the Delegations screen point its back link here
     // rather than at the queue (review D-4) — presentation only, the router
     // still matches on pathname alone.

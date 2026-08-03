@@ -12,5 +12,6 @@ export * from './sync';
 export * from './queue';
 export * from './delegation';
 export * from './report';
+export * from './planner';
 export * from './user';
 export * from './mfa';

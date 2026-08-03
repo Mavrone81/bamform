@@ -664,6 +664,49 @@ export interface paths {
     patch: operations['updateAssetDocument'];
     trace?: never;
   };
+  '/schedule': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Every machine's schedule across a date window — the planner grid
+     * @description Slice 31-PLANNER. The CROSS-MACHINE sibling of
+     *     `GET /assets/{assetId}/schedule`, which can only answer "when is THIS
+     *     machine due". This answers "what is due in week 12", across every
+     *     machine in the caller's area scope — the question `ML-S-MFT-00015`
+     *     (76 machines down the side, 52 work weeks across) exists to answer,
+     *     and the one that had to be answerable here before that spreadsheet
+     *     could be retired.
+     *
+     *     Carries NO role gate, exactly like `GET /assets/{assetId}/schedule`:
+     *     every authenticated user may read a schedule, and gating an aggregate
+     *     of rows the caller may already read one machine at a time would only
+     *     remove access from MAINTAINER, DOC_CONTROLLER and AUDITOR. Area
+     *     scoping (PR-API-10) is enforced in the repository and is the real
+     *     boundary — an out-of-scope machine is ABSENT from the page (a
+     *     collection read), not a 403 (which is what the single-asset read
+     *     returns).
+     *
+     *     Adjusting a date is NOT done here: `PUT /assets/{assetId}/schedule`
+     *     remains the only write, still PLANNER/TEAM_LEADER/ENGINEER/ADMIN.
+     *
+     *     `from`/`to` are inclusive and both default to the current calendar
+     *     year (work week 1 starts 1 January). A malformed, inverted or
+     *     excessively long window is refused with 422 rather than silently
+     *     defaulted.
+     */
+    get: operations['listPlannerSchedule'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/approval-routes': {
     parameters: {
       query?: never;
@@ -2239,6 +2282,83 @@ export interface components {
       nextDueOn: string;
       adjustedReason?: string | null;
       active: boolean;
+    };
+    /**
+     * @description Slice 31-PLANNER — one `schedule_rule` as the cross-machine planner
+     *     grid needs it: the machine (the grid's row header), the document, the
+     *     rule, every date it falls due inside the requested window, and what
+     *     one visit of it actually carries.
+     *
+     *     Mirrors `plannerScheduleRowSchema` in `shared/src/planner.ts` exactly
+     *     (ADR-002). It carries the same `id`/`assetDocumentId`/`frequency`
+     *     identity `ScheduleRule` does, so a row read here is adjusted through
+     *     the existing `PUT /assets/{assetId}/schedule` — one write path, not
+     *     two.
+     */
+    PlannerScheduleRow: {
+      /**
+       * Format: uuid
+       * @description The `schedule_rule` id — the same identity `GET /assets/{assetId}/schedule` returns.
+       */
+      id: string;
+      /** Format: uuid */
+      assetId: string;
+      /**
+       * @example AW09
+       * @example WB12
+       */
+      assetCode: string;
+      assetDescription?: string | null;
+      /** Format: uuid */
+      areaId?: string | null;
+      /** Format: uuid */
+      assetDocumentId: string;
+      /** @example CE 95 020 00 03 */
+      documentNumber: string;
+      /**
+       * @description The document's title with its fillable run substituted, exactly as
+       *     `GET /assets/{assetId}/documents` resolves it. Derived at read
+       *     time, never stored resolved.
+       */
+      documentTitle: string;
+      frequency: components['schemas']['Frequency'];
+      /**
+       * @example 1
+       * @example 3
+       * @example 6
+       * @example 12
+       */
+      intervalMonths: number;
+      /** Format: date */
+      nextDueOn: string;
+      /** Format: date */
+      lastCompletedOn?: string | null;
+      adjustedReason?: string | null;
+      active: boolean;
+      /**
+       * @description Every date inside the requested window this rule falls due on,
+       *     ascending: `nextDueOn`, then `nextDueOn + n·intervalMonths`
+       *     (calendar months, clamped to month end) while the result stays in
+       *     the window.
+       *
+       *     A PROJECTION, not a promise — completion, voiding or a manual
+       *     adjustment moves `nextDueOn` and every later visit with it
+       *     (ADR-009). MAY BE EMPTY when the rule's interval steps clean over
+       *     a short window; the row is still returned so the caller can see
+       *     the machine has a rule at all.
+       */
+      plannedDates: string[];
+      /**
+       * @description What ONE visit of this rule carries: the union of every frequency
+       *     on the SAME document whose interval divides this rule's (PR-053
+       *     frequency cascade). A yearly visit subsumes the 6M, 3M and 1M
+       *     items, so it is materially heavier than a monthly one — which is
+       *     what lets a planner weigh a week's load instead of counting cells.
+       *
+       *     Computed from the rules that actually exist on the document, not
+       *     from divisibility alone (U-CAS-05).
+       */
+      cascadeFrequencies: components['schemas']['Frequency'][];
     };
     ScheduleAdjust: {
       /**
@@ -3925,6 +4045,42 @@ export interface operations {
       403: components['responses']['Problem'];
       404: components['responses']['Problem'];
       409: components['responses']['Problem'];
+      422: components['responses']['Problem'];
+    };
+  };
+  listPlannerSchedule: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+        /** @description Inclusive window start. Defaults to 1 January of the current year. */
+        from?: string;
+        /** @description Inclusive window end. Defaults to 31 December of the current year. */
+        to?: string;
+        /** @description Intersected with (never widening) the caller's own area scope. */
+        areaId?: string;
+        assetTypeId?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated schedule rules with their projected visits */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['PlannerScheduleRow'][];
+          };
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
       422: components['responses']['Problem'];
     };
   };

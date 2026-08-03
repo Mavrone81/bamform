@@ -1,30 +1,27 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  adjustAssetSchedule,
   getAssetSchedule,
   listAssetDocuments,
   type AssetDocument,
-  type Problem,
   type ScheduleRule,
 } from '../api/admin-client';
 import { getCurrentUser, onCurrentUserChange } from '../auth';
 import { rolesCanAdjustSchedule } from '../lib/permissions';
 import { todayLocalIsoDate } from '../lib/local-date';
-import type { components } from '../api/generated/openapi-types';
+import {
+  FREQUENCY_LABELS,
+  MIN_REASON,
+  ScheduleAdjustForm,
+  refusalText,
+} from './ScheduleAdjustForm';
 
-type Frequency = components['schemas']['Frequency'];
-
-const FREQUENCY_LABELS: Record<Frequency, string> = {
-  M1: 'Monthly (1M)',
-  M3: 'Quarterly (3M)',
-  M6: 'Half-yearly (6M)',
-  Y: 'Yearly',
-};
-
-/** Mirrors the server's `.trim().min(10)` on `adjustedReason` exactly
- * (`shared/src/schedule.ts`). Exported so the test can pin it against the
- * real schema instead of a second hand-typed `10` that could drift. */
-export const MIN_REASON = 10;
+/**
+ * Re-exported, not redefined. Slice 31-PLANNER moved the editor itself into
+ * `ScheduleAdjustForm` so `/planner` writes through the same code path;
+ * `MachineSchedule.schema-contract.test.ts` keeps importing the floor from
+ * here, and it is the same constant either way.
+ */
+export { MIN_REASON };
 
 /**
  * Slice 29-SCHEDULE-UI — the missing half of the owner's backfill workflow.
@@ -97,10 +94,7 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
   const canAdjust = rolesCanAdjustSchedule(user?.roles);
 
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
-  const [draftDate, setDraftDate] = useState('');
-  const [draftReason, setDraftReason] = useState('');
   const [rowMsg, setRowMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
 
   const loadAll = useCallback(async () => {
     const [scheduleRes, documentsRes] = await Promise.all([
@@ -141,11 +135,6 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
     void loadAll();
   }, [loadAll]);
 
-  function refusalText(status: number, problem?: Problem, what = 'This change'): string {
-    if (status === 0) return `Could not reach the server. ${what} needs a connection.`;
-    return problem?.detail ?? problem?.title ?? `The server refused this request (${status}).`;
-  }
-
   function banner(msg: { tone: 'good' | 'bad'; text: string } | null) {
     if (!msg) return null;
     return (
@@ -162,58 +151,14 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
   function openEdit(rule: ScheduleRule) {
     setRowMsg(null);
     setEditingRuleId(rule.id);
-    setDraftDate(rule.nextDueOn);
-    setDraftReason('');
   }
 
   function cancelEdit() {
     setEditingRuleId(null);
-    setDraftDate('');
-    setDraftReason('');
     setRowMsg(null);
-  }
-
-  async function saveAdjustment(
-    event: FormEvent,
-    rule: ScheduleRule,
-    doc: AssetDocument | undefined,
-  ) {
-    event.preventDefault();
-    setBusy(true);
-    setRowMsg(null);
-    try {
-      const result = await adjustAssetSchedule(assetId, {
-        // Always sent — see the module doc. Never inferred from "there is
-        // only one row on screen right now": the row itself always knows
-        // which document it belongs to.
-        assetDocumentId: rule.assetDocumentId,
-        frequency: rule.frequency,
-        nextDueOn: draftDate,
-        adjustedReason: draftReason.trim(),
-      });
-      if (result.ok) {
-        setEditingRuleId(null);
-        setDraftDate('');
-        setDraftReason('');
-        setRowMsg({ tone: 'good', text: `Next due date saved for ${rowLabel(rule, doc)}.` });
-        await loadAll();
-      } else {
-        setRowMsg({ tone: 'bad', text: refusalText(result.status, result.problem) });
-      }
-    } finally {
-      setBusy(false);
-    }
   }
 
   const documentById = new Map((documents ?? []).map((doc) => [doc.id, doc]));
-  const reasonTooShort = draftReason.trim().length < MIN_REASON;
-  // Review IMPORTANT-1: `<input type="date">` is clearable — a planner
-  // retyping the date on a tablet picker can send `nextDueOn: ''`, which
-  // fails `z.string().min(1)` (shared/src/schedule.ts) as a 422 whose whole
-  // detail is "Request body failed validation.", naming no field. Exactly
-  // the state `MachineDocuments.tsx` (review M-1) went out of its way to
-  // make unreachable for its own text field; the date field needs the same.
-  const dateMissing = draftDate === '';
 
   return (
     <section aria-labelledby="machine-schedule-heading" className="card">
@@ -331,55 +276,30 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
                   </p>
                 )}
 
+                {/* Slice 31-PLANNER: the editor itself is `ScheduleAdjustForm`,
+                    shared verbatim with the planner grid. This screen decides
+                    WHICH rule is being edited and what to do afterwards; it no
+                    longer owns a second copy of the fields, the ten-character
+                    floor or the PUT. */}
                 {canAdjust &&
                   (isEditing ? (
-                    <form
-                      onSubmit={(e) => void saveAdjustment(e, rule, doc)}
-                      noValidate
-                      aria-label={`Adjust schedule for ${rowLabel(rule, doc)}`}
-                    >
-                      <div className="field">
-                        <label htmlFor={`schedule-date-${rule.id}`}>Next due date</label>
-                        <input
-                          id={`schedule-date-${rule.id}`}
-                          type="date"
-                          value={draftDate}
-                          onChange={(e) => setDraftDate(e.target.value)}
-                        />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`schedule-reason-${rule.id}`}>Reason for this change</label>
-                        <textarea
-                          id={`schedule-reason-${rule.id}`}
-                          rows={3}
-                          value={draftReason}
-                          onChange={(e) => setDraftReason(e.target.value)}
-                          aria-describedby={`schedule-reason-hint-${rule.id}`}
-                        />
-                        <p className="field-hint" id={`schedule-reason-hint-${rule.id}`}>
-                          Required, at least {MIN_REASON} characters. Recorded permanently in the
-                          audit trail.
-                        </p>
-                      </div>
-                      {banner(rowMsg)}
-                      <div className="dialog-actions">
-                        <button type="button" disabled={busy} onClick={cancelEdit}>
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          className="btn-primary"
-                          disabled={busy || reasonTooShort || dateMissing}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </form>
+                    <ScheduleAdjustForm
+                      assetId={assetId}
+                      assetDocumentId={rule.assetDocumentId}
+                      frequency={rule.frequency}
+                      currentNextDueOn={rule.nextDueOn}
+                      label={rowLabel(rule, doc)}
+                      onCancel={cancelEdit}
+                      onSaved={async (message) => {
+                        setEditingRuleId(null);
+                        setRowMsg({ tone: 'good', text: message });
+                        await loadAll();
+                      }}
+                    />
                   ) : (
                     <div className="dialog-actions">
                       <button
                         type="button"
-                        disabled={busy}
                         aria-label={`Adjust next due date for ${rowLabel(rule, doc)}`}
                         onClick={() => openEdit(rule)}
                       >

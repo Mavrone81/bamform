@@ -155,6 +155,15 @@ export const EXPECTED_ROUTE_ROLES: Readonly<Record<string, readonly string[]>> =
  * slice-18-documented reason: annotating it with a role list would have
  * REMOVED read access from MAINTAINER, DOC_CONTROLLER and AUDITOR, which
  * "add, never remove" forbids.
+ *
+ * `GET /api/v1/schedule` (slice 31-PLANNER) is here for the SAME reason,
+ * consciously and not by copy: it is the cross-machine aggregate of exactly
+ * the rows the per-asset read above already serves those three roles, one
+ * machine at a time. Gating it would remove nothing they cannot reach and
+ * would only cost an AUDITOR 76 requests to see one grid. The screen it feeds
+ * (`/planner`) is offered only to the planning roles, but that is a menu
+ * decision, never enforcement (non-negotiable #6), and the WRITE it leads to
+ * — `PUT /api/v1/assets/{assetId}/schedule` — keeps its own role gate above.
  */
 export const ROUTES_WITHOUT_ROLE_GATES: readonly string[] = [
   'GET /api/v1/healthz',
@@ -178,6 +187,9 @@ export const ROUTES_WITHOUT_ROLE_GATES: readonly string[] = [
   'GET /api/v1/assets/{assetId}',
   'GET /api/v1/assets/{assetId}/history',
   'GET /api/v1/assets/{assetId}/schedule',
+  // Slice 31-PLANNER — the cross-machine schedule read behind `/planner`.
+  // See the note above this list for why it carries no gate.
+  'GET /api/v1/schedule',
   // Slice 27-ASSETDOC — the maintainer's form picker (the owner's process
   // step 4, "select the form to start"). Role-gating it would REMOVE read
   // access from MAINTAINER, which is the one role that most needs it; it is
