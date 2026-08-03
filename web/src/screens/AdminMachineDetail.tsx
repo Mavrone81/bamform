@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from '../router';
 import { MachineDocuments } from '../components/MachineDocuments';
+import { MachineSchedule } from '../components/MachineSchedule';
 import {
   getAsset,
   listAreas,
@@ -289,6 +290,13 @@ export function AdminMachineDetail({ assetId }: { assetId: string }) {
           tagging documents, and a machine carrying none is inert. The one
           thing an admin must not scroll past is the alarm that says so. */}
       <MachineDocuments assetId={assetId} />
+
+      {/* ---- Schedule (slice 29-SCHEDULE-UI) ----
+          Directly below Documents, not further down the page: tagging a
+          document and setting its real dates are the SAME sitting's work — a
+          document with a schedule anchored in the past raises a job on the
+          very next scheduler sweep. See MachineSchedule's own module doc. */}
+      <MachineSchedule assetId={assetId} />
 
       {/* ---- Details ---- */}
       <section aria-labelledby="machine-details-heading" className="card">

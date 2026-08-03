@@ -37,6 +37,8 @@ export type FormTemplate = components['schemas']['FormTemplate'];
 export type AssetDocument = components['schemas']['AssetDocument'];
 export type AssetDocumentCreate = components['schemas']['AssetDocumentCreate'];
 export type AssetDocumentUpdate = components['schemas']['AssetDocumentUpdate'];
+export type ScheduleRule = components['schemas']['ScheduleRule'];
+export type ScheduleAdjust = components['schemas']['ScheduleAdjust'];
 
 export interface AdminPage<T> {
   data: T[];
@@ -218,6 +220,44 @@ export function updateAssetDocument(
 ): Promise<AdminResult<AssetDocument>> {
   return call(`/asset-documents/${encodeURIComponent(id)}`, {
     method: 'PATCH',
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
+}
+
+// -------------------------------------------------- machine schedule (29)
+
+/**
+ * `GET /assets/{assetId}/schedule` — carries NO `@Roles()` server-side: every
+ * authenticated user may read a machine's schedule (area-scoped inside the
+ * service), same as `listAssetDocuments`. It ALSO lazily bootstraps
+ * `schedule_rule` rows on first read (`ScheduleRuleBootstrapService`) — a GET
+ * can itself create rows, and that is intentional self-healing, not a
+ * side-effect to route around.
+ *
+ * Bare array response, no `{ data }`/`page` envelope: a small,
+ * fixed-cardinality set (one row per scheduled frequency per document) scoped
+ * to ONE machine, exactly like `listAssetDocuments`.
+ */
+export function getAssetSchedule(assetId: string): Promise<AdminResult<ScheduleRule[]>> {
+  return call(`/assets/${encodeURIComponent(assetId)}/schedule`);
+}
+
+/**
+ * `PUT /assets/{assetId}/schedule` — PLANNER, TEAM_LEADER, ENGINEER or ADMIN.
+ * Adjusts exactly ONE frequency per call and requires `adjustedReason` (min
+ * 10 characters); it is recorded to the audit trail. `assetDocumentId` is
+ * optional only when the machine carries a single document at that
+ * frequency — callers here always send it (slice 27: a machine can carry
+ * several documents scheduled at the same frequency, and naming the wrong
+ * one would silently move a different document's due date).
+ */
+export function adjustAssetSchedule(
+  assetId: string,
+  body: ScheduleAdjust,
+): Promise<AdminResult<ScheduleRule>> {
+  return call(`/assets/${encodeURIComponent(assetId)}/schedule`, {
+    method: 'PUT',
     headers: jsonHeaders,
     body: JSON.stringify(body),
   });

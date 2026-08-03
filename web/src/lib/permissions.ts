@@ -20,3 +20,16 @@ export const RAISE_JOB_ROLES = ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'] a
 export function rolesCanRaiseJob(roles: readonly string[] | undefined): boolean {
   return roles?.some((role) => (RAISE_JOB_ROLES as readonly string[]).includes(role)) ?? false;
 }
+
+/**
+ * `PUT /assets/{assetId}/schedule` — `asset-schedule.controller.ts#adjustSchedule`.
+ * `GET` carries no `@Roles()` at all (everyone may read a schedule), so there
+ * is no `rolesCanReadSchedule` to mirror — only the write side needs gating.
+ */
+export const ADJUST_SCHEDULE_ROLES = ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'] as const;
+
+export function rolesCanAdjustSchedule(roles: readonly string[] | undefined): boolean {
+  return (
+    roles?.some((role) => (ADJUST_SCHEDULE_ROLES as readonly string[]).includes(role)) ?? false
+  );
+}
