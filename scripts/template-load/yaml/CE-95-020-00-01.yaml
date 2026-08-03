@@ -6,7 +6,7 @@ title: ASM Wire Bond Preventive Maintenance Record
 asset_type_code: ASM_WIRE_BOND
 asset_type_name: ASM Wire Bond
 printed_revision: C
-current_revision: D
+current_revision: C
 source_file: CE 95 020 00 01 ASM Wire Bond Preventive Maintenance Record.xlsx
 source_sha256: 9879d71ec54875f3116e8e9338848efd803c34222c13337737155d39c342e7da
 sheet_name: CE 95 020 00 01
@@ -344,15 +344,14 @@ measurements:
       - J65
   - section: Bond Force Calibration
     description: Bond Force Verification Input Force 100g
-    unit: g
-    spec_type: RANGE
-    lower_limit: 95
-    upper_limit: 105
+    unit: null
+    spec_type: TEXT
+    lower_limit: null
+    upper_limit: null
     nominal: null
     tolerance: null
-    spec_display: 95 - 105 g
-    source_spec_display: 95 - 28 g
-    correction: B-04 (client revision D)
+    spec_display: 95 - 28 g
+    unparsed_reason: printed range is high-to-low (95 > 28) — inverted per INV-04; client decision required
     stable_key: CE-95-020-00-01::bond-force-verification-input-force-100g
     display_order: 12
     source_row: 66
@@ -473,9 +472,6 @@ notes:
     sections. Where the label merely wrapped across rows the join is correct. Client to confirm per
     group: accept the joined label, or split per §4.1 (a parser change + regeneration).
   - >-
-    B-04: specification at J66 printed as "95 - 28 g" — loaded as "95 - 105 g" per B-04 (client
-    revision D).
-  - >-
     N-11: section label "Wire Clamp Calibration Wire Clamp Force Verification" was space-joined from
     3 printed labels ("Wire Clamp Calibration", "Wire Clamp Force", "Verification") in the group
     starting at row 68. TLP §4.1's rule is "verbatim; blank inherits the section above", which for a
@@ -496,12 +492,13 @@ notes:
     Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client decision.
     PR-TLP-05.
   - >-
+    N-01: "Bond Force Verification Input Force 100g" specification printed as "95 - 28 g" —
+    high-to-low printed range with no unit; inverted per INV-04 and NOT client-dispositioned (unlike
+    B-04). Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client
+    decision. PR-TLP-05.
+  - >-
     N-05: TLP §5.1 states 21 calibration measurements; the source sheet has 20 measurement rows. The
     source wins; discrepancy recorded.
-  - >-
-    B-04 load revision: B-04: Bond Force Verification Input Force 100g specification printed as "95
-    - 28 g" (inverted, INV-04). Client decision (TLP §3 option (a)): corrected to 95 - 105 g and
-    loaded as new revision D through the normal authoring workflow.
 ambiguities:
   - code: N-11
     message: >-
@@ -514,12 +511,6 @@ ambiguities:
     cells:
       - B58
       - B59
-  - code: B-04
-    message: >-
-      specification at J66 printed as "95 - 28 g" — loaded as "95 - 105 g" per B-04 (client revision
-      D).
-    cells:
-      - J66
   - code: N-11
     message: >-
       section label "Wire Clamp Calibration Wire Clamp Force Verification" was space-joined from 3
@@ -552,6 +543,14 @@ ambiguities:
       PR-TLP-05.
     cells:
       - J61
+  - code: N-01
+    message: >-
+      "Bond Force Verification Input Force 100g" specification printed as "95 - 28 g" — high-to-low
+      printed range with no unit; inverted per INV-04 and NOT client-dispositioned (unlike B-04).
+      Loaded as spec_type TEXT verbatim (the B-04 option (b) mechanism), pending a client decision.
+      PR-TLP-05.
+    cells:
+      - J66
   - code: N-05
     message: >-
       TLP §5.1 states 21 calibration measurements; the source sheet has 20 measurement rows. The

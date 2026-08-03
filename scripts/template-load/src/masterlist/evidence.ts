@@ -1,0 +1,248 @@
+// scripts/template-load/src/masterlist/evidence.ts
+/**
+ * Slice masterlist-migration — Task 6: the evidence file.
+ *
+ * This is the artefact the owner actually diffs against the paper masterlist
+ * BEFORE anyone runs `--apply` — the CLI (`cli.ts`) prints a reminder to do
+ * exactly that. Rendered purely from an `ImportReport` (Task 4) plus the
+ * template catalogue the CLI assembled from the committed YAML, so this
+ * module never touches the filesystem or the network itself, and it renders
+ * identically for a dry run or a completed apply — `MachineImportResult`
+ * holds the same computed `dueDates`/`dueWeeks` either way (see `import.ts`'s
+ * `processMapped`). It carries no machine number — see `MACHINE_NUMBER_NOTE`
+ * below for why.
+ *
+ * One row per machine, in the masterlist's own order, keyed by the SOURCE
+ * LABEL (`MasterlistRow.label` — verbatim column A) rather than just the
+ * code, because that is the text a reviewer holding the spreadsheet actually
+ * matches against. Due dates are shown alongside their WORK WEEK
+ * (`dueWeeks`), because that is the unit the paper masterlist itself is
+ * written in (fix round 2, review finding IMPORTANT-4) — without it, the
+ * owner would have to convert every ISO date back to a work week by hand to
+ * check it.
+ *
+ * Deliberately does NOT stamp a generation timestamp or an absolute
+ * filesystem path (review finding, minor): both would make this file
+ * non-reproducible byte-for-byte across two dry runs of the SAME input,
+ * which defeats a `git status --porcelain` drift check analogous to
+ * `scripts/template-load/RUNBOOK.md` §1's. `file` is rendered as given by
+ * the CLI (which passes a path relative to the repo root when run from
+ * there, per the runbook's documented precondition).
+ */
+import type { ImportReport, ImportTemplateRef, MachineImportResult } from './import';
+
+const FREQ_ORDER = ['M1', 'M3', 'M6', 'Y'];
+const sortFreq = (a: string, b: string): number => FREQ_ORDER.indexOf(a) - FREQ_ORDER.indexOf(b);
+
+/**
+ * The one row settled by a signed PM record rather than by the label
+ * pattern (owner decision 1, 2026-08-03) — the row an owner reading the
+ * spreadsheet is most likely to challenge, since `MS-620 ST01`'s label
+ * gives no visible reason to land on the `MB_E_TEST` family. Keyed by code;
+ * extend this map if a future decision settles another row the same way.
+ */
+const CONTESTABLE_MAPPINGS: Record<string, string> = {
+  ST01:
+    'assetTypeCode MB_E_TEST was NOT inferred from this label ("MS-620") — it was settled by ' +
+    'owner decision 1 (2026-08-03) from a signed PM record, "PM Document 2026/February 2026/' +
+    'ST01-1M.pdf", titled "MB E-Test Preventive Maintenance Record ST01", document ' +
+    "CE 95 050 00 01. See `mapping.ts`'s `^ms-620` rule.",
+};
+
+/**
+ * Owner ruling 2026-08-03: the blank in eight of the twelve PM form titles
+ * (`ED____`, `KW___`, `EW_____`, `MB_____`, `DP_____`, `AVS 35-____`,
+ * `IMOS 0__`, `______`) is filled in by hand by the technician when they
+ * complete the record, not decided by this migration — confirmed by the
+ * signed specimen `April 2026/ED01.pdf`, which shows `01` handwritten into
+ * `ED____`. This migration does not compute or send a value for it (see
+ * `import.ts`'s file header); stated once, here, rather than repeated per
+ * table below.
+ */
+const MACHINE_NUMBER_NOTE =
+  "The blank in a form's title is filled in by hand by the technician when they complete " +
+  'the record, so this migration deliberately leaves it unset — no field on the ' +
+  'record-capture screen sets it yet either, so a printed record shows it blank until that ' +
+  'capture exists.';
+
+function dueDatesCell(m: MachineImportResult): string {
+  const entries = Object.entries(m.dueDates).sort(([a], [b]) => sortFreq(a, b));
+  if (entries.length === 0) return '·';
+  return entries
+    .map(([freq, date]) => `${freq}: ${date} (WW${m.dueWeeks[freq] ?? '?'})`)
+    .join('; ');
+}
+
+function documentFor(m: MachineImportResult, templates: Record<string, ImportTemplateRef>): string {
+  if (!m.assetTypeCode) return '·';
+  return templates[m.assetTypeCode]?.documentNumber ?? '·';
+}
+
+function labelCell(m: MachineImportResult): string {
+  return CONTESTABLE_MAPPINGS[m.code] ? `${m.label} [†](#contestable-mappings)` : m.label;
+}
+
+export interface EvidenceMeta {
+  /** Path to the masterlist workbook this run read (`--file`, echoed
+   *  verbatim — pass a repo-root-relative path, not an absolute one, so
+   *  this file is reproducible across machines/runs of the same input). */
+  file: string;
+  /** Plan year (`--year`). */
+  year: number;
+  /** `assetTypeCode` -> its PM document, same catalogue the CLI passed to `runImport`. */
+  templates: Record<string, ImportTemplateRef>;
+}
+
+export function renderImportEvidence(report: ImportReport, meta: EvidenceMeta): string {
+  const { templates, file, year } = meta;
+  const lines: string[] = [];
+  const push = (...l: string[]) => lines.push(...l);
+
+  const imported = report.machines.filter((m) => m.status === 'imported' && !m.leftUnplanned);
+  const leftUnplanned = report.machines.filter((m) => m.leftUnplanned);
+  const skipped = report.machines.filter((m) => m.status === 'skipped');
+  const blocked = report.machines.filter(
+    (m) => m.status === 'unmapped' || m.status === 'hard-error',
+  );
+  const contestable = report.machines.filter((m) => CONTESTABLE_MAPPINGS[m.code]);
+
+  push(
+    '# Masterlist Import Evidence',
+    '',
+    '**Diff this file against the paper masterlist before anyone runs `--apply`.** It is ' +
+      'regenerated by every run of `npm run import:masterlist` — dry run or apply — from the ' +
+      'exact reconciliation the importer itself acted on, so what is listed here is exactly ' +
+      'what was (or would be) created. A dry run makes zero network calls, so producing this ' +
+      'file is always safe. **The source workbook below is authoritative for which masterlist ' +
+      'revision this reflects** — this file does not hardcode a document number or revision.',
+    '',
+    '| | |',
+    '|---|---|',
+    `| Source workbook | \`${file}\` |`,
+    `| Plan year | ${year} |`,
+    `| Mode | ${report.dryRun ? 'DRY RUN — no writes were made' : 'APPLY — writes were performed'} |`,
+    '',
+    '## Summary',
+    '',
+    'The CLI\'s own terminal summary counts a left-unplanned machine as "imported" (its machine ' +
+      'was created; its PM document was deliberately NOT attached — see below); the table below ' +
+      'splits that same total into "schedule planned" and "left unplanned" so the two numbers ' +
+      'reconcile instead of looking like a discrepancy.',
+    '',
+    '| | Count |',
+    '|---|---|',
+    `| **Imported total** (machine created/reused; document also attached EXCEPT for the left-unplanned rows below) — matches the CLI's \`imported\` count | ${imported.length + leftUnplanned.length} |`,
+    `| — of which schedule planned now | ${imported.length} |`,
+    `| — of which left unplanned for a planner (see below) | ${leftUnplanned.length} |`,
+    `| Skipped — owner decision (machine not on site) | ${skipped.length} |`,
+    `| Unmapped / hard-error — blocked, needs an owner decision | ${blocked.length} |`,
+    `| **Total rows in the masterlist** | **${report.machines.length}** |`,
+    '',
+    `**Machine number.** ${MACHINE_NUMBER_NOTE}`,
+    '',
+  );
+
+  // ---- Imported, with a schedule ---------------------------------------------
+  push(
+    `## Machines imported with a schedule — ${imported.length}`,
+    '',
+    'One row per machine, in the order the masterlist lists them. `Frequencies` is the FIRST ' +
+      `planned due date the importer set for each frequency in ${year}, with the masterlist's ` +
+      'own WORK WEEK in parentheses — the interval then carries each one forward from there. ' +
+      'There is no `Machine #` column — see "Machine number" above.',
+    '',
+    '| Source label (masterlist column A) | Code | Asset type | Document | Frequencies (first due date, work week) |',
+    '|---|---|---|---|---|',
+  );
+  for (const m of imported) {
+    push(
+      `| ${labelCell(m)} | ${m.code} | ${m.assetTypeCode ?? '·'} | ${documentFor(m, templates)} | ${dueDatesCell(m)} |`,
+    );
+  }
+  push('');
+
+  // ---- Left unplanned ----------------------------------------------------------
+  push(
+    `## Left unplanned for a planner — ${leftUnplanned.length}`,
+    '',
+    'Owner decision 2026-08-03, following a whole-branch review (the review found that the ' +
+      'earlier "attach the document, just skip the schedule GET" approach could not work — ' +
+      'attaching the document alone is enough to get a full schedule; the owner then ruled): ' +
+      'when the PM document defines a frequency the plan does not schedule for this machine ' +
+      '(a "surplus"), **only the machine is created — its PM document is deliberately NOT ' +
+      "attached.** Attaching it would let the scheduler's bootstrap sweep " +
+      '(`schedule-rule-bootstrap.service.ts`, invoked from every `SchedulerService` sweep — ' +
+      'hourly, on by default) materialise a FULL schedule for this machine within the hour, ' +
+      'dated in the past, including the surplus frequency the owner reserved for a planner. ' +
+      'With no document attached there is nothing for that sweep to iterate, so the schedule ' +
+      'genuinely stays empty — no `schedule_rule` rows exist at all. **A planner must (1) ' +
+      'attach the document named in the table below (the one that WOULD have been attached), ' +
+      "then (2) set each frequency's due date.** Until that happens, this machine has " +
+      'no PM document and no schedule. This is intentional, not a gap or a failure. (There is ' +
+      'no `Machine #` value to enter when attaching it — see "Machine number" above.)',
+    '',
+    '| Source label | Code | Asset type | Document to attach | Surplus frequency (form defines it, plan does not schedule it) |',
+    '|---|---|---|---|---|',
+  );
+  for (const m of leftUnplanned) {
+    push(
+      `| ${labelCell(m)} | ${m.code} | ${m.assetTypeCode ?? '·'} | ${documentFor(m, templates)} | ${m.surplus.join(', ') || '·'} |`,
+    );
+  }
+  push('');
+
+  // ---- Skipped -------------------------------------------------------------------
+  push(
+    `## Skipped — ${skipped.length}`,
+    '',
+    'Deliberately not imported, by owner decision — the machine is not on site.',
+    '',
+    '| Source label | Reason |',
+    '|---|---|',
+  );
+  for (const m of skipped) {
+    push(
+      `| ${m.label} | ${m.message ?? 'SKIPPED_LABELS — owner decision (machine not on site)'} |`,
+    );
+  }
+  push('');
+
+  // ---- Unmapped / hard-error ------------------------------------------------------
+  push(`## Unmapped / hard-error — ${blocked.length}`, '');
+  if (blocked.length === 0) {
+    push('None. Every row above was either imported, left unplanned, or deliberately skipped.', '');
+  } else {
+    push(
+      '**These rows were NOT imported and need an owner decision before this migration can be ' +
+        'considered complete.**',
+      '',
+      '| Source label | Code | Status | Reason |',
+      '|---|---|---|---|',
+    );
+    for (const m of blocked) {
+      push(`| ${m.label} | ${m.code} | ${m.status} | ${m.message ?? '·'} |`);
+    }
+    push('');
+  }
+
+  // ---- Contestable mappings --------------------------------------------------------
+  push('## Contestable mappings', '');
+  if (contestable.length === 0) {
+    push(
+      'None on this run — no row above was mapped by anything other than its label pattern.',
+      '',
+    );
+  } else {
+    push(
+      'Rows whose asset-type mapping is NOT visible from the label alone, so an owner reading ' +
+        'the spreadsheet is likely to challenge them without this note. Marked `†` above.',
+      '',
+    );
+    for (const m of contestable) {
+      push(`- **${m.label}** (${m.code}): ${CONTESTABLE_MAPPINGS[m.code]}`);
+    }
+    push('');
+  }
+
+  return lines.join('\n');
+}

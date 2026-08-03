@@ -1,11 +1,23 @@
 {
+  // `"jest"` is required, not incidental. `include` is `src/**/*.ts`, which
+  // pulls in src/masterlist/*.spec.ts — so with `"types": ["node"]` alone,
+  // `npx tsc --noEmit -p scripts/template-load` (the FIRST command an operator
+  // runs in scripts/template-load/RUNBOOK.md §1, presented as a gate they must
+  // clear) exited 2 with 292 × `Cannot find name 'describe'/'it'/'expect'` on a
+  // clean checkout. Excluding the specs instead would have silently narrowed
+  // the gate; the specs are real code and CI never typechecks this project
+  // directly — ts-jest does, via api/tsconfig.jest.json, from
+  // api/jest.unit.config.js's widened `roots`. @types/jest resolves from the
+  // repo-root node_modules. Adding jest globals to the CLI compile is inert at
+  // runtime: ts-node reads only compilerOptions, and `types` affects nothing
+  // emitted.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "module": "commonjs",
     "target": "ES2022",
     "moduleResolution": "node",
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node", "jest"]
   },
   "include": ["src/**/*.ts"]
 }

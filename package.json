@@ -41,7 +41,8 @@
     "test:offline": "npm run test:offline --workspace=web",
     "test:e2e": "npm run test:e2e --workspace=web",
     "test:a11y": "npm run test:a11y --workspace=web",
-    "gen:api-types": "npm run gen:api-types --workspace=web"
+    "gen:api-types": "npm run gen:api-types --workspace=web",
+    "import:masterlist": "ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/masterlist/cli.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

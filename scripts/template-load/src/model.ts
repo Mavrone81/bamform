@@ -20,7 +20,7 @@ export type AmbiguityCode =
   | 'B-01' // formula errors in Revision History header (docs 1, 9)
   | 'B-02' // revision letter gap (doc 1: 0,A,C,D,E — B absent)
   | 'B-03' // revision history dates out of chronological order
-  | 'B-04' // doc 4 '95 - 28 g' — corrected to 95–105 g by client revision D
+  | 'B-04' // doc 4 '95 - 28 g' — correction WITHDRAWN 2026-08-03; loaded verbatim as TEXT
   | 'B-06' // worksheet name copied from another document (doc 6)
   | 'N-01' // doc 4 ' -295 - -305' — high-to-low printed range, no unit; NOT dispositioned
   | 'N-02' // doc 6 '6.4 - 7,1 counts/gram' — comma decimal
