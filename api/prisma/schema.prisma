@@ -908,6 +908,28 @@ model ApprovalStep {
   // return/recall/void), whose caption comes from the action itself, and for
   // rows written before the column existed.
   stageLabel               String? @map("stage_label")
+  // INV-09 (20260801000000_approval_step_signatory_name_snapshot): the
+  // signatory's name AS IT READ WHEN THIS STEP WAS SIGNED, field-encrypted like
+  // every other personal column (PR-106/107). Same reasoning as `stageLabel`
+  // directly above, applied to the person rather than the caption: names were
+  // JOINED from `app_user.full_name_ct` at render time, so an admin editing a
+  // user retroactively rewrote the signatory printed on every archived record
+  // that person had ever signed — and `/integrity` could not see it, because
+  // the canonical record binds `actor_id`, not the name.
+  //
+  // Snapshotting rather than guarding `PATCH /users/{id}` is deliberate: a
+  // person's name legitimately changes (marriage, deed poll, or simply a typo),
+  // and refusing the edit would leave the system unable to represent that. The
+  // record keeps the name that was true at signing; the live user row stays
+  // freely editable.
+  //
+  // NULL for rows written before the column existed, and — fail-soft — for a
+  // row whose actor name could not be read at signing time. `buildSignatures`
+  // falls back to the live lookup in both cases, so this is additive and never
+  // blocks a signature.
+  actorNameCt              Bytes?  @map("actor_name_ct")
+  onBehalfOfNameCt         Bytes?  @map("on_behalf_of_name_ct")
+  signatoryNameDekVersion  Int?    @map("signatory_name_dek_version") @db.SmallInt
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 

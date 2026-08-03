@@ -462,7 +462,7 @@ describe('Asset documents — GET/POST /assets/{assetId}/documents, PATCH /asset
       // has to be able to tell it apart from a validation failure or a
       // "your document is archived" message, which would be false.
       expect(res.body).toMatchObject({
-        type: '/errors/archived-record-title-dependency',
+        type: '/errors/archived-record-dependency',
         title: 'An archived record depends on this value',
         status: 409,
       });
@@ -473,7 +473,7 @@ describe('Asset documents — GET/POST /assets/{assetId}/documents, PATCH /asset
       expect(res.body.errors).toContainEqual(
         expect.objectContaining({
           pointer: '/machineNumber',
-          code: 'ARCHIVED_RECORD_TITLE_DEPENDENCY',
+          code: 'ARCHIVED_RECORD_DEPENDENCY',
         }),
       );
 
@@ -494,7 +494,7 @@ describe('Asset documents — GET/POST /assets/{assetId}/documents, PATCH /asset
         .send({ machineNumber: '03' })
         .expect(409);
 
-      expect(res.body.type).toBe('/errors/archived-record-title-dependency');
+      expect(res.body.type).toBe('/errors/archived-record-dependency');
       expect(await storedMachineNumber(docId)).toBe('02');
     });
 

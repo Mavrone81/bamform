@@ -1,6 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { ApprovalActionT, Prisma } from '@prisma/client';
+import { decodeIdentityField } from '../auth/crypto/identity-codec';
 import { toBytes } from '../common/prisma-bytes';
+import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
+import type { FieldEncryptionService } from '../crypto/field-encryption';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface ApprovalStageWithRoles {
@@ -47,7 +50,12 @@ export interface CreateApprovalStepData {
  */
 @Injectable()
 export class ApprovalRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ApprovalRepository.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(FIELD_ENCRYPTION_SERVICE) private readonly fieldEncryption: FieldEncryptionService,
+  ) {}
 
   async getStageWithRoles(
     approvalRouteId: string,
@@ -131,13 +139,93 @@ export class ApprovalRepository {
     return tx.approvalStep.findMany({ where: { jobId }, orderBy: { actedAt: 'asc' } });
   }
 
+  /**
+   * INV-09 — the signatory's name AS IT READS NOW, re-encrypted under this
+   * step's own AAD, so the archived record keeps the name that was true when
+   * the signature was taken.
+   *
+   * Done HERE, at the single `approval_step` creation site, rather than in the
+   * three services that call it: a caller cannot forget it, and every action
+   * (submit, verify, return, recall, void) is covered by construction.
+   *
+   * FAIL-SOFT by design. A name that cannot be read — a user row whose
+   * ciphertext predates the current key, or any decrypt failure — must never
+   * block a signature: capture is the point of the system, and a missing
+   * snapshot degrades exactly to the pre-existing behaviour (`buildSignatures`
+   * falls back to the live lookup, as it does for every row written before this
+   * column existed). Logged without the name or the ciphertext.
+   */
+  private async snapshotSignatoryNames(
+    tx: Prisma.TransactionClient,
+    data: CreateApprovalStepData,
+  ): Promise<{
+    actorNameCt: Prisma.Bytes | null;
+    onBehalfOfNameCt: Prisma.Bytes | null;
+    signatoryNameDekVersion: number | null;
+  }> {
+    const none = { actorNameCt: null, onBehalfOfNameCt: null, signatoryNameDekVersion: null };
+    try {
+      const ids = [data.actorId, ...(data.onBehalfOfId ? [data.onBehalfOfId] : [])];
+      const users = await tx.appUser.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, fullNameCt: true, dekVersion: true },
+      });
+      const byId = new Map(users.map((u) => [u.id, u]));
+
+      const encodeFor = (
+        userId: string | null,
+        column: 'actor_name_ct' | 'on_behalf_of_name_ct',
+      ) => {
+        if (!userId) return null;
+        const user = byId.get(userId);
+        if (!user) return null;
+        const plaintext = decodeIdentityField(
+          user.fullNameCt,
+          user.dekVersion,
+          { column: 'full_name_ct', rowId: user.id },
+          this.fieldEncryption,
+        );
+        // Re-encrypted under THIS step's context: AAD binds the ciphertext to
+        // ('approval_step', column, step id), so it cannot be lifted onto
+        // another step or another column and still decrypt.
+        return this.fieldEncryption.encrypt(plaintext, {
+          table: 'approval_step',
+          column,
+          rowId: data.id,
+        });
+      };
+
+      const actor = encodeFor(data.actorId, 'actor_name_ct');
+      const onBehalf = encodeFor(data.onBehalfOfId, 'on_behalf_of_name_ct');
+      if (!actor && !onBehalf) {
+        return none;
+      }
+      return {
+        actorNameCt: actor ? toBytes(actor.ciphertext) : null,
+        onBehalfOfNameCt: onBehalf ? toBytes(onBehalf.ciphertext) : null,
+        signatoryNameDekVersion: (actor ?? onBehalf)!.dekVersion,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `approval step ${data.id}: signatory name not snapshotted (${
+          error instanceof Error ? error.name : 'unknown error'
+        }); the record will render the live name until this is corrected`,
+      );
+      return none;
+    }
+  }
+
   async createApprovalStep(tx: Prisma.TransactionClient, data: CreateApprovalStepData) {
+    const names = await this.snapshotSignatoryNames(tx, data);
     return tx.approvalStep.create({
       data: {
         id: data.id,
         jobId: data.jobId,
         stageOrdinal: data.stageOrdinal,
         stageLabel: data.stageLabel,
+        actorNameCt: names.actorNameCt,
+        onBehalfOfNameCt: names.onBehalfOfNameCt,
+        signatoryNameDekVersion: names.signatoryNameDekVersion,
         action: data.action,
         actorId: data.actorId,
         onBehalfOfId: data.onBehalfOfId,

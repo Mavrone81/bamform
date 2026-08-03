@@ -16,7 +16,7 @@ import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
 import { AreaScopeService } from '../common/area-scope';
 import {
-  archivedRecordTitleDependencyProblem,
+  archivedRecordDependencyProblem,
   conflictProblem,
   notFoundProblem,
   outOfScopeProblem,
@@ -260,10 +260,13 @@ export class AssetDocumentsService {
     // can sit on different revisions, so there is no single "the" title —
     // naming one real record's real title beats a synthesised one.
     const [first] = blocking;
-    throw archivedRecordTitleDependencyProblem({
+    const currentTitle = resolveTemplateTitle(first.templateTitle, existing.machineNumber);
+    const proposedTitle = resolveTemplateTitle(first.templateTitle, proposed);
+    throw archivedRecordDependencyProblem({
+      subject: 'the machine number in the document title',
+      change: `"${currentTitle}" would become "${proposedTitle}"`,
+      pointer: '/machineNumber',
       blockingJobNumbers: blocking.map((r) => r.jobNumber),
-      currentTitle: resolveTemplateTitle(first.templateTitle, existing.machineNumber),
-      proposedTitle: resolveTemplateTitle(first.templateTitle, proposed),
     });
   }
 

@@ -511,7 +511,18 @@ export interface paths {
     head?: never;
     /**
      * Update an asset. Deactivation only, never deletion.
-     * @description ENGINEER or ADMIN. `status`/`active` are the only removal mechanism (deactivation).
+     * @description ENGINEER or ADMIN. `status`/`active` are the only removal mechanism
+     *     (deactivation).
+     *
+     *     `code` and `description` are PRINTED on every record raised against this
+     *     machine (`code` twice — as the asset code and the machine code), and a
+     *     record's PDF is re-rendered live from current data on every request —
+     *     nothing is frozen at archive. Changing either is therefore REFUSED with
+     *     `/errors/archived-record-dependency` (409) when the machine has any
+     *     ARCHIVED record. Every other field — `manufacturer`, `model`, `areaId`,
+     *     `locationDetail`, `status`, `active` — does not appear on the record and
+     *     is never refused, so re-siting or retiring a machine always works. A
+     *     machine with no archived records is freely editable.
      */
     patch: operations['updateAsset'];
     trace?: never;
@@ -634,7 +645,7 @@ export interface paths {
      *     `machineNumber` is substituted into the template title at RENDER, and a
      *     record's PDF is re-rendered live from current data on every request —
      *     nothing is frozen at archive. A change is therefore REFUSED with
-     *     `/errors/archived-record-title-dependency` (409) when any ARCHIVED job
+     *     `/errors/archived-record-dependency` (409) when any ARCHIVED job
      *     on this document would print a different title as a result. The
      *     document is not frozen by the existence of archived records: the change
      *     is allowed when the title carries no fillable run, when the archived
@@ -3738,6 +3749,7 @@ export interface operations {
         };
       };
       404: components['responses']['Problem'];
+      409: components['responses']['Problem'];
       422: components['responses']['Problem'];
     };
   };

@@ -1,12 +1,24 @@
 import { Injectable } from '@nestjs/common';
-import { AuditActionT, Prisma, type Asset as AssetRow, type AssetType } from '@prisma/client';
+import {
+  AuditActionT,
+  JobStatusT,
+  Prisma,
+  type Asset as AssetRow,
+  type AssetType,
+} from '@prisma/client';
 import type { Asset, AssetCreate, AssetUpdate } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import { AreaScopeService } from '../common/area-scope';
 import type { ActorMeta } from '../common/actor-meta';
-import { conflictProblem, notFoundProblem, outOfScopeProblem } from '../common/domain-problems';
+import {
+  archivedRecordDependencyProblem,
+  conflictProblem,
+  notFoundProblem,
+  outOfScopeProblem,
+} from '../common/domain-problems';
 import { decodeCursor, normaliseLimit, paginate, type Page } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
+import { changedPrintedAssetFields } from './archived-asset-print-dependency';
 import { AssetsRepository } from './assets.repository';
 import { generateProvisionalAssetCode } from './machine-code';
 
@@ -184,6 +196,11 @@ export class AssetsService {
     // pass-through PATCH must not spuriously clear a flag nothing altered).
     const codeChanged = dto.code !== undefined && dto.code !== existing.code;
 
+    // INV-09 — refuse an edit that would rewrite what an already-archived,
+    // signed record prints. Only `code` and `description` reach the rendered
+    // record; every other column on this DTO is untouched by the guard.
+    await this.assertNoArchivedRecordDependsOnPrintedFields(existing, dto);
+
     try {
       return await this.prisma.$transaction(async (tx) => {
         const row = await tx.asset.update({
@@ -226,6 +243,59 @@ export class AssetsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * INV-09 — the archived-record guard for the machine's PRINTED fields.
+   *
+   * The exposure this closes: `asset.code` and `asset.description` are read
+   * live by `pdf-record-assembly.service.ts` (`assetCode`, `machineCode`,
+   * `assetDescription`) and a record's PDF is re-rendered from current data on
+   * every request — nothing is frozen at archive. So renaming a machine
+   * retroactively rewrote three printed fields on EVERY archived record for
+   * it, and `GET /records/{id}/integrity` still reported `intact: true`,
+   * because the canonical signed record binds `job.assetId` but none of the
+   * asset's descriptive columns (`canonical-job-record.ts`).
+   *
+   * Deliberately NOT a freeze of the machine: the guard looks only at the two
+   * columns that actually print, and only when their value changes. A machine
+   * with no archived records stays fully editable, `manufacturer`/`model`/
+   * `areaId`/`locationDetail`/`status`/`active` are never considered because
+   * they do not appear on the record at all, and a no-op re-send is allowed.
+   *
+   * SCOPE: this guards THIS endpoint. It is not a general immutability
+   * property of an archived record's printed content — see
+   * `shared/src/template-title.ts` for what that would take.
+   */
+  private async assertNoArchivedRecordDependsOnPrintedFields(
+    existing: AssetRow,
+    dto: AssetUpdate,
+  ): Promise<void> {
+    const changed = changedPrintedAssetFields(
+      { code: existing.code, description: existing.description },
+      { code: dto.code, description: dto.description },
+    );
+    if (changed.length === 0) {
+      return;
+    }
+
+    // Only now is the query worth doing — an edit touching nothing printed
+    // never pays for it.
+    const archivedJobs = await this.prisma.job.findMany({
+      where: { assetId: existing.id, status: JobStatusT.archived },
+      select: { jobNumber: true },
+      orderBy: { jobNumber: 'asc' },
+    });
+    if (archivedJobs.length === 0) {
+      return;
+    }
+
+    throw archivedRecordDependencyProblem({
+      subject: changed.map((f) => f.subject).join(' and '),
+      change: changed.map((f) => `"${f.before}" would become "${f.after}"`).join('; '),
+      pointer: changed[0].pointer,
+      blockingJobNumbers: archivedJobs.map((j) => j.jobNumber),
+    });
   }
 
   /** PR-API-10 for by-id reads: exists but out of scope is 403, not a silent 404. */

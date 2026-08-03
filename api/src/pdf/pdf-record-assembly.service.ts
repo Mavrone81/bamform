@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { ApprovalActionT } from '@prisma/client';
 import { resolveTemplateTitle } from '@bamform/shared';
 import { decodeIdentityField } from '../auth/crypto/identity-codec';
 import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
@@ -108,6 +109,48 @@ export class PdfRecordAssemblyService {
   }
 
   /**
+   * INV-09 — the signatory name SNAPSHOTTED onto the step at signing.
+   *
+   * This is what stops `PATCH /users/{id}` rewriting the person printed on an
+   * already-archived record: the name is read from the step, never joined from
+   * `app_user`, exactly as `stageLabel` is read from the step rather than
+   * joined from `approval_stage`.
+   *
+   * Returns `null` when there is no snapshot — every step written before the
+   * column existed, and any step whose snapshot failed soft (see
+   * `ApprovalRepository#snapshotSignatoryNames`). Callers fall back to the live
+   * lookup for those, preserving the pre-existing behaviour rather than
+   * printing nothing.
+   *
+   * A decrypt failure also returns `null` rather than throwing: a snapshot that
+   * cannot be read must never make an archived record unprintable — an auditor
+   * still has to be able to produce it.
+   */
+  private snapshotName(
+    step: {
+      id: string;
+      actorNameCt: Uint8Array | null;
+      onBehalfOfNameCt: Uint8Array | null;
+      signatoryNameDekVersion: number | null;
+    },
+    column: 'actor_name_ct' | 'on_behalf_of_name_ct',
+  ): string | null {
+    const ct = column === 'actor_name_ct' ? step.actorNameCt : step.onBehalfOfNameCt;
+    if (!ct || step.signatoryNameDekVersion == null) {
+      return null;
+    }
+    try {
+      return this.fieldEncryption.decrypt(ct, step.signatoryNameDekVersion, {
+        table: 'approval_step',
+        column,
+        rowId: step.id,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Slice 17-VOID — the PDF must TELL THE TRUTH about a voided record: the
    * untouched signed content renders exactly as before, under a VOID
    * watermark/banner/footer line built from the annotation. The voiding
@@ -120,18 +163,32 @@ export class PdfRecordAssemblyService {
     }
     let voidedByName: string | null = null;
     if (job.voidedBy) {
-      const user = await this.prisma.appUser.findUnique({
-        where: { id: job.voidedBy },
-        select: { id: true, fullNameCt: true, dekVersion: true },
-      });
-      voidedByName = user
-        ? decodeIdentityField(
-            user.fullNameCt,
-            user.dekVersion,
-            { column: 'full_name_ct', rowId: user.id },
-            this.fieldEncryption,
-          )
-        : job.voidedBy;
+      // INV-09 — prefer the snapshot on the VOID step itself. Voiding writes an
+      // `approval_step` (action `voided`) whose actor IS the voiding admin, so
+      // the name frozen there is the one to print; no extra column on `job` is
+      // needed. Falls back to the live lookup for voids recorded before the
+      // snapshot existed, exactly as the signature block does.
+      // `voidedAction` is the Prisma enum member; it maps to the `voided`
+      // value in `approval_action_t` (see `schema.prisma`).
+      const voidStep = [...job.approvalSteps]
+        .reverse()
+        .find((s) => s.action === ApprovalActionT.voidedAction && s.actorId === job.voidedBy);
+      voidedByName = voidStep ? this.snapshotName(voidStep, 'actor_name_ct') : null;
+
+      if (!voidedByName) {
+        const user = await this.prisma.appUser.findUnique({
+          where: { id: job.voidedBy },
+          select: { id: true, fullNameCt: true, dekVersion: true },
+        });
+        voidedByName = user
+          ? decodeIdentityField(
+              user.fullNameCt,
+              user.dekVersion,
+              { column: 'full_name_ct', rowId: user.id },
+              this.fieldEncryption,
+            )
+          : job.voidedBy;
+      }
     }
     return {
       reason: job.voidReason,
@@ -220,10 +277,15 @@ export class PdfRecordAssemblyService {
         // was true when the signature was taken.
         stageLabel: step.stageLabel,
         action: approvalActionFromDb(step.action),
-        actorName: nameById.get(step.actorId) ?? step.actorId,
+        actorName:
+          this.snapshotName(step, 'actor_name_ct') ?? nameById.get(step.actorId) ?? step.actorId,
         actorRoleCode: step.actorRoleCode,
         actedAt: step.actedAt.toISOString(),
-        onBehalfOfName: step.onBehalfOfId ? (nameById.get(step.onBehalfOfId) ?? null) : null,
+        onBehalfOfName: step.onBehalfOfId
+          ? (this.snapshotName(step, 'on_behalf_of_name_ct') ??
+            nameById.get(step.onBehalfOfId) ??
+            null)
+          : null,
         reason: step.reason,
         drawnSignatureBase64,
       };

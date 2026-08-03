@@ -1,0 +1,44 @@
+-- INV-09 — snapshot the SIGNATORY'S NAME onto the approval step at signing.
+-- Additive and nullable; forward-only; does not edit any prior migration.
+--
+-- Why: `pdf-record-assembly.service.ts#buildSignatures` JOINED the name from
+-- `app_user.full_name_ct` at render time, and a record's PDF is re-rendered
+-- live from current data on every request (nothing is frozen at archive —
+-- slice 23-PDFA is an unbuilt plan). So `PATCH /users/{id}` retroactively
+-- rewrote the signatory printed on every archived record that person had ever
+-- signed, and `GET /records/{id}/integrity` still reported `intact: true`,
+-- because the canonical signed record binds `actor_id`, not the name.
+--
+-- This mirrors 20260729010000_approval_step_stage_label_snapshot exactly, one
+-- level down: that froze the stage CAPTION so an administrator relabelling a
+-- stage could not rewrite an archived record; this freezes the PERSON'S NAME
+-- for the same reason. Encrypted, because it is personal data (PR-106/107) —
+-- the plaintext must not become readable here when it is not readable in
+-- `app_user`. AAD binds each value to `('approval_step', <column>, id)`, so a
+-- ciphertext moved between rows will not decrypt.
+--
+-- Deliberately NOT added to the canonical signed record
+-- (`CanonicalApprovalStepInput`): that would change the signed content's key
+-- set and invalidate every stored signature — an owner-visible migration of
+-- its own, as `canonical-job-record.ts` states. This is a presentation
+-- snapshot, exactly like `actor_role_code` and `stage_label` beside it.
+--
+-- No backfill. Existing rows stay NULL and keep rendering via the live lookup
+-- (`buildSignatures` falls back), so behaviour for already-archived records is
+-- byte-identical to before this migration. A backfill would be WRONG: the
+-- current `app_user.full_name_ct` is not evidence of what was true at signing.
+--
+-- Reversal:
+--   ALTER TABLE "approval_step"
+--     DROP COLUMN "actor_name_ct",
+--     DROP COLUMN "on_behalf_of_name_ct",
+--     DROP COLUMN "signatory_name_dek_version";
+--
+-- Reversing is safe for the schema and for `/integrity` (these columns are not
+-- signed), but LOSES every snapshot taken since deployment: those records
+-- revert to printing the signatory's CURRENT name, reopening the defect. It
+-- does not corrupt anything and no signature is invalidated.
+ALTER TABLE "approval_step"
+  ADD COLUMN "actor_name_ct" bytea,
+  ADD COLUMN "on_behalf_of_name_ct" bytea,
+  ADD COLUMN "signatory_name_dek_version" smallint;
