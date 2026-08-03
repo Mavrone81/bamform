@@ -107,13 +107,14 @@ export function renderImportEvidence(report: ImportReport, meta: EvidenceMeta): 
     '',
     '## Summary',
     '',
-    'The CLI\'s own terminal summary counts a left-unplanned machine as "imported" (it and its ' +
-      'document were created); the table below splits that same total into "schedule planned" ' +
-      'and "left unplanned" so the two numbers reconcile instead of looking like a discrepancy.',
+    'The CLI\'s own terminal summary counts a left-unplanned machine as "imported" (its machine ' +
+      'was created; its PM document was deliberately NOT attached — see below); the table below ' +
+      'splits that same total into "schedule planned" and "left unplanned" so the two numbers ' +
+      'reconcile instead of looking like a discrepancy.',
     '',
     '| | Count |',
     '|---|---|',
-    `| **Imported total** (machine + document created/reused) — matches the CLI's \`imported\` count | ${imported.length + leftUnplanned.length} |`,
+    `| **Imported total** (machine created/reused; document also attached EXCEPT for the left-unplanned rows below) — matches the CLI's \`imported\` count | ${imported.length + leftUnplanned.length} |`,
     `| — of which schedule planned now | ${imported.length} |`,
     `| — of which left unplanned for a planner (see below) | ${leftUnplanned.length} |`,
     `| Skipped — owner decision (machine not on site) | ${skipped.length} |`,
@@ -149,14 +150,20 @@ export function renderImportEvidence(report: ImportReport, meta: EvidenceMeta): 
   push(
     `## Left unplanned for a planner — ${leftUnplanned.length}`,
     '',
-    'Owner decision 2026-08-03: when the PM document defines a frequency the plan does not ' +
-      'schedule for this machine (a "surplus"), the machine and its document are still ' +
-      'created, but the schedule is deliberately left BLANK — the importer never calls ' +
-      '`GET /assets/{id}/schedule` for these rows, so no `schedule_rule` rows exist yet. They ' +
-      'show up in the planner as unplanned; a human decides the actual dates from there. This ' +
-      'is intentional, not a gap or a failure.',
+    'Owner decision 2026-08-03 (fix round 2): when the PM document defines a frequency the ' +
+      'plan does not schedule for this machine (a "surplus"), **only the machine is created — ' +
+      "its PM document is deliberately NOT attached.** Attaching it would let the scheduler's " +
+      'bootstrap sweep (`schedule-rule-bootstrap.service.ts`, invoked from every ' +
+      '`SchedulerService` sweep — hourly, on by default) materialise a FULL schedule for this ' +
+      'machine within the hour, dated in the past, including the surplus frequency the owner ' +
+      'reserved for a planner. With no document attached there is nothing for that sweep to ' +
+      'iterate, so the schedule genuinely stays empty — no `schedule_rule` rows exist at all. ' +
+      '**A planner must (1) attach the document named in the table below (the one that WOULD ' +
+      "have been attached) to this machine, then (2) set each frequency's due date.** Until " +
+      'that happens, this machine has no PM document and no schedule. This is intentional, not ' +
+      'a gap or a failure.',
     '',
-    '| Source label | Code | Asset type | Document | Machine # | Surplus frequency (form defines it, plan does not schedule it) |',
+    '| Source label | Code | Asset type | Document to attach | Machine # | Surplus frequency (form defines it, plan does not schedule it) |',
     '|---|---|---|---|---|---|',
   );
   for (const m of leftUnplanned) {

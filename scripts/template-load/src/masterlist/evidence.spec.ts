@@ -67,10 +67,12 @@ const leftUnplanned: MachineImportResult = {
   code: 'AW06',
   assetTypeCode: 'ASM_WIRE_BOND',
   status: 'imported',
-  documentAttached: true,
+  documentAttached: false,
   leftUnplanned: true,
   surplus: ['Y'],
-  message: 'left unplanned for a planner (surplus: Y)',
+  message:
+    'machine created only, no document attached (surplus: Y); a planner must attach ' +
+    'CE 95 020 00 01 and set the dates',
 };
 
 const skipped: MachineImportResult = {
@@ -132,6 +134,18 @@ describe('renderImportEvidence', () => {
   it('lists the left-unplanned machine with its surplus frequency and reason', () => {
     expect(out).toContain('AW06');
     expect(out).toMatch(/\| AW06 \|.*\| Y \|/);
+  });
+
+  it('tells the owner the document is NOT attached for a left-unplanned machine, and what a planner must do', () => {
+    const section = out.slice(
+      out.indexOf('## Left unplanned for a planner'),
+      out.indexOf('## Skipped'),
+    );
+    expect(section).toMatch(/NOT attached/);
+    expect(section).toContain('A planner must');
+    expect(section).toContain('attach the document');
+    // AW06's row still names its would-be document so a planner knows what to attach.
+    expect(section).toContain('CE 95 020 00 01');
   });
 
   it('lists the skipped and blocked rows with their reasons', () => {

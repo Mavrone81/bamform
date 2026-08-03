@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.6 |
+| Revision | 0.7 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -27,6 +27,7 @@
 | 0.4 | 3 Aug 2026 | §3.6 added — one-time PM masterlist import via `npm run import:masterlist` (PR-RUN-25, PR-RUN-26): dry run first, read the evidence file, then `--apply`; idempotent and safe to re-run; `DDA 03` deliberately absent; `AW06`/`BD01`/`EP01` deliberately left unplanned for a planner | Lead Engineer | _(pending)_ |
 | 0.5 | 3 Aug 2026 | §3.6 fix round 1 (quality review): removed the incorrect "re-run the dry run to verify `--apply`" claim from PR-RUN-26 — a dry run makes zero network calls and cannot detect prior writes — and replaced it with a Step 4 verification procedure (machines-screen count, one imported/one left-unplanned spot-check, confirm `DDA 03` absent); added explicit run-location and checkout/Node/HTTPS preconditions (this is a workstation CLI, not a container entrypoint); corrected "77 machines" to 76 and the wrong §3.4 template-load cross-reference | Lead Engineer | _(pending)_ |
 | 0.6 | 3 Aug 2026 | §3.6 fix round 2 (quality re-review): the mid-run-failure banner could report a false "no writes were logged" all-clear when the process died DURING a write (writes are now logged before AND after the network call, so an in-flight write shows as "outcome unknown" instead); Step 4.1 now says to keep the ORIGINAL pre-`--apply` machine-count baseline across a retry, not a freshly recorded one | Lead Engineer | _(pending)_ |
+| 0.7 | 3 Aug 2026 | §3.6 owner decisions: (1) a left-unplanned (surplus) machine now gets NO PM document attached, only the machine — the prior "skip the schedule GET" approach was proven wrong (the scheduler's bootstrap sweep materialises a full schedule for any active document regardless), so Step 2 and Step 4.3 are corrected; (2) the plan is imported with its true, mostly-historical dates as written — no rolling forward — so the CLI now prints a `PAST-DUE` count after every run (dry run and apply), and Step 3 gains a prominent pre-`--apply` warning that clearing the resulting backlog re-anchors each machine's schedule via `CompletionCascadeService`, flattening the masterlist's deliberate stagger | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -343,16 +344,28 @@ Defaults: `--year=2026` (the owner-decided plan year) and the committed fixture 
 run makes **zero network calls** — nothing is read from or written to the running instance —
 so it is always safe to run against production, and it needs no credentials.
 
-It prints one line per machine, then a summary:
+It prints one line per machine, then a summary, then a past-due warning:
 
 ```
 DONE (DRY RUN — nothing was written): imported 76 (of which 3 left unplanned) ·
 skipped 1 (DDA 03) · unmapped 0 · hardError 0 · leftUnplanned 3 (AW06, BD01, EP01)
+PAST-DUE: 181 of 220 schedule rule(s) about to be written already have a nextDueOn before
+today (2026-08-03), across 73 machine(s). The scheduler will raise a job for each of these
+on its next sweep — for maintenance the plant may already have performed on paper.
 ```
 
-`imported` counts every machine + document created (including the 3 left unplanned); the
-evidence file (Step 2) splits that same 76 into 73 with a schedule planned and 3 left
-unplanned, so the two numbers reconcile rather than looking like a discrepancy.
+`imported` counts every machine created (including the 3 left unplanned, whose document is
+deliberately NOT attached — see Step 2 below); the evidence file (Step 2) splits that same 76
+into 73 with a schedule planned and 3 left unplanned, so the two numbers reconcile rather than
+looking like a discrepancy.
+
+**Read the `PAST-DUE` line every time — it is not a bug report.** It reflects the exact
+consequence of owner decision 2 (2026-08-03): the plan is imported with the TRUE masterlist
+dates, not rolled forward to the run date, precisely because rewriting the dates was rejected.
+The count is computed at run time against the system date, so it will only grow the longer
+`--apply` is deferred; it never appears in the evidence file itself, because that file must stay
+byte-identical across two runs of the exact same input, and a run-time date comparison would
+break that. See the prominent warning before Step 3 below before typing `--apply`.
 
 and writes `scripts/template-load/evidence/masterlist-import.md`.
 
@@ -368,10 +381,16 @@ This is the artefact to diff against the paper masterlist, row by row, **before*
   (WW5)`) — cross-check the work week, not the ISO date, against the spreadsheet's own WW
   columns.
 - **Left unplanned for a planner** — machines where the PM document defines a frequency the
-  plan does not schedule (a "surplus"). The machine and its document are still created, but the
-  schedule is deliberately left blank — no `schedule_rule` rows exist for it yet. It appears in
-  the planner as unplanned; a human sets the actual dates. On the reference dataset this is
-  exactly **3 machines: `AW06`, `BD01`, `EP01`**. This is intentional, not a defect.
+  plan does not schedule (a "surplus"). **Only the machine is created — its PM document is
+  deliberately NOT attached** (owner decision 2026-08-03, fix round 2). Attaching it would let
+  the scheduler's bootstrap sweep (`schedule-rule-bootstrap.service.ts`, invoked from every
+  `SchedulerService` sweep — hourly, on by default) materialise a full schedule for the machine
+  within the hour, dated in the past, including the surplus frequency the owner reserved for a
+  planner. With no document attached there is nothing for that sweep to iterate, so the schedule
+  genuinely stays empty — no `schedule_rule` rows exist for it. A planner must (1) attach the
+  document the evidence file names for that row (the one that WOULD have been attached), then
+  (2) set each frequency's date. On the reference dataset this is exactly **3 machines: `AW06`,
+  `BD01`, `EP01`**. This is intentional, not a defect.
 - **Skipped** — `DDA 03` only. It is deliberately absent: the owner confirmed the machine is not
   on site, and it is matched by its label so it cannot silently reappear under a different code.
 - **Unmapped / hard-error** — rows the importer could not place without guessing (no asset-type
@@ -385,7 +404,33 @@ This is the artefact to diff against the paper masterlist, row by row, **before*
 
 **Step 3 — apply**
 
-Once the evidence file has been checked against the spreadsheet and matches:
+> **STOP — read before typing `--apply`. Importing a full-year plan partway through the year
+> writes past-due rules; this is a known, accepted consequence of owner decision 2 (2026-08-03:
+> import the plan exactly as written, do not roll the dates forward), not a defect. On the
+> reference dataset, **181 of the 220 rules `--apply` is about to write are already past
+> due**, touching all 73 scheduled machines (the dry run's `PAST-DUE` line, Step 1, reports the
+> live count for whatever workbook/date you are actually running against).**
+>
+> Concretely, this means:
+> - The scheduler's next sweep raises a job for every one of those past-due rules — each one is
+>   a **controlled record** someone must formally dispose of (verify, or otherwise close out),
+>   not something to silently ignore or bulk-delete.
+> - Some of that maintenance may already have been performed on paper by the plant before this
+>   migration ever ran — the jobs raised do not know that, and will still ask for it.
+> - **The part that is easy to miss:** `CompletionCascadeService.apply()`
+>   (`api/src/scheduling/completion-cascade.service.ts:51-54`) sets
+>   `nextDueOn = verifiedOn + intervalMonths` whenever a job is verified. Clearing this backlog
+>   therefore RE-ANCHORS each machine's future schedule to whenever its backlog job happened to
+>   get closed — not to the masterlist's original date. That flattens the deliberate week-by-week
+>   stagger the masterlist encodes across machines of the same type (so they don't all come due
+>   in the same week). This is the accepted cost of importing the true dates rather than rolling
+>   them forward.
+>
+> **Confirm with the owner that this is intended before proceeding.** This is not a system
+> defect to fix — it is the direct, foreseen consequence of a deliberate decision.
+
+Once the evidence file has been checked against the spreadsheet and matches, and the past-due
+consequence above has been confirmed with the owner:
 
 ```bash
 export BAMFORM_BASE_URL=https://form.bevorasg.com
@@ -427,7 +472,11 @@ byte-identical output whether or not `--apply` already ran. Verify instead, in t
    appears once inside its lead time.
 3. **One left-unplanned machine.** Open one machine from the "Left unplanned for a planner"
    section (e.g. `AW06`, `BD01` or `EP01`) and confirm its schedule really is blank — no
-   `schedule_rule` rows, nothing due.
+   `schedule_rule` rows, nothing due. Also confirm it has **no PM document attached yet** — that
+   is the actual reason its schedule is blank (the scheduler's bootstrap sweep only materialises
+   rules for a machine's active documents; a document-less machine gives it nothing to act on).
+   A planner still needs to attach the document the evidence file names for that row and set its
+   dates before this machine has any schedule.
 4. **The skip.** Confirm `DDA 03` is absent from `/admin/machines`.
 
 **If the command fails partway through** (for example, a network blip mid-`--apply`), it prints

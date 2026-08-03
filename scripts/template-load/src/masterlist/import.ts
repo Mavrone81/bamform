@@ -11,20 +11,29 @@
  * — really `PUT`s, see the note below — the planned due dates afterwards.
  *
  * SURPLUS (Task 3 §6 — the form defines a frequency the plan does not
- * schedule) is left BLANK for a planner, per owner decision 2026-08-03 (fix
- * round 1): "create the machine but leave the schedule as blank for planner
- * to plan." There is no HTTP call that deactivates a single schedule_rule
- * frequency (verified against `asset-schedule.controller.ts`/
- * `scheduleAdjustRequestSchema` — only `nextDueOn`/`adjustedReason` are
- * settable, and `PATCH /asset-documents/{id} {active:false}` is document-wide,
- * which would also disable this machine's genuinely planned frequencies on
- * the same document). So for a machine with any `surplus`, this module
- * creates the machine and attaches its document as normal, then deliberately
- * SKIPS `GET /assets/{id}/schedule` — that GET is what lazily materialises
- * the bootstrap rules, so skipping it leaves the machine with no schedule at
- * all. It shows up in the planner as unplanned; a human decides from there.
- * No API change, no invented write, no conflict prompt (dropped from this
- * slice — see the plan's "Decisions since this plan was drafted").
+ * schedule) means the MACHINE ONLY is created, per owner decision
+ * 2026-08-03 (fix round 2): "create the machine only; do not attach the PM
+ * document." An earlier draft of this module attached the document as
+ * normal and relied on skipping `GET /assets/{id}/schedule` to keep the
+ * schedule blank — that premise was FALSE and has been retracted after a
+ * whole-branch review. `SchedulerService`'s sweep (`scheduler.service.ts:44`)
+ * calls `ScheduleRuleBootstrapService.ensureForAllActiveAssets()` at the
+ * start of EVERY sweep (hourly; `SCHEDULER_ENABLED` defaults true), and that
+ * bootstrap (`schedule-rule-bootstrap.service.ts:58-66`) iterates every
+ * `active` document on every `active` asset and creates one `schedule_rule`
+ * row per template frequency — the surplus one included — dated
+ * `asset.scheduleAnchorDate`. So attaching the document, even without this
+ * module ever calling the schedule GET itself, would still get a FULL
+ * schedule materialised by the next sweep, dated in the past, immediately
+ * raising jobs. The only way to leave a machine genuinely unplanned is to
+ * leave it WITHOUT a document at all: with no active `asset_document` on it,
+ * the bootstrap sweep has nothing to iterate for this asset, so no
+ * `schedule_rule` rows are ever created. So for a machine with any
+ * `surplus`, this module creates the machine and STOPS — no document POST,
+ * no schedule GET, no schedule PUT. It shows up in the planner as unplanned;
+ * a human (a planner) attaches the correct document and sets the dates from
+ * there. No API change, no invented write, no conflict prompt (dropped from
+ * this slice — see the plan's "Decisions since this plan was drafted").
  *
  * DRY RUN IS THE DEFAULT (`options.apply` must be explicitly `true`). Under
  * dry run this module makes ZERO network calls — not even GETs — and only
@@ -174,11 +183,16 @@ export interface MachineImportResult {
    *  writing something the API cannot honestly represent. See `message`. */
   blocked: boolean;
   assetId?: string;
+  /** False exactly when `leftUnplanned` (surplus decision, 2026-08-03 fix
+   *  round 2): no document is attached for a surplus row, precisely because
+   *  attaching one would let the scheduler's bootstrap sweep materialise a
+   *  full schedule for it on the next sweep — see the file header. True
+   *  otherwise. */
   documentAttached: boolean;
-  /** True when the machine was deliberately left with NO schedule (`surplus`
-   *  non-empty) — this module never calls `GET /assets/{id}/schedule` for
-   *  it, so no schedule_rule rows exist yet. Not `blocked`: this is the
-   *  intended owner-decided outcome, not a gap. */
+  /** True when the machine was deliberately left with NO document and
+   *  therefore no schedule (`surplus` non-empty) — see the file header for
+   *  why a document, not just the schedule GET, has to be withheld. Not
+   *  `blocked`: this is the intended owner-decided outcome, not a gap. */
   leftUnplanned: boolean;
   /** frequency -> nextDueOn actually planned (or, under dry run, computed).
    *  Empty when `leftUnplanned`. */
@@ -462,11 +476,12 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   const anchorDate = Object.values(dueDates).sort()[0];
   const machineNumber = machineNumberFor(template.title, row.code);
 
-  // Owner decision 2026-08-03 (fix round 1): a surplus frequency means the
-  // schedule is left BLANK for a planner — not resolved at migration time.
-  // No conflict prompt, no callback. Create the machine and attach the
-  // document as normal; simply never call the schedule GET, so no
-  // schedule_rule rows ever materialise for this machine.
+  // Owner decision 2026-08-03 (fix round 2): a surplus frequency means the
+  // MACHINE ONLY is created for a planner — not resolved at migration time.
+  // No conflict prompt, no callback. The document is deliberately NOT
+  // attached (see the file header for why the earlier "attach it, just skip
+  // the schedule GET" approach was wrong), so no schedule_rule rows can ever
+  // materialise for this machine until a planner attaches one.
   const leaveUnplanned = r.surplus.length > 0;
 
   if (ctx.dryRun) {
@@ -474,9 +489,9 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       ctx.log(
         `DRY     ${row.label} (${row.code}) -> ${assetTypeCode} / ${template.documentNumber} — ` +
           `would GET/POST /api/v1/assets (code=${row.code}, scheduleAnchorDate=${anchorDate}), ` +
-          `GET/POST /assets/{id}/documents (machineNumber=${machineNumber ?? 'null'}), then ` +
-          `STOP — surplus (${r.surplus.join(', ')}) means no /assets/{id}/schedule GET, left ` +
-          'unplanned for a planner.',
+          `then STOP — surplus (${r.surplus.join(', ')}) means NO document is attached (a ` +
+          `planner will need to attach ${template.documentNumber}) and no /assets/{id}/schedule ` +
+          'GET/PUT is made; left unplanned for a planner.',
       );
     } else {
       ctx.log(
@@ -495,14 +510,15 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       assetTypeCode,
       status: 'imported',
       blocked: false,
-      documentAttached: true,
+      documentAttached: !leaveUnplanned,
       leftUnplanned: leaveUnplanned,
       dueDates: leaveUnplanned ? {} : dueDates,
       dueWeeks: leaveUnplanned ? {} : firstWeek,
       machineNumber,
       surplus: leaveUnplanned ? [...r.surplus] : [],
       message: leaveUnplanned
-        ? `left unplanned for a planner (surplus: ${r.surplus.join(', ')})`
+        ? `machine created only, no document attached (surplus: ${r.surplus.join(', ')}); a ` +
+          `planner must attach ${template.documentNumber} and set the dates`
         : undefined,
     };
   }
@@ -556,6 +572,42 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     ctx.log(`  REUSE asset ${asset.id} (code=${row.code})`);
   }
 
+  // ---- Surplus: create the machine only; no document is attached ----------
+  // Owner decision 2026-08-03 (fix round 2): attaching the document here
+  // would let the scheduler's bootstrap sweep (`schedule-rule-bootstrap.
+  // service.ts`, called from every `SchedulerService` sweep) materialise a
+  // FULL schedule for this machine — the surplus frequency the owner
+  // reserved for a planner included — within the hour, dated in the past.
+  // The only way to leave a machine genuinely unplanned is to leave it with
+  // NO active document at all, so this module stops HERE: no document POST,
+  // no schedule GET, no schedule PUT. See the file header for the full
+  // reasoning (this replaces an earlier, incorrect version of this comment
+  // that claimed skipping the schedule GET alone was sufficient).
+  if (leaveUnplanned) {
+    ctx.log(
+      `NOTE    ${row.label} (${row.code}) — surplus (${r.surplus.join(', ')}): machine created, ` +
+        `NO document attached (a planner must attach ${template.documentNumber} and set the ` +
+        'dates) — no schedule_rule rows exist for it. A planner decides.',
+    );
+    return {
+      label: row.label,
+      code: row.code,
+      assetTypeCode,
+      status: 'imported',
+      blocked: false,
+      assetId: asset.id,
+      documentAttached: false,
+      leftUnplanned: true,
+      dueDates: {},
+      dueWeeks: {},
+      machineNumber,
+      surplus: [...r.surplus],
+      message:
+        `machine created only, no document attached (surplus: ${r.surplus.join(', ')}); a ` +
+        `planner must attach ${template.documentNumber} and set the dates`,
+    };
+  }
+
   // ---- Step 6: attach the document idempotently by re-check ---------------
   const liveTemplate = ctx.liveTemplates.find((t) =>
     sameUnderContract(t.documentNumber, template.documentNumber),
@@ -594,42 +646,16 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     ctx.log(`  REUSE document ${assetDocument.id} (${template.documentNumber})`);
   }
 
-  // ---- Surplus: leave the schedule blank for a planner ---------------------
-  // Deliberately do NOT call `GET /assets/{id}/schedule` — that GET is what
-  // lazily materialises the bootstrap rules (`schedule-rule-bootstrap.service`).
-  // Skipping it means no schedule_rule rows exist for this machine at all, so
-  // it shows up in the planner as unplanned. No PUT is possible either way
-  // (there is nothing to adjust yet), so this machine is done here.
-  if (leaveUnplanned) {
-    ctx.log(
-      `NOTE    ${row.label} (${row.code}) — surplus (${r.surplus.join(', ')}): left unplanned ` +
-        '(no GET /assets/{id}/schedule call, no schedule_rule rows). A planner decides.',
-    );
-    return {
-      label: row.label,
-      code: row.code,
-      assetTypeCode,
-      status: 'imported',
-      blocked: false,
-      assetId: asset.id,
-      documentAttached: true,
-      leftUnplanned: true,
-      dueDates: {},
-      dueWeeks: {},
-      machineNumber,
-      surplus: [...r.surplus],
-      message: `left unplanned for a planner (surplus: ${r.surplus.join(', ')})`,
-    };
-  }
-
   // ---- Step 7: materialise the schedule rules ------------------------------
-  // This GET is NOT a pure read (review fix round 2, IMPORTANT part 2): it
-  // lazily materialises the bootstrap `schedule_rule` rows on the server
-  // (`schedule-rule-bootstrap.service`) as a side effect of being called —
-  // see the identical comment on the `leaveUnplanned` branch above, which
-  // exists PRECISELY BECAUSE calling this GET has that effect. Tagged
-  // WRITE/attempting/done like the POST/PUT calls so a mid-run failure
-  // handler counts it as state-changing, not as a safe no-op read.
+  // Only reached for a non-surplus row — a surplus row already returned
+  // above, before the document was even attached (see that block's comment
+  // for why). This GET is NOT a pure read (review fix round 2, IMPORTANT
+  // part 2): it lazily materialises the bootstrap `schedule_rule` rows on
+  // the server (`schedule-rule-bootstrap.service`) as a side effect of being
+  // called — exactly the effect the surplus branch above exists to avoid by
+  // withholding the document entirely. Tagged WRITE/attempting/done like the
+  // POST/PUT calls so a mid-run failure handler counts it as state-changing,
+  // not as a safe no-op read.
   ctx.log(`  WRITE GET /assets/${asset.id}/schedule (materialises bootstrap rules) — attempting`);
   const rules = await client.get<ScheduleRule[]>(`/api/v1/assets/${asset.id}/schedule`);
   ctx.log(`  WRITE GET /assets/${asset.id}/schedule (${rules.length} rules) — done`);

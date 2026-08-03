@@ -36,7 +36,12 @@ import { readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { parseYaml } from '../yaml-io';
 import { renderImportEvidence } from './evidence';
-import { runImport, type ImportReport, type ImportTemplateRef } from './import';
+import {
+  runImport,
+  type ImportReport,
+  type ImportTemplateRef,
+  type MachineImportResult,
+} from './import';
 import { parseMasterlist } from './parse';
 import { reconcile } from './reconcile';
 
@@ -190,6 +195,80 @@ export function classifyWriteState(logLines: readonly string[]): WriteState {
   return { kind: 'all-confirmed', confirmed };
 }
 
+/**
+ * Owner decision 2026-08-03 (decision 2): the plan is imported EXACTLY as
+ * written — the true masterlist dates, never rolled forward — but the
+ * operator running `--apply` must see, at run time, exactly what that
+ * decision costs: importing a full-year plan partway through the year
+ * writes rules whose `nextDueOn` is already in the past. This is computed
+ * from `report.machines` against the SYSTEM DATE AT RUN TIME (never baked
+ * into the byte-reproducible evidence file — see `evidence.ts`'s file
+ * header on why that file must render identically across two runs of the
+ * SAME input). Only rows that actually got a schedule count — a
+ * left-unplanned (surplus) row's `dueDates` is always `{}` (decision 1), so
+ * it contributes nothing here, correctly: there is no rule to be past due.
+ */
+export interface PastDueSummary {
+  /** Every schedule_rule about to be written (or, under dry run, that WOULD
+   *  be written) across every scheduled machine. */
+  totalRules: number;
+  /** Of those, how many have a `nextDueOn` strictly before `today`. */
+  pastDueRules: number;
+  /** How many distinct machines have at least one past-due rule among them. */
+  pastDueMachines: number;
+  /** `YYYY-MM-DD`, local system date, exactly as compared against. */
+  today: string;
+}
+
+function localDateStr(now: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+export function computePastDueSummary(
+  machines: readonly MachineImportResult[],
+  now: Date,
+): PastDueSummary {
+  const today = localDateStr(now);
+  let totalRules = 0;
+  let pastDueRules = 0;
+  let pastDueMachines = 0;
+  for (const m of machines) {
+    if (m.status !== 'imported' || m.leftUnplanned) continue;
+    let machineHasPastDue = false;
+    for (const nextDueOn of Object.values(m.dueDates)) {
+      totalRules += 1;
+      // Plain string comparison is safe and exact for `YYYY-MM-DD` — no
+      // timezone-sensitive `Date` parsing needed.
+      if (nextDueOn < today) {
+        pastDueRules += 1;
+        machineHasPastDue = true;
+      }
+    }
+    if (machineHasPastDue) pastDueMachines += 1;
+  }
+  return { totalRules, pastDueRules, pastDueMachines, today };
+}
+
+/**
+ * Worded as what will actually happen, not as an abstract count (owner
+ * decision 2026-08-03, decision 2): the scheduler sweep
+ * (`schedule-rule-bootstrap.service.ts` bootstraps the rule, then the
+ * ordinary sweep logic raises the job) does not know or care that a
+ * `nextDueOn` in the past came from a one-time historical import rather
+ * than a machine that has simply gone unmaintained — it raises a job for
+ * every one of these on its next run, for maintenance the plant may already
+ * have performed on paper before this migration ever ran.
+ */
+export function formatPastDueWarning(summary: PastDueSummary): string {
+  return (
+    `PAST-DUE: ${summary.pastDueRules} of ${summary.totalRules} schedule rule(s) about to be ` +
+    `written already have a nextDueOn before today (${summary.today}), across ` +
+    `${summary.pastDueMachines} machine(s). The scheduler will raise a job for each of these on ` +
+    'its next sweep — for maintenance the plant may already have performed on paper.'
+  );
+}
+
 async function main(): Promise<void> {
   const { apply, year, file } = parseArgs(process.argv.slice(2));
 
@@ -300,6 +379,13 @@ async function main(): Promise<void> {
       `hardError ${c.hardError} · leftUnplanned ${c.leftUnplanned}` +
       `${leftUnplannedCodes.length ? ` (${leftUnplannedCodes.join(', ')})` : ''}`,
   );
+
+  // Owner decision 2026-08-03 (decision 2): printed in BOTH dry-run and
+  // apply mode, right after the counts — never folded into the evidence
+  // file, which must stay byte-reproducible across two runs of the SAME
+  // input, and a run-time date comparison would break that (see
+  // `computePastDueSummary`'s doc comment).
+  console.log(formatPastDueWarning(computePastDueSummary(report.machines, new Date())));
 
   mkdirSync(dirname(EVIDENCE_PATH), { recursive: true });
   // Repo-root-relative when possible, so the evidence file is reproducible

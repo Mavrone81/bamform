@@ -10,11 +10,11 @@
 
 ## Summary
 
-The CLI's own terminal summary counts a left-unplanned machine as "imported" (it and its document were created); the table below splits that same total into "schedule planned" and "left unplanned" so the two numbers reconcile instead of looking like a discrepancy.
+The CLI's own terminal summary counts a left-unplanned machine as "imported" (its machine was created; its PM document was deliberately NOT attached — see below); the table below splits that same total into "schedule planned" and "left unplanned" so the two numbers reconcile instead of looking like a discrepancy.
 
 | | Count |
 |---|---|
-| **Imported total** (machine + document created/reused) — matches the CLI's `imported` count | 76 |
+| **Imported total** (machine created/reused; document also attached EXCEPT for the left-unplanned rows below) — matches the CLI's `imported` count | 76 |
 | — of which schedule planned now | 73 |
 | — of which left unplanned for a planner (see below) | 3 |
 | Skipped — owner decision (machine not on site) | 1 |
@@ -103,9 +103,9 @@ One row per machine, in the order the masterlist lists them. `Frequencies` is th
 
 ## Left unplanned for a planner — 3
 
-Owner decision 2026-08-03: when the PM document defines a frequency the plan does not schedule for this machine (a "surplus"), the machine and its document are still created, but the schedule is deliberately left BLANK — the importer never calls `GET /assets/{id}/schedule` for these rows, so no `schedule_rule` rows exist yet. They show up in the planner as unplanned; a human decides the actual dates from there. This is intentional, not a gap or a failure.
+Owner decision 2026-08-03 (fix round 2): when the PM document defines a frequency the plan does not schedule for this machine (a "surplus"), **only the machine is created — its PM document is deliberately NOT attached.** Attaching it would let the scheduler's bootstrap sweep (`schedule-rule-bootstrap.service.ts`, invoked from every `SchedulerService` sweep — hourly, on by default) materialise a FULL schedule for this machine within the hour, dated in the past, including the surplus frequency the owner reserved for a planner. With no document attached there is nothing for that sweep to iterate, so the schedule genuinely stays empty — no `schedule_rule` rows exist at all. **A planner must (1) attach the document named in the table below (the one that WOULD have been attached) to this machine, then (2) set each frequency's due date.** Until that happens, this machine has no PM document and no schedule. This is intentional, not a gap or a failure.
 
-| Source label | Code | Asset type | Document | Machine # | Surplus frequency (form defines it, plan does not schedule it) |
+| Source label | Code | Asset type | Document to attach | Machine # | Surplus frequency (form defines it, plan does not schedule it) |
 |---|---|---|---|---|---|
 | ASM Eagle Xtreme GoCu -- AW06 | AW06 | ASM_WIRE_BOND | CE 95 020 00 01 | · | Y |
 | BD01 | BD01 | BUMP_DISPENSING | CE 95 043 00 01 | · | Y |
