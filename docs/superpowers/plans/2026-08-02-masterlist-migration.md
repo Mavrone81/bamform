@@ -8,6 +8,39 @@
 
 **Tech Stack:** TypeScript, ts-node, the repo's own `xlsx.ts` (no spreadsheet dependency), Jest.
 
+## Decisions since this plan was drafted (2026-08-03)
+
+These supersede the task text below wherever they conflict.
+
+1. **`MS-620 ST01` maps to `MB_E_TEST`.** Settled by evidence, not inference: the
+   owner supplied 204 real signed records, and `PM Document 2026/February 2026/
+   ST01-1M.pdf` is titled *"MB E-Test Preventive Maintenance Record ST01"*,
+   document `CE 95 050 00 01`. That is the form `MB_E_TEST` was created from.
+   Add a rule for it; coverage becomes **76 of 77**.
+
+2. **A surplus frequency means the machine's schedule is left BLANK.** Owner:
+   *"create the machine but leave the schedule as blank for planner to plan."*
+   There is no API to deactivate a single `schedule_rule`, so do not try —
+   instead, for a machine with any `surplus`, create the machine and attach its
+   document but **do not call `GET /assets/{id}/schedule`**, which is what
+   materialises the rules. The machine then appears in the planner as unplanned.
+   This needs no API change and removes the migration-time prompt entirely.
+
+3. **Task 5 (the conflict prompt) is DROPPED from this slice.** The conflict it
+   was designed for is not the one that occurs. The owner's real case is two
+   planners — one working in Excel, one in the app — where a re-upload collides
+   with planning already done in the system. That belongs to the planner slice.
+
+4. **`machineNumberFor` must handle a bare blank.** `KW08.pdf` fills `KW___`
+   with `08` (the current rule is right), but `ST01-1M.pdf` fills the bare
+   `Record______` with the WHOLE code `ST01`, not `01`. Rule: take the token
+   immediately before the underscore run; if the machine code starts with it,
+   supply the remainder, otherwise supply the whole code. The `AVS 35-____` and
+   `IMOS 0__` cases are not yet confirmed against a specimen — set them by this
+   rule, and verify during the PDF-correction slice. `machineNumber` is a single
+   field correctable afterwards via `PATCH /asset-documents/{id}`, so an error
+   here is cheap.
+
 ## Global Constraints
 
 - **Drive the HTTP API, never the database.** Same as the template loader.
