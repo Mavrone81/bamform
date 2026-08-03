@@ -1,5 +1,6 @@
 // scripts/template-load/src/masterlist/mapping.spec.ts
 import { workWeekToDate, assetTypeCodeForModel, machineNumberFor, SKIPPED_LABELS } from './mapping';
+import { resolveTemplateTitle } from '@bamform/shared';
 
 describe('workWeekToDate — calendar weeks, owner decision 2026-08-02', () => {
   it('puts week 1 on 1 January', () => {
@@ -64,10 +65,11 @@ describe('assetTypeCodeForModel', () => {
 });
 
 describe('machineNumberFor', () => {
-  // Shape 1: the code STARTS WITH the token immediately before the blank ->
-  // supply the remainder. Confirmed by KW08.pdf among the 204 signed records
-  // (fix round 1, owner decision 2026-08-03).
-  it('returns the remainder after the title-adjacent token, when the code starts with it', () => {
+  // Shape 1: the code CONTAINS the token immediately before the blank (at
+  // its start, for these three) -> supply what follows it. Confirmed by
+  // KW08.pdf among the 204 signed records (fix round 1, owner decision
+  // 2026-08-03).
+  it('returns the remainder after the title-adjacent token, when the code contains it', () => {
     expect(machineNumberFor('KNS Wire Bond Preventive Maintenance Record KW___', 'KW13')).toBe(
       '13',
     );
@@ -79,16 +81,23 @@ describe('machineNumberFor', () => {
     );
   });
 
-  // Shape 2: the code does NOT start with that token -> supply the WHOLE
-  // code. Confirmed by ST01-1M.pdf: the bare "Record______" fills with
-  // "ST01", not "01" — its adjacent token is "Record", which "ST01" does
-  // not start with.
-  it('returns the whole code when it does not start with the title-adjacent token', () => {
+  // Shape 2: the code does NOT contain that token anywhere -> supply the
+  // WHOLE code. Confirmed by ST01-1M.pdf: the bare "Record______" fills
+  // with "ST01", not "01" — its adjacent token is "Record", which "ST01"
+  // does not contain.
+  it('returns the whole code when it does not contain the title-adjacent token', () => {
     expect(machineNumberFor('MB E-Test Preventive Maintenance Record______', 'ST01')).toBe('ST01');
-    // Same template family (MB_____), same token "MB" — but CM02/T8 do not
-    // start with "MB", so unlike MB03 above they get the whole code, not a
-    // trailing-digit remainder. This is exactly the case the old
-    // trailing-digit rule silently got wrong (it never looked at the title).
+    // CM02/T8 are fed against the MB_ENCAPSULATION title here only to
+    // exercise the function's fallback path with a token ("MB") the code
+    // does not contain — NOT because CM02/T8 are ever actually rendered
+    // against this title. In production both map to MB_E_TEST
+    // ("MB E-Test ... Record______", asserted above via ST01), not
+    // MB_ENCAPSULATION ("MB Encapsulation ... Record MB_____"); see
+    // `assetTypeCodeForModel`'s `mb\s+cmt` rule above. Either title
+    // produces the same result for these two codes, since neither "MB" nor
+    // "Record" is a substring of "CM02" or "T8" — this is exactly the case
+    // the old trailing-digit rule silently got wrong (it never looked at
+    // the title at all).
     expect(machineNumberFor('MB Encapsulation Preventive Maintenance Record MB_____', 'CM02')).toBe(
       'CM02',
     );
@@ -115,20 +124,60 @@ describe('machineNumberFor', () => {
     // still a contiguous underscore run, so the regex must not be thrown off
     // by unrelated line breaks in the string.
     const titleWithRealCrlf = 'Preventive Maintenance Work Instruction / \r\nRecord AVS 35-____';
-    // NOT YET CONFIRMED against a specimen (unlike KW08/ST01 above). The
-    // token adjacent to the blank is "35-" (hyphen is not whitespace or an
-    // underscore); "AVS35-01" does not start with "35-", so this is the
-    // whole-code shape. Applied mechanically, not special-cased — see the
-    // task report.
-    expect(machineNumberFor(titleWithRealCrlf, 'AVS35-01')).toBe('AVS35-01');
+    // Token adjacent to the blank is "35-" (hyphen is not whitespace or an
+    // underscore). "AVS35-01" does not START WITH "35-", but it does
+    // CONTAIN it (at index 3) — under the I3 review fix this is the
+    // remainder-after-token shape, not the whole-code fallback. See the
+    // `describe('machineNumberFor — I3 review fix ...')` block below for
+    // the rendered-title check.
+    expect(machineNumberFor(titleWithRealCrlf, 'AVS35-01')).toBe('01');
   });
 
-  it('is NOT YET CONFIRMED for IMOS — applied mechanically like every other template', () => {
+  it('fills IMOS from the digit already printed in the title, per the I3 review fix', () => {
     // Token adjacent to "IMOS 0__"'s blank is "0" (one character); the real
-    // code "IMOS-01" does not start with "0", so this is also the
-    // whole-code shape. See the task report.
+    // code "IMOS-01" does not START WITH "0", but it does CONTAIN it (the
+    // "0" in "-01") — under the I3 review fix this supplies what follows
+    // that "0", i.e. "1", so the rendered title reads "...IMOS 0" + "1" =
+    // "...IMOS 01", not the doubled "...IMOS 0IMOS-01" the old
+    // starts-with-only rule produced. See the `describe('machineNumberFor
+    // — I3 review fix ...')` block below for the rendered-title check.
     expect(machineNumberFor('OS Loading Preventive Maintenance Record IMOS 0__', 'IMOS-01')).toBe(
-      'IMOS-01',
+      '1',
     );
   });
+});
+
+/**
+ * Whole-branch review finding I3: the "starts with" rule was too narrow —
+ * `AVS35-01`/`AVS35-02`/`AVS35-03` and `IMOS-01` don't start with their
+ * title's token, so the old rule fell back to the whole code and rendered a
+ * duplicated machine number on every controlled PM record those four
+ * machines produce. Widened to CONTAINS. These rows exercise both the raw
+ * `machineNumberFor` output AND the full rendered title
+ * (`resolveTemplateTitle`, `shared/src/template-title.ts`) against the
+ * REAL committed YAML title strings — `scripts/template-load/yaml/
+ * CE-95-055-00-01.yaml` and `CE-95-050-00-03.yaml` — not a hand-typed
+ * approximation, so a future edit to either YAML's title breaks this test
+ * instead of silently drifting.
+ */
+describe('machineNumberFor — I3 review fix: CONTAINS, not STARTS WITH', () => {
+  // Real title strings as committed (CE-95-055-00-01.yaml stores an actual
+  // CR/LF inside the double-quoted YAML scalar; reproduced literally here
+  // rather than re-derived, same discipline as the CRLF test above).
+  const AVS_TITLE = 'Preventive Maintenance Work Instruction / \r\nRecord AVS 35-____';
+  const IMOS_TITLE = 'OS Loading Preventive Maintenance Record IMOS 0__';
+
+  it.each([
+    ['AVS35-01', AVS_TITLE, '01', 'Preventive Maintenance Work Instruction / \r\nRecord AVS 35-01'],
+    ['AVS35-02', AVS_TITLE, '02', 'Preventive Maintenance Work Instruction / \r\nRecord AVS 35-02'],
+    ['AVS35-03', AVS_TITLE, '03', 'Preventive Maintenance Work Instruction / \r\nRecord AVS 35-03'],
+    ['IMOS-01', IMOS_TITLE, '1', 'OS Loading Preventive Maintenance Record IMOS 01'],
+  ])(
+    '%s fills %s -> machineNumber %j -> rendered title %j',
+    (code, title, expectedMachineNumber, expectedRenderedTitle) => {
+      const machineNumber = machineNumberFor(title, code);
+      expect(machineNumber).toBe(expectedMachineNumber);
+      expect(resolveTemplateTitle(title, machineNumber)).toBe(expectedRenderedTitle);
+    },
+  );
 });

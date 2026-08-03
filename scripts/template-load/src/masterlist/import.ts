@@ -68,6 +68,17 @@ interface ScheduleRule {
   frequency: string;
   nextDueOn: string;
   adjustedReason: string | null;
+  /**
+   * Whole-branch review finding I4: `GET /assets/{id}/schedule` already
+   * returns this (`asset-schedule.service.ts`'s `toDto`), but it was never
+   * declared here, so a re-run had no way to see it. `completion-cascade.
+   * service.ts` sets this and advances `nextDueOn` when a PM is completed
+   * and verified — WITHOUT touching `adjustedReason` — so a rule can carry
+   * this migration's own `PROVENANCE_PREFIX` in `adjustedReason` (the
+   * human-adjustment guard below doesn't fire) while `lastCompletedOn` is
+   * the only signal that real maintenance has since happened against it.
+   */
+  lastCompletedOn: string | null;
 }
 interface Page<T> {
   data: T[];
@@ -642,6 +653,24 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       continue;
     }
     const wantedReason = `${PROVENANCE_PREFIX} (WW${firstWeek[frequency]})`;
+    if (rule.lastCompletedOn) {
+      // Whole-branch review finding I4: a completed-and-verified PM advances
+      // `nextDueOn`/`lastCompletedOn` (`completion-cascade.service.ts`) but
+      // never touches `adjustedReason` — so on a re-run, `adjustedReason`
+      // can still carry THIS migration's own `PROVENANCE_PREFIX`, and the
+      // human-adjustment guard just below would not fire. Left unguarded,
+      // a re-run PUTs the original migration date back over the advanced
+      // one, and the next scheduler sweep raises a duplicate overdue job
+      // for maintenance that was just signed off. Treat ANY non-null
+      // `lastCompletedOn` exactly like a human adjustment: never overwrite,
+      // regardless of what `adjustedReason` says. INDENTED for the same
+      // per-frequency reason as the ERROR/SKIP cases here.
+      ctx.log(
+        `  SKIP ${row.label} (${row.code}) ${frequency} — already completed ` +
+          `(lastCompletedOn ${rule.lastCompletedOn}); migration does not rewind a signed-off PM.`,
+      );
+      continue;
+    }
     if (rule.adjustedReason && !rule.adjustedReason.startsWith(PROVENANCE_PREFIX)) {
       // A human adjusted this rule since the bootstrap default — never
       // overwrite a deliberate human decision (design doc §7 requirement).

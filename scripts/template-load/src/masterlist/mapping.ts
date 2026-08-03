@@ -71,36 +71,59 @@ export function assetTypeCodeForModel(model: string, code: string): string | nul
  * The blank in a template title is a run of underscores (2+). What fills it
  * is derived from the TOKEN immediately before that run — the contiguous
  * non-whitespace, non-underscore text directly touching it (`Record
- * KW___` -> `KW`; `Record______` -> `Record`; `Record IMOS 0__` -> `0`).
+ * KW___` -> `KW`; `Record______` -> `Record`; `Record IMOS 0__` -> `0`;
+ * `Record AVS 35-____` -> `35-`).
  *
  * Owner decision 2026-08-03 (fix round 1), settled by two real specimens
  * from the 204 signed PM records supplied:
  *   - `KW08.pdf` fills `...Record KW___` with `08` — the code's REMAINDER
- *     after the token, because the code `KW08` starts with the token `KW`.
+ *     after the token, because the code `KW08` CONTAINS the token `KW`
+ *     (at its start).
  *   - `ST01-1M.pdf` fills the bare `...Record______` with the WHOLE code
- *     `ST01`, not `01` — because the code `ST01` does NOT start with the
- *     token `Record`.
+ *     `ST01`, not `01` — because the code `ST01` does NOT contain the
+ *     token `Record` anywhere.
  *
- * So: if the code starts with the token (case-insensitively), supply the
- * remainder; otherwise supply the whole code. An earlier version of this
- * function always took the code's trailing digits, which happened to match
- * the KW/ED/DP/EW families (their token IS their code's alpha prefix) but
- * was never actually derived from the title, so it silently gave the wrong
- * answer for e.g. `MB Encapsulation ... Record MB_____` against a code like
- * `CM02` or `T8` (does not start with `MB` — whole code `CM02`/`T8`, not a
- * trailing digit) and for `ST01` against `Record______` (`01`, not `ST01`).
+ * So: if the code CONTAINS the token (case-insensitively), supply what
+ * follows the token's FIRST occurrence; otherwise supply the whole code.
  *
- * `AVS 35-____` and `IMOS 0__` are NOT yet confirmed against a specimen —
- * this function is applied mechanically to them like every other template,
- * not special-cased; see the task report for what it currently produces.
+ * Owner ruling 2026-08-03 (whole-branch review, finding I3): an earlier
+ * version of this function tested only whether the code STARTS WITH the
+ * token, which is narrower than what the title actually needs. Two real
+ * template/code pairs broke under that rule because the token there is
+ * NOT the code's prefix: `AVS35-01` against `Record AVS 35-____` (token
+ * `35-`) does not start with `35-`, so the old rule fell back to the whole
+ * code and rendered `Record AVS 35-AVS35-01`; `IMOS-01` against `Record
+ * IMOS 0__` (token `0`) does not start with `0` either, rendering `Record
+ * IMOS 0IMOS-01`. Both wrong machine numbers print on every controlled
+ * maintenance record those machines ever produce (AVS35-01/02/03,
+ * IMOS-01). Widening the test to CONTAINS fixes both — the token `35-`
+ * is found inside `AVS35-01` (yielding `01`, so `Record AVS 35-01`) and
+ * the token `0` is found inside `IMOS-01` (yielding `1`, so `Record IMOS
+ * 01`) — while leaving every already-correct shape unchanged
+ * (`ED01`->`01`, `KW08`->`08`, `MB03`->`03`, `DP01`->`01`, `EW01`->`01`,
+ * `ST01`->`ST01`), because for every one of those the token either sits at
+ * the very start of the code (so CONTAINS and STARTS-WITH agree) or is
+ * absent from the code altogether (so both fall back to the whole code).
+ * See the `it.each` rows in `mapping.spec.ts` (`describe('machineNumberFor
+ * — I3 review fix ...')`) for the AVS35/IMOS regression coverage.
+ *
+ * An even earlier version always took the code's trailing digits, which
+ * happened to match the KW/ED/DP/EW/MB families (their token IS their
+ * code's alpha prefix) but was never actually derived from the title, so
+ * it silently gave the wrong answer for e.g. `MB E-Test ... Record______`
+ * (token `Record`) against a code like `CM02` or `T8` — the actual template
+ * those two codes map to (`assetTypeCodeForModel` sends `MB CMT` to
+ * `MB_E_TEST`, not `MB_ENCAPSULATION`) — which does not CONTAIN `Record`
+ * anywhere, so the correct answer is the whole code `CM02`/`T8`, not a
+ * trailing digit; likewise for `ST01` against that same title (`ST01`, not
+ * `01`).
  */
 export function machineNumberFor(templateTitle: string, code: string): string | null {
   const blank = /([^\s_]*)_{2,}/.exec(templateTitle);
   if (!blank) return null;
   const token = blank[1];
   const trimmedCode = code.trim();
-  const value = trimmedCode.toLowerCase().startsWith(token.toLowerCase())
-    ? trimmedCode.slice(token.length)
-    : trimmedCode;
+  const idx = trimmedCode.toLowerCase().indexOf(token.toLowerCase());
+  const value = idx === -1 ? trimmedCode : trimmedCode.slice(idx + token.length);
   return value.length > 0 ? value : null;
 }
