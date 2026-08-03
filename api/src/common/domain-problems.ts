@@ -162,8 +162,8 @@ export function recordImmutableProblem(): ConflictException {
  * is frozen at archive — slice 23-PDFA is an unbuilt plan), so several
  * long-lived configuration rows feed what an archived record prints. Currently
  * raised by `PATCH /asset-documents/{id}` (`machineNumber` -> document title)
- * and `PATCH /assets/{id}` (`code` -> machine code, `description` ->
- * machine description). A single type lets a client match the whole class.
+ * and `PATCH /assets/{id}` (`code` -> machine code). A single type lets a
+ * client match the whole class.
  *
  * A SEPARATE type from `/errors/record-immutable`, also deliberately. That one
  * says "the thing you addressed is frozen"; the caller addressed a job. Here

@@ -514,15 +514,23 @@ export interface paths {
      * @description ENGINEER or ADMIN. `status`/`active` are the only removal mechanism
      *     (deactivation).
      *
-     *     `code` and `description` are PRINTED on every record raised against this
-     *     machine (`code` twice — as the asset code and the machine code), and a
-     *     record's PDF is re-rendered live from current data on every request —
-     *     nothing is frozen at archive. Changing either is therefore REFUSED with
+     *     `code` is PRINTED on every record raised against this machine — as the
+     *     machine code in the PDF header and footer, and in the `assetCode` column
+     *     of a bulk export's manifest — and a record's PDF is re-rendered live
+     *     from current data on every request, so nothing is frozen at archive.
+     *     Changing `code` is therefore REFUSED with
      *     `/errors/archived-record-dependency` (409) when the machine has any
-     *     ARCHIVED record. Every other field — `manufacturer`, `model`, `areaId`,
-     *     `locationDetail`, `status`, `active` — does not appear on the record and
-     *     is never refused, so re-siting or retiring a machine always works. A
-     *     machine with no archived records is freely editable.
+     *     ARCHIVED record.
+     *
+     *     `code` is the ONLY field this applies to. `description`, `manufacturer`,
+     *     `model`, `areaId`, `locationDetail`, `status` and `active` do not appear
+     *     on the rendered record and are never refused, so describing, re-siting
+     *     or retiring a machine always works. A machine with no archived records
+     *     is freely editable, and re-sending the same `code` is never refused.
+     *
+     *     Note: once a machine has an archived record, an auto-generated
+     *     `codeProvisional` code can no longer be confirmed, because confirming it
+     *     requires a `code` change.
      */
     patch: operations['updateAsset'];
     trace?: never;

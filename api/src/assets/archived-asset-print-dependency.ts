@@ -10,32 +10,47 @@
  * binds `job.assetId` (the identity) but none of the asset's descriptive
  * columns (`canonical-job-record.ts`).
  *
- * `PATCH /assets/{id}` is the highest-impact instance of the class, because
- * `asset.code` alone feeds TWO printed fields and a single edit rewrites every
- * archived record for that machine at once:
+ * ##### EXACTLY ONE COLUMN QUALIFIES — MEASURED, NOT ASSUMED #####
+ * `asset.code`, and nothing else. It reaches TWO rendered artefacts, which is
+ * what makes this the highest-impact instance of the class — one edit rewrites
+ * every archived record for the machine at once:
  *
- *   assetCode        <- asset.code          (pdf-record-assembly, `assetCode`)
- *   machineCode      <- asset.code          (same source, printed separately)
- *   assetDescription <- asset.description
+ *   - the PDF header and footer, via `PdfRecordInput.machineCode`
+ *     (`pdf-html-template.ts` `esc(input.machineCode)`, twice)
+ *   - the `assetCode` column of a bulk export's `manifest.csv`
+ *     (`records-export-worker.service.ts`)
+ *
+ * `asset.description` is deliberately ABSENT. `pdf-record-assembly.service.ts`
+ * assembles it into `PdfRecordInput.assetDescription`, but the template never
+ * emits it — `pdf-html-template.spec.ts` records the same finding ("
+ * `assetDescription` is not rendered anywhere in this template"), and it is not
+ * in the export manifest either. Guarding it would 409 an engineer fixing a
+ * typo in a description with a message claiming archived records would print
+ * differently, which is simply false. `PdfRecordInput.assetCode` is likewise
+ * assembled and never emitted; `code` earns its guard through `machineCode` and
+ * the CSV, not through that field.
  *
  * ##### WHY IT IS NARROW ON PURPOSE #####
- * A machine is long-lived and most of its row does NOT print: `manufacturer`,
- * `model`, `areaId`, `locationDetail`, `status` and `active` are absent from
- * the PDF assembly entirely, so editing them can never alter signed evidence
- * and must stay freely available — retiring or re-siting a machine is ordinary
- * work. Only the two printed fields are considered, and only when their value
- * actually changes, so a no-op re-send and a machine with no archived records
- * both stay editable. Someone fixing a typo on a new machine is never blocked.
+ * A machine is long-lived and almost none of its row prints: `description`,
+ * `manufacturer`, `model`, `areaId`, `locationDetail`, `status` and `active`
+ * are all unrendered, so editing them can never alter signed evidence and must
+ * stay freely available — describing, re-siting or retiring a machine is
+ * ordinary work. Only a real change to a printed value is considered, so a
+ * no-op re-send and a machine with no archived records both stay editable.
+ * Someone fixing a typo on a new machine is never blocked.
  *
- * Unlike the document title there is no substitution step here: these values
- * are printed VERBATIM (`esc(input.assetCode)` and friends), so "would render
- * differently" is exactly "the value differs".
+ * Unlike the document title there is no substitution step here: the value is
+ * printed VERBATIM, so "would render differently" is exactly "the value
+ * differs".
+ *
+ * If a future change starts rendering another `asset` column, add it BOTH here
+ * and to this comment's measured list — the guard is only as honest as this
+ * inventory.
  */
 
-/** The `asset` columns that reach the rendered record, and nothing else. */
+/** The `asset` columns that reach a rendered artefact, and nothing else. */
 export interface AssetPrintedFields {
   code: string;
-  description: string | null;
 }
 
 /** A printed field whose value would change, named as it reads on the record. */
@@ -46,12 +61,6 @@ export interface ChangedPrintedField {
   subject: string;
   before: string;
   after: string;
-}
-
-const NOT_PRINTED = '(blank)';
-
-function display(value: string | null): string {
-  return value === null || value === '' ? NOT_PRINTED : value;
 }
 
 /**
@@ -69,21 +78,14 @@ export function changedPrintedAssetFields(
   const changed: ChangedPrintedField[] = [];
 
   if (proposed.code !== undefined && proposed.code !== current.code) {
-    // One edit, two printed fields — named as one so the refusal does not
-    // read as if the engineer sent two things wrong.
+    // One edit, two rendered artefacts (PDF header/footer and the export
+    // manifest) — named as one so the refusal does not read as if the engineer
+    // sent two things wrong.
     changed.push({
       pointer: '/code',
       subject: 'the machine code',
-      before: display(current.code),
-      after: display(proposed.code),
-    });
-  }
-  if (proposed.description !== undefined && proposed.description !== current.description) {
-    changed.push({
-      pointer: '/description',
-      subject: 'the machine description',
-      before: display(current.description),
-      after: display(proposed.description),
+      before: current.code,
+      after: proposed.code,
     });
   }
 

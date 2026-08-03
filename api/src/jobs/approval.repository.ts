@@ -148,12 +148,20 @@ export class ApprovalRepository {
    * three services that call it: a caller cannot forget it, and every action
    * (submit, verify, return, recall, void) is covered by construction.
    *
-   * FAIL-SOFT by design. A name that cannot be read — a user row whose
-   * ciphertext predates the current key, or any decrypt failure — must never
-   * block a signature: capture is the point of the system, and a missing
-   * snapshot degrades exactly to the pre-existing behaviour (`buildSignatures`
-   * falls back to the live lookup, as it does for every row written before this
-   * column existed). Logged without the name or the ciphertext.
+   * FAIL-SOFT, but only over the operations that can genuinely be soft. A name
+   * that cannot be READ — a row whose ciphertext predates the current key, or
+   * any decrypt/encrypt failure — must never block a signature: capture is the
+   * point of the system, and a missing snapshot degrades exactly to the
+   * pre-existing behaviour (`buildSignatures` falls back to the live lookup, as
+   * it does for every row written before this column existed). Those are
+   * pure-CPU operations, so swallowing them is safe.
+   *
+   * The `findMany` is deliberately OUTSIDE that catch. A Prisma error inside an
+   * interactive transaction has already aborted the Postgres transaction, so
+   * swallowing it would not degrade anything — it would just make the
+   * `approvalStep.create` below fail with a confusing `25P02` (current
+   * transaction is aborted) instead of the real error. A DB failure here is a
+   * DB failure of the signing transaction, and must surface as one.
    */
   private async snapshotSignatoryNames(
     tx: Prisma.TransactionClient,
@@ -164,14 +172,16 @@ export class ApprovalRepository {
     signatoryNameDekVersion: number | null;
   }> {
     const none = { actorNameCt: null, onBehalfOfNameCt: null, signatoryNameDekVersion: null };
-    try {
-      const ids = [data.actorId, ...(data.onBehalfOfId ? [data.onBehalfOfId] : [])];
-      const users = await tx.appUser.findMany({
-        where: { id: { in: ids } },
-        select: { id: true, fullNameCt: true, dekVersion: true },
-      });
-      const byId = new Map(users.map((u) => [u.id, u]));
 
+    // Not in the try: see the note above — a failure here is not soft.
+    const ids = [data.actorId, ...(data.onBehalfOfId ? [data.onBehalfOfId] : [])];
+    const users = await tx.appUser.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, fullNameCt: true, dekVersion: true },
+    });
+    const byId = new Map(users.map((u) => [u.id, u]));
+
+    try {
       const encodeFor = (
         userId: string | null,
         column: 'actor_name_ct' | 'on_behalf_of_name_ct',

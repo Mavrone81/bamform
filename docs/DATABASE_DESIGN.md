@@ -830,8 +830,8 @@ the trigger:
 |---|---|---|
 | checklist / measurement results, parts, attachments, status, due date | `job`, `item_result`, … | INV-09 trigger + `assertJobWritable` |
 | document title's machine number | `asset_document.machine_number` | **application guard only** — `PATCH /asset-documents/{id}` (`/errors/archived-record-dependency`) |
-| machine code, machine description | `asset.code`, `asset.description` | **application guard only** — `PATCH /assets/{id}` (same problem type) |
-| signatory names | `app_user.full_name_ct` | **snapshotted at signing** onto `approval_step.actor_name_ct` / `on_behalf_of_name_ct`, so later edits cannot reach the record |
+| machine code (PDF header + footer, and the `assetCode` column of an export manifest) | `asset.code` | **application guard only** — `PATCH /assets/{id}` (same problem type) |
+| signatory names | `app_user.full_name_ct` | **snapshotted at signing** onto `approval_step.actor_name_ct` / `on_behalf_of_name_ct` — but only for steps signed AFTER migration `20260801000000`. Earlier rows, and any step whose snapshot failed soft, have NULL there and still resolve the name live, so a later rename *does* reach those. No backfill is possible: today's `app_user` value is not evidence of what was true at signing |
 | stage caption, actor role | `approval_step.stage_label`, `.actor_role_code` | snapshotted at signing |
 | document number, template title, revision code, standing content, checklist instructions, measurement specs | `form_template`, `template_revision`, `template_item`, `template_measurement` | **nothing explicit — safe only incidentally** |
 

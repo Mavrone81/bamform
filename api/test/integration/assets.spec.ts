@@ -428,15 +428,16 @@ describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', ()
   /**
    * INV-09 — an archived record's PRINTED machine identity is immutable.
    *
-   * `asset.code` feeds TWO printed fields (`assetCode` and `machineCode`) and
-   * `asset.description` a third, all read live by
-   * `pdf-record-assembly.service.ts` on every render — nothing is frozen at
-   * archive. Renaming a machine therefore rewrote every archived record for it
-   * at once, and `/integrity` still said `intact: true` because the canonical
-   * record binds `job.assetId`, not the asset's descriptive columns.
+   * `asset.code` is read live on every render and printed as the machine code
+   * in the PDF header and footer (and as `assetCode` in an export manifest) —
+   * nothing is frozen at archive. Renaming a machine therefore rewrote every
+   * archived record for it at once, and `/integrity` still said `intact: true`
+   * because the canonical record binds `job.assetId`, not the asset's
+   * descriptive columns.
    *
-   * The ALLOW cases carry the weight here: most of a machine's row does NOT
-   * print, and re-siting or retiring a machine must never be blocked.
+   * The ALLOW cases carry the weight here: `code` is the ONLY column of the row
+   * that reaches a rendered artefact, so describing, re-siting or retiring a
+   * machine must never be blocked.
    */
   describe('an archived record’s printed machine identity is immutable (INV-09)', () => {
     async function machineWithArchivedRecord(): Promise<{ assetId: string; token: string }> {
@@ -499,16 +500,22 @@ describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', ()
       expect((await storedAsset(assetId)).code).toBe(before.code);
     });
 
-    it('refuses a description change', async () => {
+    it('ALLOWS a description change — description is not rendered on the record', async () => {
+      // Measured, not assumed: `pdf-html-template.ts` emits exactly one
+      // asset-derived value, `esc(input.machineCode)`. `assetDescription` is
+      // assembled into `PdfRecordInput` and then never printed, and it is not
+      // in the export manifest either. Refusing here would 409 an engineer
+      // fixing a typo with a message claiming archived records would print
+      // differently — which would be false.
       const { assetId, token } = await machineWithArchivedRecord();
 
       await request(app.getHttpServer())
         .patch(`/api/v1/assets/${assetId}`)
         .set(...authHeader(token))
         .send({ description: 'Rewritten description' })
-        .expect(409);
+        .expect(200);
 
-      expect((await storedAsset(assetId)).description).not.toBe('Rewritten description');
+      expect((await storedAsset(assetId)).description).toBe('Rewritten description');
     });
 
     it('ALLOWS the same edit on a machine with no archived record', async () => {
@@ -533,14 +540,16 @@ describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', ()
     });
 
     it('ALLOWS editing fields that do not print, even with an archived record', async () => {
-      // `manufacturer`, `model`, `locationDetail`, `status` and `active` never
-      // reach the PDF, so re-siting or retiring a machine stays ordinary work.
+      // `description`, `manufacturer`, `model`, `locationDetail`, `status` and
+      // `active` never reach the PDF, so describing, re-siting or retiring a
+      // machine stays ordinary work.
       const { assetId, token } = await machineWithArchivedRecord();
 
       await request(app.getHttpServer())
         .patch(`/api/v1/assets/${assetId}`)
         .set(...authHeader(token))
         .send({
+          description: 'Redescribed',
           manufacturer: 'ASM',
           model: 'Eagle60',
           locationDetail: 'Bay 4',
@@ -550,14 +559,14 @@ describe('Assets — GET/POST /assets, GET/PATCH /assets/{id}, area scoping', ()
         .expect(200);
     });
 
-    it('ALLOWS a no-op re-send of the same printed values', async () => {
+    it('ALLOWS a no-op re-send of the same printed value', async () => {
       const { assetId, token } = await machineWithArchivedRecord();
       const before = await storedAsset(assetId);
 
       await request(app.getHttpServer())
         .patch(`/api/v1/assets/${assetId}`)
         .set(...authHeader(token))
-        .send({ code: before.code, description: before.description ?? undefined })
+        .send({ code: before.code })
         .expect(200);
     });
 

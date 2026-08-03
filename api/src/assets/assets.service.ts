@@ -197,8 +197,16 @@ export class AssetsService {
     const codeChanged = dto.code !== undefined && dto.code !== existing.code;
 
     // INV-09 — refuse an edit that would rewrite what an already-archived,
-    // signed record prints. Only `code` and `description` reach the rendered
-    // record; every other column on this DTO is untouched by the guard.
+    // signed record prints. Only `code` reaches a rendered artefact; every
+    // other column on this DTO is untouched by the guard.
+    //
+    // KNOWN CONSEQUENCE, accepted: once a machine has an archived record,
+    // `codeProvisional` can no longer be cleared, because the only thing that
+    // clears it is a real `code` change and the guard now refuses that. An
+    // auto-generated code that was never confirmed before the first record
+    // archived stays flagged provisional for good. Left as-is deliberately —
+    // the flag is advisory metadata and never prints, whereas silently
+    // permitting the code change to clear it would rewrite signed evidence.
     await this.assertNoArchivedRecordDependsOnPrintedFields(existing, dto);
 
     try {
@@ -248,20 +256,22 @@ export class AssetsService {
   /**
    * INV-09 — the archived-record guard for the machine's PRINTED fields.
    *
-   * The exposure this closes: `asset.code` and `asset.description` are read
-   * live by `pdf-record-assembly.service.ts` (`assetCode`, `machineCode`,
-   * `assetDescription`) and a record's PDF is re-rendered from current data on
-   * every request — nothing is frozen at archive. So renaming a machine
-   * retroactively rewrote three printed fields on EVERY archived record for
-   * it, and `GET /records/{id}/integrity` still reported `intact: true`,
-   * because the canonical signed record binds `job.assetId` but none of the
-   * asset's descriptive columns (`canonical-job-record.ts`).
+   * The exposure this closes: `asset.code` is read live and printed as the
+   * machine code in a record's PDF header and footer (and as `assetCode` in a
+   * bulk export's `manifest.csv`), and a record's PDF is re-rendered from
+   * current data on every request — nothing is frozen at archive. So renaming a
+   * machine retroactively rewrote EVERY archived record for it, and
+   * `GET /records/{id}/integrity` still reported `intact: true`, because the
+   * canonical signed record binds `job.assetId` but none of the asset's
+   * descriptive columns (`canonical-job-record.ts`).
    *
-   * Deliberately NOT a freeze of the machine: the guard looks only at the two
-   * columns that actually print, and only when their value changes. A machine
-   * with no archived records stays fully editable, `manufacturer`/`model`/
-   * `areaId`/`locationDetail`/`status`/`active` are never considered because
-   * they do not appear on the record at all, and a no-op re-send is allowed.
+   * Deliberately NOT a freeze of the machine. `code` is the ONLY column that
+   * reaches a rendered artefact — see `AssetPrintedFields` for the measured
+   * inventory, including why `description` is excluded — and it is considered
+   * only when its value actually changes. A machine with no archived records
+   * stays fully editable, `description`/`manufacturer`/`model`/`areaId`/
+   * `locationDetail`/`status`/`active` are never considered because they do not
+   * appear on the record at all, and a no-op re-send is allowed.
    *
    * SCOPE: this guards THIS endpoint. It is not a general immutability
    * property of an archived record's printed content — see
@@ -271,10 +281,7 @@ export class AssetsService {
     existing: AssetRow,
     dto: AssetUpdate,
   ): Promise<void> {
-    const changed = changedPrintedAssetFields(
-      { code: existing.code, description: existing.description },
-      { code: dto.code, description: dto.description },
-    );
+    const changed = changedPrintedAssetFields({ code: existing.code }, { code: dto.code });
     if (changed.length === 0) {
       return;
     }

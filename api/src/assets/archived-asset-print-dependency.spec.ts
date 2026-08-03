@@ -6,58 +6,36 @@ import { changedPrintedAssetFields } from './archived-asset-print-dependency';
  * end-to-end; these pin the ALLOW branches cheaply.
  */
 describe('changedPrintedAssetFields', () => {
-  const current = { code: 'AW02', description: 'ASM wire bonder' };
+  const current = { code: 'AW02' };
 
   it('reports the machine code when it changes', () => {
-    const changed = changedPrintedAssetFields(current, { code: 'AW03' });
-    expect(changed).toEqual([
+    expect(changedPrintedAssetFields(current, { code: 'AW03' })).toEqual([
       { pointer: '/code', subject: 'the machine code', before: 'AW02', after: 'AW03' },
     ]);
-  });
-
-  it('reports the description when it changes', () => {
-    const changed = changedPrintedAssetFields(current, { description: 'ASM wire bonder mk2' });
-    expect(changed.map((f) => f.pointer)).toEqual(['/description']);
-  });
-
-  it('reports both when both change', () => {
-    const changed = changedPrintedAssetFields(current, { code: 'AW03', description: 'new' });
-    expect(changed.map((f) => f.pointer)).toEqual(['/code', '/description']);
   });
 
   it('ignores fields the caller did not send', () => {
     expect(changedPrintedAssetFields(current, {})).toEqual([]);
   });
 
-  it('ignores a no-op re-send of the same values', () => {
-    expect(
-      changedPrintedAssetFields(current, { code: 'AW02', description: 'ASM wire bonder' }),
-    ).toEqual([]);
+  it('ignores a no-op re-send of the same value', () => {
+    expect(changedPrintedAssetFields(current, { code: 'AW02' })).toEqual([]);
   });
 
-  it('never reports a field that does not print on the record', () => {
+  it('never reports a field that does not reach a rendered artefact', () => {
+    // MEASURED, not assumed: `pdf-html-template.ts` emits exactly one
+    // asset-derived value, `esc(input.machineCode)`. `description` (like
     // `manufacturer`, `model`, `areaId`, `locationDetail`, `status` and
-    // `active` are absent from the PDF assembly entirely — re-siting or
-    // retiring a machine must never be blocked by an archived record. They are
-    // not part of `AssetPrintedFields`, so they cannot even be passed here;
-    // this asserts the shape stays that way.
-    const proposed = { manufacturer: 'ASM', model: 'X', active: false } as Partial<{
-      code: string;
-      description: string | null;
-    }>;
+    // `active`) is never rendered and is absent from the export manifest, so
+    // describing or re-siting a machine must never be blocked by an archived
+    // record. None of them are part of `AssetPrintedFields`, so the guard
+    // structurally cannot consider them — this asserts the shape stays so.
+    const proposed = {
+      description: 'Rewritten',
+      manufacturer: 'ASM',
+      model: 'X',
+      active: false,
+    } as Partial<{ code: string }>;
     expect(changedPrintedAssetFields(current, proposed)).toEqual([]);
-  });
-
-  it('renders a cleared description as (blank), not as empty quotes', () => {
-    const changed = changedPrintedAssetFields(current, { description: null });
-    expect(changed[0]).toMatchObject({ before: 'ASM wire bonder', after: '(blank)' });
-  });
-
-  it('treats a previously-blank description as (blank) on the before side', () => {
-    const changed = changedPrintedAssetFields(
-      { code: 'AW02', description: null },
-      { description: 'now described' },
-    );
-    expect(changed[0]).toMatchObject({ before: '(blank)', after: 'now described' });
   });
 });
