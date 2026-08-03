@@ -282,10 +282,19 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
     await expect(page.getByRole('button', { name: /Move next due date/ })).toHaveCount(0);
   });
 
-  test('a year with nothing scheduled says so, rather than showing a bare grid', async ({
-    page,
-    server,
-  }) => {
+  /**
+   * Review I-1. This test used to step BACK a year to reach the empty state,
+   * which pinned the defect as correct: `schedule_rule` holds one current
+   * next-due date and the server projects it forward only, so a past year is
+   * near-empty by construction — and the screen then told a planner nothing
+   * had been scheduled in a year the plant certainly worked. The fixture was
+   * anchored in 2026, so the empty result happened to be truthful and CI
+   * would never have noticed.
+   *
+   * The stepper is floored now, and the empty state is reached the only way
+   * it can be reached truthfully: a filter that genuinely matches nothing.
+   */
+  test('the year cannot be stepped into the past, and says why', async ({ page, server }) => {
     const machine = server.seedAsset({
       code: 'AW01',
       assetTypeId: 'at-1',
@@ -297,10 +306,86 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
     await page.goto('/planner');
     await expect(page.getByRole('table')).toBeVisible();
 
-    // A year before anything is anchored has no visits at all.
-    await page.getByRole('button', { name: `Show ${YEAR - 1}` }).click();
-    await expect(page.getByRole('heading', { name: `Maintenance plan ${YEAR - 1}` })).toBeVisible();
-    await expect(page.getByText(/Nothing is scheduled in/)).toBeVisible();
+    await expect(page.getByRole('button', { name: `Show ${YEAR - 1}` })).toBeDisabled();
+    const floor = page.getByTestId('planner-year-floor');
+    await expect(floor).toContainText('forward plan');
+    // It points at where the past really is, instead of implying there is none.
+    await expect(floor).toContainText('record archive');
+
+    // Forward still works, and coming back re-locks at the current year.
+    await page.getByRole('button', { name: `Show ${YEAR + 1}` }).click();
+    await expect(page.getByRole('heading', { name: `Maintenance plan ${YEAR + 1}` })).toBeVisible();
+    await expect(page.getByRole('button', { name: `Show ${YEAR}` })).toBeEnabled();
+    await page.getByRole('button', { name: `Show ${YEAR}` }).click();
+    await expect(page.getByRole('button', { name: `Show ${YEAR - 1}` })).toBeDisabled();
+  });
+
+  test('an empty plan states what it cannot show, and never blames a cause it cannot know', async ({
+    page,
+    server,
+  }) => {
+    // A wire bonder that IS scheduled, so the grid is not empty overall...
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-03-19`,
+    });
+    server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.wireBond });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+    await expect(page.getByRole('table')).toBeVisible();
+
+    // ...and a machine type with nothing on it at all: a truthful empty.
+    await page.getByLabel('Machine type').selectOption({ label: 'Aging Oven' });
+
+    const empty = page.getByTestId('planner-empty');
+    await expect(empty).toBeVisible();
     await expect(page.getByRole('table')).toHaveCount(0);
+    await expect(empty).toContainText(`No maintenance is planned in ${YEAR} for this machine type`);
+    await expect(empty).toContainText('cannot show visits already carried out');
+    // Causes are offered as things to CHECK — none is asserted.
+    await expect(empty).toContainText('If you expected something here, check');
+    await expect(empty).not.toContainText('A machine schedules work once it carries');
+  });
+
+  /**
+   * Review I-2. A rule whose stored date fell in an earlier year still
+   * projects visits into this one, so its row looks ordinary — it must not be
+   * the only silent line on the plan, and the alert must be reachable.
+   */
+  test('a visit past due from before this year is named, not silently drawn as ordinary', async ({
+    page,
+    server,
+  }) => {
+    const machine = server.seedAsset({
+      code: 'AW09',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR - 1}-11-01`,
+    });
+    server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.wireBond });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+    await expect(page.getByRole('table')).toBeVisible();
+
+    // No cell of this year IS the stored date, so nothing claims to be LATE.
+    // `exact` and row-scoped deliberately: Playwright's default text match is
+    // a case-insensitive SUBSTRING, and "later" in the banner copy below
+    // satisfies a bare `getByText('LATE')`.
+    await expect(page.getByTestId('planner-overdue-banner')).toHaveCount(0);
+    await expect(
+      page.getByRole('row', { name: /AW09/ }).getByText('LATE', { exact: true }),
+    ).toHaveCount(0);
+
+    // ...but the machine, the date and the way to act on it are all named.
+    const banner = page.getByTestId('planner-overdue-elsewhere');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText(`before ${YEAR}`);
+    await expect(banner).toContainText('AW09 CE 95 020 00 03');
+    await expect(banner).toContainText(`1 Nov ${YEAR - 1}`);
+
+    await banner.getByRole('button', { name: 'Machine schedules' }).click();
+    await expect(page.getByRole('heading', { name: 'Machine schedules' })).toBeVisible();
   });
 });

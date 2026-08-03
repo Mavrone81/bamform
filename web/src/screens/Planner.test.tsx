@@ -40,7 +40,7 @@ vi.mock('../auth', () => ({
 }));
 
 // Imported AFTER the mocks so the screen binds to them.
-import { Planner, buildGrid, heavyThresholdFor } from './Planner';
+import { Planner, buildGrid, describeOverdueElsewhere, heavyThresholdFor } from './Planner';
 import type { PlannerScheduleRow } from '../api/admin-client';
 
 /**
@@ -191,6 +191,139 @@ describe('Planner — past due is never colour alone (A-05)', () => {
     seed([rule({ nextDueOn: `${YEAR}-12-19`, plannedDates: [`${YEAR}-12-19`] })]);
     await renderGrid();
     expect(screen.queryByTestId('planner-overdue-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('planner-overdue-elsewhere')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Review I-2. The banner and the LATE markers must not disagree: an alert on
+ * `role="alert"` announcing a visit that has no cell on screen is an alarm
+ * the planner cannot see or act on.
+ *
+ * The subtlety is that "count only what is drawn" alone would be WORSE. A
+ * rule whose stored date fell in an earlier year is still returned (its date
+ * is before the window's end) and still projects visits into this year, so
+ * its row looks entirely ordinary — the most neglected line on the plan
+ * would become the only silent one. Hence two counts, and the second names
+ * the machines and points at the screen that can move them.
+ */
+describe('Planner — the overdue banner counts only what it can point at', () => {
+  /** Stored date in a PRIOR year; projections land inside the displayed one. */
+  const straddling = () =>
+    rule({
+      id: 'rule-straddle',
+      assetCode: 'AW09',
+      nextDueOn: `${YEAR - 1}-11-01`,
+      intervalMonths: 3,
+      plannedDates: [`${YEAR}-02-01`, `${YEAR}-05-01`, `${YEAR}-08-01`, `${YEAR}-11-01`],
+    });
+
+  it('does not put an off-grid visit in the on-grid count', () => {
+    const { overdueCount, overdueElsewhere } = buildGrid([straddling()], YEAR, `${YEAR}-08-03`);
+    expect(overdueCount).toBe(0);
+    expect(overdueElsewhere).toHaveLength(1);
+  });
+
+  it('marks no cell LATE for it — because none of its cells is the stored date', async () => {
+    seed([straddling()]);
+    await renderGrid();
+    expect(screen.queryByText('LATE')).not.toBeInTheDocument();
+    // ...and the on-grid banner, which promises "marked LATE below", is absent.
+    expect(screen.queryByTestId('planner-overdue-banner')).not.toBeInTheDocument();
+  });
+
+  it('still refuses to stay silent: it names the machine, the date and where to act', async () => {
+    seed([straddling()]);
+    await renderGrid();
+    const banner = screen.getByTestId('planner-overdue-elsewhere');
+    expect(banner).toHaveTextContent('1 visit is past due');
+    expect(banner).toHaveTextContent(`before ${YEAR}`);
+    expect(banner).toHaveTextContent(/no cell on this plan/);
+    // Where it is...
+    expect(banner).toHaveTextContent('AW09 CE 95 020 00 03');
+    expect(banner).toHaveTextContent(`1 Nov ${YEAR - 1}`);
+    // ...and how to reach it.
+    expect(within(banner).getByRole('button', { name: 'Machine schedules' })).toBeInTheDocument();
+  });
+
+  it('navigates to the screen that can actually move it', async () => {
+    seed([straddling()]);
+    await renderGrid();
+    fireEvent.click(screen.getByRole('button', { name: 'Machine schedules' }));
+    expect(navigate).toHaveBeenCalledWith('/schedule');
+  });
+
+  it('keeps the two counts apart when both kinds are present', async () => {
+    seed([
+      straddling(),
+      rule({
+        id: 'rule-here',
+        assetCode: 'AW01',
+        nextDueOn: `${YEAR}-01-05`,
+        plannedDates: [`${YEAR}-01-05`],
+      }),
+    ]);
+    await renderGrid();
+    expect(screen.getByTestId('planner-overdue-banner')).toHaveTextContent('1 visit is past due');
+    expect(screen.getByTestId('planner-overdue-elsewhere')).toHaveTextContent(
+      '1 visit is past due',
+    );
+  });
+
+  /**
+   * The case the reviewer described: today 2026-08-03, step to 2027. A rule
+   * overdue at 2026-07-01 has no 2027 cell, so the old banner announced a
+   * past-due visit that was nowhere on screen.
+   */
+  it('does not raise an on-grid alarm for a visit left behind in a previous view', async () => {
+    seed([
+      rule({
+        nextDueOn: `${YEAR}-07-01`,
+        intervalMonths: 12,
+        plannedDates: [`${YEAR}-07-01`, `${YEAR + 1}-07-01`],
+      }),
+    ]);
+    await renderGrid();
+    expect(screen.getByTestId('planner-overdue-banner')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: `Show ${YEAR + 1}` }));
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(String(YEAR + 1)),
+    );
+    // No cell of the 2027 grid is that stored date, so nothing claims to be
+    // marked LATE there...
+    expect(screen.queryByTestId('planner-overdue-banner')).not.toBeInTheDocument();
+    // ...but it is not swallowed either.
+    expect(screen.getByTestId('planner-overdue-elsewhere')).toHaveTextContent(`1 Jul ${YEAR}`);
+  });
+
+  describe('naming stays readable when a plant has let many go stale', () => {
+    function stale(n: number) {
+      return Array.from({ length: n }, (_, i) =>
+        rule({
+          id: `stale-${i}`,
+          assetId: `asset-${i}`,
+          assetCode: `AW${String(i).padStart(2, '0')}`,
+          assetDocumentId: `doc-${i}`,
+          nextDueOn: `${YEAR - 1}-0${(i % 9) + 1}-01`,
+          plannedDates: [`${YEAR}-06-01`],
+        }),
+      );
+    }
+
+    it('names up to three, oldest first, then counts the rest', () => {
+      const { overdueElsewhere } = buildGrid(stale(6), YEAR, `${YEAR}-08-03`);
+      const text = describeOverdueElsewhere(overdueElsewhere);
+      expect(text).toContain('and 3 more');
+      // Oldest first: January before February.
+      expect(text.indexOf('AW00')).toBeLessThan(text.indexOf('AW01'));
+      expect(text.split('),').length).toBe(3);
+    });
+
+    it('does not say "and 0 more" at exactly three', () => {
+      const { overdueElsewhere } = buildGrid(stale(3), YEAR, `${YEAR}-08-03`);
+      expect(describeOverdueElsewhere(overdueElsewhere)).not.toContain('more');
+    });
   });
 });
 
@@ -500,10 +633,98 @@ describe('Planner — the year', () => {
     );
   });
 
-  it('explains an empty plan rather than showing a bare grid', async () => {
-    seed([]);
-    render(<Planner />);
-    expect(await screen.findByText(/Nothing is scheduled in/)).toBeInTheDocument();
-    expect(screen.queryByRole('table')).toBeNull();
+  /**
+   * Review I-1. `schedule_rule` holds ONE current next-due date and the
+   * server projects it forward only, so a past year returns almost nothing —
+   * and the grid would draw a near-empty 2025 for a year in which the plant
+   * certainly did maintenance. That reads as "no maintenance was due", which
+   * is the dangerous direction. The stepper is floored instead.
+   */
+  describe('the year only goes forward', () => {
+    it('refuses to step below the current year', async () => {
+      await renderGrid();
+      expect(screen.getByRole('button', { name: `Show ${YEAR - 1}` })).toBeDisabled();
+    });
+
+    it('says WHY, rather than leaving a dead control to be discovered', async () => {
+      await renderGrid();
+      const hint = screen.getByTestId('planner-year-floor');
+      expect(hint).toHaveTextContent(/forward plan/);
+      expect(hint).toHaveTextContent(/one next-due date per machine/);
+      // And it points at where the past actually lives, rather than implying
+      // the past does not exist.
+      expect(hint).toHaveTextContent(/record archive/);
+    });
+
+    it('never re-reads a past window even if the control is driven anyway', async () => {
+      await renderGrid();
+      fireEvent.click(screen.getByRole('button', { name: `Show ${YEAR - 1}` }));
+      // A disabled button dispatches nothing; the guard in the handler is the
+      // second lock, and neither may produce a request for a past year.
+      expect(listAllPlannerSchedule).toHaveBeenCalledTimes(1);
+      expect(listAllPlannerSchedule).toHaveBeenLastCalledWith(
+        expect.objectContaining({ from: `${YEAR}-01-01` }),
+      );
+    });
+
+    it('is still free to go forward, and comes back to the floor', async () => {
+      await renderGrid();
+      fireEvent.click(screen.getByRole('button', { name: `Show ${YEAR + 1}` }));
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(String(YEAR + 1)),
+      );
+      // Now stepping back IS allowed — down to, and no further than, the floor.
+      expect(screen.getByRole('button', { name: `Show ${YEAR}` })).toBeEnabled();
+      expect(screen.queryByTestId('planner-year-floor')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: `Show ${YEAR}` }));
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(String(YEAR)),
+      );
+      expect(screen.getByRole('button', { name: `Show ${YEAR - 1}` })).toBeDisabled();
+    });
+  });
+
+  /**
+   * Review I-1, second half. The old copy asserted a CAUSE ("A machine
+   * schedules work once it carries an active preventive-maintenance
+   * document") that this screen cannot know: emptiness could equally be the
+   * area scope, the type filter, or everything falling outside the window.
+   */
+  describe('the empty state does not claim a cause it cannot know', () => {
+    it('states what is true and what this screen cannot show', async () => {
+      seed([]);
+      render(<Planner />);
+      const empty = await screen.findByTestId('planner-empty');
+      expect(empty).toHaveTextContent(`No maintenance is planned in ${YEAR}`);
+      expect(empty).toHaveTextContent(/cannot show visits already carried out/);
+      expect(screen.queryByRole('table')).toBeNull();
+    });
+
+    it('offers every possible cause as something to CHECK, asserting none', async () => {
+      seed([]);
+      render(<Planner />);
+      const empty = await screen.findByTestId('planner-empty');
+      expect(empty).toHaveTextContent(/If you expected something here, check/);
+      // All three candidate causes are named; none is stated as the answer.
+      expect(empty).toHaveTextContent(/active\s+preventive-maintenance document/);
+      expect(empty).toHaveTextContent(new RegExp(`due within ${YEAR}`));
+      expect(empty).toHaveTextContent(/area you can see/);
+      // The old sentence asserted the document was the reason. It must not
+      // come back: this is the exact wording that made the screen lie.
+      expect(empty.textContent).not.toMatch(/A machine schedules work once it carries/);
+    });
+
+    it('says which filter narrowed it, when one did', async () => {
+      seed([]);
+      render(<Planner />);
+      await screen.findByTestId('planner-empty');
+      fireEvent.change(screen.getByLabelText('Machine type'), { target: { value: 'at-1' } });
+      await waitFor(() =>
+        expect(screen.getByTestId('planner-empty')).toHaveTextContent(
+          `No maintenance is planned in ${YEAR} for this machine type`,
+        ),
+      );
+    });
   });
 });

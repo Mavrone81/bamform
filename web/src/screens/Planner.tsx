@@ -78,6 +78,17 @@ interface PlannerVisit {
   weight: number;
 }
 
+/**
+ * A past-due visit whose stored date sits outside the year on screen, so it
+ * has no cell to be marked LATE on — review I-2.
+ */
+interface OverdueElsewhere {
+  assetId: string;
+  assetCode: string;
+  documentNumber: string;
+  nextDueOn: string;
+}
+
 /** One line of the grid: a machine's document, and its visits by week. */
 interface PlannerRow {
   key: string;
@@ -97,7 +108,14 @@ export function Planner() {
   useEffect(() => onCurrentUserChange(setUser), []);
   const canAdjust = rolesCanAdjustSchedule(user?.roles);
 
-  const [year, setYear] = useState(() => new Date().getFullYear());
+  /**
+   * The floor the year stepper cannot go below — see the control's own note.
+   * Read once at mount, deliberately: a planner who leaves the tab open
+   * across midnight on 31 December should not have the year they are looking
+   * at silently become un-navigable underneath them.
+   */
+  const [earliestYear] = useState(() => new Date().getFullYear());
+  const [year, setYear] = useState(earliestYear);
   const [assetTypes, setAssetTypes] = useState<AssetType[] | null>(null);
   const [typeFilter, setTypeFilter] = useState('');
   const [rules, setRules] = useState<PlannerScheduleRow[] | null>(null);
@@ -138,7 +156,7 @@ export function Planner() {
 
   const today = todayLocalIsoDate();
   const weeks = workWeeksOfYear();
-  const { rows, loadByWeek, heavyThreshold, overdueCount } = useMemo(
+  const { rows, loadByWeek, heavyThreshold, overdueCount, overdueElsewhere } = useMemo(
     () => buildGrid(rules ?? [], year, today),
     [rules, year, today],
   );
@@ -184,9 +202,28 @@ export function Planner() {
         <div className="field">
           <label htmlFor="planner-year">Plan year</label>
           <div className="planner-year-control">
+            {/*
+             * Review I-1 — THE YEAR ONLY GOES FORWARD, and this is a
+             * correctness floor, not a preference.
+             *
+             * `schedule_rule` holds ONE current `next_due_on` per rule and
+             * this endpoint projects it FORWARD only, so a past year cannot
+             * be reconstructed from it: the query would return only the rules
+             * still overdue enough to fall before that year's end, and the
+             * grid would draw a near-empty 2025 for a year in which the plant
+             * certainly did maintenance. An empty grid reads as "no
+             * maintenance was due" — the most dangerous thing this screen
+             * could say, and it would be false.
+             *
+             * Completed work is not missing from the system, it simply lives
+             * somewhere else: `job`/`record` rows, reached through the record
+             * archive. The hint below says so rather than leaving a dead
+             * control to be discovered.
+             */}
             <button
               type="button"
-              onClick={() => setYear((y) => y - 1)}
+              disabled={year <= earliestYear}
+              onClick={() => setYear((y) => Math.max(earliestYear, y - 1))}
               aria-label={`Show ${year - 1}`}
             >
               <span aria-hidden="true">‹</span> {year - 1}
@@ -202,6 +239,13 @@ export function Planner() {
               {year + 1} <span aria-hidden="true">›</span>
             </button>
           </div>
+          {year <= earliestYear && (
+            <p className="field-hint" data-testid="planner-year-floor">
+              This is a forward plan: the system keeps one next-due date per machine, not a record
+              of past visits, so earlier years cannot be drawn here. Work that was actually done is
+              in the record archive.
+            </p>
+          )}
         </div>
 
         <div className="field">
@@ -229,12 +273,44 @@ export function Planner() {
         </p>
       )}
 
+      {/*
+       * Review I-2. Two counts, deliberately kept apart, because they need
+       * two different things from the reader.
+       *
+       * `overdueCount` is what is MARKED LATE on the grid below — the planner
+       * can see it and click it. It is derived from exactly the condition the
+       * cell marker uses, so the banner and the cells cannot disagree.
+       *
+       * `overdueElsewhere` is the trap: a rule whose stored date fell in an
+       * earlier year is still returned and still projects visits into this
+       * one, so its row looks perfectly ordinary while being the most
+       * neglected line on the plan. It has no cell to mark, so the banner
+       * names the machines and points at the screen that CAN move them —
+       * an alert nobody can act on would be worse than none.
+       */}
       {overdueCount > 0 && (
         <p className="banner" data-tone="bad" role="alert" data-testid="planner-overdue-banner">
           <span aria-hidden="true">⚠</span> {overdueCount} visit
-          {overdueCount === 1 ? ' is' : 's are'} past due. A past-due visit has already raised its
-          job; the later visits drawn on its line follow from its date and will all move when it
-          does, so the rest of that line is not the plan until it is dealt with.
+          {overdueCount === 1 ? ' is' : 's are'} past due, marked LATE on the plan below. A past-due
+          visit has already raised its job; the later visits drawn on its line follow from its date
+          and will all move when it does, so the rest of that line is not the plan until it is dealt
+          with.
+        </p>
+      )}
+
+      {overdueElsewhere.length > 0 && (
+        <p className="banner" data-tone="bad" role="alert" data-testid="planner-overdue-elsewhere">
+          <span aria-hidden="true">⚠</span> {overdueElsewhere.length} visit
+          {overdueElsewhere.length === 1 ? ' is' : 's are'} past due with a date before {year}, so{' '}
+          {overdueElsewhere.length === 1 ? 'it has' : 'they have'} no cell on this plan —{' '}
+          {describeOverdueElsewhere(overdueElsewhere)}. The later cells on{' '}
+          {overdueElsewhere.length === 1 ? 'that line' : 'those lines'} are projected forward from{' '}
+          {overdueElsewhere.length === 1 ? 'that date' : 'those dates'} and will move when it is
+          set. Open{' '}
+          <button type="button" className="btn-quiet" onClick={() => navigate('/schedule')}>
+            Machine schedules
+          </button>{' '}
+          to set a real date.
         </p>
       )}
 
@@ -245,11 +321,27 @@ export function Planner() {
         </p>
       )}
 
+      {/*
+       * Review I-1, second half. This used to say "A machine schedules work
+       * once it carries an active preventive-maintenance document" — an
+       * assertion of CAUSE that this screen cannot make. Emptiness here has
+       * at least four possible causes and the grid can distinguish none of
+       * them: no machine carries an active document; every machine does but
+       * nothing falls in this window; the caller's area scope excludes the
+       * machines that do; or the type filter does. Naming one of them as
+       * though it were the answer sends a planner to fix a thing that is not
+       * broken, and — worse — implies the plan is genuinely empty.
+       *
+       * So: state what is true (nothing found, and what this screen can and
+       * cannot show), then list what to CHECK. No cause is claimed.
+       */}
       {rules !== null && !loadError && rows.length === 0 && (
-        <p className="field-hint">
-          Nothing is scheduled in {year}
-          {typeFilter ? ' for this machine type' : ''}. A machine schedules work once it carries an
-          active preventive-maintenance document.
+        <p className="field-hint" data-testid="planner-empty">
+          No maintenance is planned in {year}
+          {typeFilter ? ' for this machine type' : ''}. This screen shows only work scheduled ahead;
+          it cannot show visits already carried out, which are in the record archive. If you
+          expected something here, check that those machines carry an active preventive-maintenance
+          document, that it is due within {year}, and that they are in an area you can see.
         </p>
       )}
 
@@ -539,12 +631,28 @@ export function buildGrid(
   rows: PlannerRow[];
   loadByWeek: Map<number, number>;
   heavyThreshold: number;
+  /** Past-due visits that ARE drawn on this year's grid, marked LATE. */
   overdueCount: number;
+  /**
+   * Past-due visits whose stored date falls OUTSIDE the displayed year, so
+   * they have no cell here at all — review I-2.
+   *
+   * These are not a rounding error. A rule whose `nextDueOn` is 1 Nov 2025,
+   * read on the 2026 grid, is still returned by the server (its date is
+   * before the window's end) and still projects visits INTO 2026 — but the
+   * stored date itself has no column, so no cell is marked LATE and the row
+   * looks entirely ordinary. Counting only what is drawn would leave the most
+   * neglected rules in the plant as the only silent ones; counting them with
+   * the rest would put an unactionable alarm on a `role="alert"`. So they are
+   * counted separately and NAMED, with the screen that can act on them.
+   */
+  overdueElsewhere: OverdueElsewhere[];
 } {
   const byRow = new Map<string, PlannerRow>();
   const documentsPerAsset = new Map<string, Set<string>>();
   const loadByWeek = new Map<number, number>();
   let overdueCount = 0;
+  const overdueElsewhere: OverdueElsewhere[] = [];
 
   for (const rule of rules) {
     const key = `${rule.assetId}:${rule.assetDocumentId}`;
@@ -566,8 +674,21 @@ export function buildGrid(
     seen.add(rule.assetDocumentId);
     documentsPerAsset.set(rule.assetId, seen);
 
+    // Review I-2: past due is counted against the CELL, not the row. The
+    // LATE marker fires for a drawn visit that is the rule's stored
+    // `nextDueOn` and has passed; the banner must count exactly that, or it
+    // announces visits the planner cannot see or reach.
     if (rule.nextDueOn < today) {
-      overdueCount += 1;
+      if (workWeekOf(rule.nextDueOn, year) === null) {
+        overdueElsewhere.push({
+          assetCode: rule.assetCode,
+          assetId: rule.assetId,
+          documentNumber: rule.documentNumber,
+          nextDueOn: rule.nextDueOn,
+        });
+      } else {
+        overdueCount += 1;
+      }
     }
 
     for (const date of rule.plannedDates) {
@@ -601,7 +722,16 @@ export function buildGrid(
       a.assetCode.localeCompare(b.assetCode) || a.documentNumber.localeCompare(b.documentNumber),
   );
 
-  return { rows, loadByWeek, heavyThreshold: heavyThresholdFor(loadByWeek), overdueCount };
+  // Oldest first — the one that has been waiting longest is the one to name.
+  overdueElsewhere.sort((a, b) => a.nextDueOn.localeCompare(b.nextDueOn));
+
+  return {
+    rows,
+    loadByWeek,
+    heavyThreshold: heavyThresholdFor(loadByWeek),
+    overdueCount,
+    overdueElsewhere,
+  };
 }
 
 /**
@@ -620,6 +750,22 @@ export function heavyThresholdFor(loadByWeek: Map<number, number>): number {
   if (loaded.length === 0) return Number.POSITIVE_INFINITY;
   const mean = loaded.reduce((sum, value) => sum + value, 0) / loaded.length;
   return Math.max(2, Math.ceil(mean * 1.5));
+}
+
+/**
+ * Names the off-grid past-due visits, oldest first, so the banner is
+ * actionable rather than a bare count. Capped at three: a plant that has let
+ * twenty rules go stale needs the oldest and a total, not a wall of codes.
+ */
+export function describeOverdueElsewhere(entries: OverdueElsewhere[]): string {
+  const named = entries
+    .slice(0, 3)
+    .map(
+      (entry) => `${entry.assetCode} ${entry.documentNumber} (${formatFullDate(entry.nextDueOn)})`,
+    )
+    .join(', ');
+  const rest = entries.length - Math.min(entries.length, 3);
+  return rest > 0 ? `${named} and ${rest} more` : named;
 }
 
 /** The bar is the shape only — the number beside it is the value. */

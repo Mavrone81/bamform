@@ -321,15 +321,39 @@ export async function listAllPlannerSchedule(params: {
 }): Promise<AdminResult<PlannerScheduleRow[]>> {
   const rows: PlannerScheduleRow[] = [];
   let cursor: string | undefined;
+  let lastStatus = 0;
 
   for (let page = 0; page < MAX_PLANNER_PAGES; page += 1) {
     const result = await listPlannerSchedule({ ...params, cursor });
     if (!result.ok) return result;
+    lastStatus = result.status;
     rows.push(...result.value.data);
     if (!result.value.page.hasMore || !result.value.page.nextCursor) {
       return { ok: true, status: result.status, value: rows };
     }
     cursor = result.value.page.nextCursor;
   }
-  return { ok: false, status: 0 };
+
+  // Review M-3: this used to return `status: 0`, which every caller renders
+  // as "Could not reach the server" — the one thing that definitely did NOT
+  // happen, since fifty consecutive requests just succeeded. The status kept
+  // here is the real one from the last page (200); the refusal is the
+  // client's own, so it carries its own problem text and says what to do.
+  return {
+    ok: false,
+    status: lastStatus,
+    problem: {
+      // `about:blank` is RFC 7807's own value for a problem with no
+      // registered type, which is exactly what this is: a CLIENT-side
+      // refusal, deliberately not borrowed from the server's `/errors/*`
+      // catalogue, since the server never refused anything here.
+      type: 'about:blank',
+      status: lastStatus,
+      title: 'The plan is too large to load in one view',
+      detail:
+        `The maintenance plan was still returning rows after ${MAX_PLANNER_PAGES} pages, so it ` +
+        'has not been drawn: a partly-loaded plan would show weeks as free when they are not. ' +
+        'Narrow it with the machine-type filter, or look at one year at a time.',
+    },
+  };
 }

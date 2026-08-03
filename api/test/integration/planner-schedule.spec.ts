@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { closeAll, resetDatabase } from './helpers/db';
+import { adminPool, closeAll, resetDatabase } from './helpers/db';
 import {
   createArea,
   createAsset,
@@ -366,6 +366,34 @@ describe('Planner schedule — GET /schedule (cross-machine, area-scoped)', () =
 
     const res = await get(await plannerToken()).expect(200);
     expect(res.body.data).toEqual([]);
+  });
+
+  /**
+   * Review M-1. The grid must draw what the scheduler will actually raise:
+   * `job-generation.service.ts` filters `{ active: true, assetDocument: {
+   * active: true } }`, and so does this. Deliberately STRICTER than
+   * `asset-schedule.service.ts`, which lets an inactive rule through so the
+   * per-machine screen can label it "Retired" — on a forward plan a row that
+   * will never generate work is a phantom, and this is the one screen whose
+   * whole job is judging how much load a week carries.
+   *
+   * Nothing in the API sets `schedule_rule.active` false today, so this is
+   * only reachable by writing the column directly — which is the point: it
+   * has to be right before the first writer arrives.
+   */
+  it('excludes an inactive RULE, exactly as job generation does', async () => {
+    const assetTypeId = await makeAssetType();
+    const { assetId, ruleId } = await makeScheduledMachine({ assetTypeId });
+    const live = await makeScheduledMachine({ assetTypeId });
+
+    await adminPool.query(`UPDATE "schedule_rule" SET "active" = false WHERE id = $1`, [ruleId]);
+
+    const res = await get(await plannerToken()).expect(200);
+    const rows: PlannerRow[] = res.body.data;
+    expect(rows.map((r) => r.assetId)).toEqual([live.assetId]);
+    expect(rows.some((r) => r.id === ruleId)).toBe(false);
+    // The machine itself is not hidden — only that one dead rule.
+    expect(assetId).not.toBe(live.assetId);
   });
 
   it('excludes a rule due entirely after the window', async () => {

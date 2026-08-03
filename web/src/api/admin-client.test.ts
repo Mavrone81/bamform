@@ -376,6 +376,29 @@ describe('planner schedule — the whole window, or an honest refusal', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Review M-3. Exhausting the page cap used to return `status: 0`, which
+   * every caller renders as "Could not reach the server" — the one thing that
+   * definitely did not happen, since fifty consecutive requests had just
+   * succeeded. It is a client-side refusal and must read like one.
+   */
+  it('refuses honestly when the page cap is exhausted — not as a lost connection', async () => {
+    vi.mocked(fetch).mockResolvedValue(pageResponse([{ id: 'r' }], 'cursor-forever'));
+
+    const result = await listAllPlannerSchedule({ from: '2026-01-01', to: '2026-12-31' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // NOT 0 — `status: 0` is reserved for "no response at all".
+      expect(result.status).toBe(200);
+      expect(result.problem?.detail).toMatch(/still returning rows after 50 pages/);
+      // It says what to do about it.
+      expect(result.problem?.detail).toMatch(/machine-type filter/);
+      // And it is not dressed up as one of the server's own error types.
+      expect(result.problem?.type).toBe('about:blank');
+    }
+  });
+
   it('reports a refusal mid-paging instead of returning a partial plan', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(pageResponse([{ id: 'r1' }], 'cursor-1'))

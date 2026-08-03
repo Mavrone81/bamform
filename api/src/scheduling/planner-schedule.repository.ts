@@ -96,10 +96,22 @@ export class PlannerScheduleRepository {
         // it forward is exactly how a monthly rule anchored last year fills
         // this year's grid (`planner-projection.ts`).
         nextDueOn: { lte: filters.dueOnOrBefore },
-        // The same `active` filter `asset-schedule.service.ts` and
-        // `job-generation.service.ts` both apply. A retired document raises no
-        // work, so drawing its visits on the plan would show a planner load
-        // that will never arrive.
+        // BOTH `active` flags, matching `job-generation.service.ts`'s own
+        // `where: { active: true, assetDocument: { active: true } }` exactly —
+        // the grid must draw what the scheduler will actually raise, and
+        // nothing else. A rule or a document that is retired generates no
+        // work (U-SCH-05 as slice 27 extended it), so drawing its visits would
+        // show a planner load that never arrives, in the one screen whose
+        // entire job is judging how much load a week is carrying.
+        //
+        // This is a DELIBERATE difference from `asset-schedule.service.ts`,
+        // which filters the document only and lets an inactive RULE through so
+        // `MachineSchedule` can render it as explicitly "Retired". That screen
+        // is a per-machine inventory, where a retired row is information; this
+        // one is a forward plan, where it is a phantom. (Currently unreachable
+        // either way — no writer in the API sets `schedule_rule.active` false
+        // today — which is exactly why it has to be right before one does.)
+        active: true,
         assetDocument: { active: true, asset: assetWhere },
         id: filters.afterId ? { gt: filters.afterId } : undefined,
       },
