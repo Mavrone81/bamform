@@ -49,8 +49,12 @@ export function emitYaml(doc: ParsedDocument): string {
     asset_type_code: doc.assetTypeCode,
     asset_type_name: doc.assetTypeName,
     printed_revision: doc.printedRevision,
-    // TLP §6.1 "current_revision" = the revision the load makes CURRENT
-    // (doc 4 loads as client revision D per B-04).
+    // TLP §6.1 "current_revision" = the revision the load makes CURRENT.
+    // B-04 WITHDRAWN 2026-08-03: doc 4 used to load as a synthetic client
+    // revision D here; the owner ruled the signed records authoritative
+    // (every signed ASM Wire Bond specimen, and cell J66 of the workbook
+    // itself, prints "95 - 28 g"), so doc 4 now loads at its printed
+    // revision C like every other document.
     current_revision: doc.loadRevision,
     source_file: doc.sourceFile,
     source_sha256: doc.sourceSha256,

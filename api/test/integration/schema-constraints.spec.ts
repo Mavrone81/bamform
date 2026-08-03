@@ -73,8 +73,9 @@ describe('DBD §7 schema-enforced invariants', () => {
       createTemplateMeasurement(revisionId, { lowerLimit: 105, upperLimit: 95 }),
     ).rejects.toMatchObject({ code: CHECK_VIOLATION });
 
-    // Sanity check: the correctly-ordered limits from the same defect
-    // (B-04's corrected 95-105 g range) are accepted.
+    // Sanity check: the same limits in the correct (lower <= upper) order
+    // are accepted — the CHECK constraint rejects only the inversion, not
+    // the values themselves.
     await expect(
       createTemplateMeasurement(revisionId, { lowerLimit: 95, upperLimit: 105 }),
     ).resolves.toEqual(expect.any(String));

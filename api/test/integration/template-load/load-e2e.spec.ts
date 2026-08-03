@@ -144,7 +144,7 @@ describe('template load e2e — loader → schedules → scheduler → job check
     expect(documents.rows[0].n).toBe(13);
   });
 
-  it('I-TL-20: every template exists with its full revision plan — doc 1 keeps the B-02 letter gap over contiguous ordinals; doc 4 ends CURRENT at client revision D', async () => {
+  it('I-TL-20: every template exists with its full revision plan — doc 1 keeps the B-02 letter gap over contiguous ordinals; doc 4 ends CURRENT at printed revision C (the B-04 correction that once added a synthetic revision D was withdrawn)', async () => {
     const token = await login(AUTHOR.email, AUTHOR.password);
     const templates = await fetchJson<{ data: { id: string; documentNumber: string }[] }>(
       '/api/v1/templates?limit=100',
@@ -187,12 +187,11 @@ describe('template load e2e — loader → schedules → scheduler → job check
       ['0', 'SUPERSEDED'],
       ['A', 'SUPERSEDED'],
       ['B', 'SUPERSEDED'],
-      ['C', 'SUPERSEDED'], // the printed revision — its content held B-04, never loaded as-is
-      ['D', 'CURRENT'], // the client-decided correction revision
+      ['C', 'CURRENT'], // the printed revision — no correction revision D exists anymore
     ]);
   });
 
-  it("I-TL-21: doc 4's CURRENT content matches the YAML exactly — 14 items, 20 measurements, B-04 loaded as 95–105 g (never the inverted range), N-01 escalation as TEXT", async () => {
+  it("I-TL-21: doc 4's CURRENT content matches the YAML exactly — 14 items, 20 measurements, B-04 loaded verbatim as the printed inverted range (TEXT, correction withdrawn), N-01 escalation as TEXT", async () => {
     const token = await login(AUTHOR.email, AUTHOR.password);
     const doc4 = firstSummary.documents.find((d) => d.documentNumber === 'CE 95 020 00 01')!;
     const revision = await fetchJson<{
@@ -219,10 +218,10 @@ describe('template load e2e — loader → schedules → scheduler → job check
     const b04 = revision.measurements.find((m) =>
       m.description.includes('Bond Force Verification Input Force 100g'),
     )!;
-    expect(b04.specType).toBe('RANGE');
-    expect(b04.lowerLimit).toBe(95);
-    expect(b04.upperLimit).toBe(105);
-    expect(b04.specDisplay).toBe('95 - 105 g');
+    expect(b04.specType).toBe('TEXT');
+    expect(b04.lowerLimit).toBeNull();
+    expect(b04.upperLimit).toBeNull();
+    expect(b04.specDisplay).toBe('95 - 28 g');
 
     const n01 = revision.measurements.find((m) =>
       m.description.includes('Track Height Calibration, Top Plate'),
@@ -318,7 +317,9 @@ describe('template load e2e — loader → schedules → scheduler → job check
     expect(byKey.get('form_template:create')).toBe(12);
     expect(byKey.get('asset_type:create')).toBe(12);
     expect(byKey.get('asset:create')).toBe(13);
-    // 34 revisions in total across the plans, each approved exactly once.
-    expect(byKey.get('template_revision:approve')).toBe(34);
+    // 33 revisions in total across the plans (34 before the B-04 correction
+    // was withdrawn — doc 4 no longer creates a synthetic revision D on top
+    // of its printed history), each approved exactly once.
+    expect(byKey.get('template_revision:approve')).toBe(33);
   });
 });
