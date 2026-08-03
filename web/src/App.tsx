@@ -17,6 +17,7 @@ import { AdminMachines } from './screens/AdminMachines';
 import { AdminMachineCreate } from './screens/AdminMachineCreate';
 import { AdminMachineDetail } from './screens/AdminMachineDetail';
 import { AdminAreas } from './screens/AdminAreas';
+import { MachineSchedules } from './screens/MachineSchedules';
 import { RecoveryCodes } from './screens/RecoveryCodes';
 import { Menu } from './screens/Menu';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -125,6 +126,11 @@ function Screens() {
     if (matchPath('/queue', path)) return <VerifierQueue />;
     if (matchPath('/delegations', path)) return <Delegations />;
     if (matchPath('/change-password', path)) return <ChangePassword />;
+    // Slice 29-SCHEDULE-UI review IMPORTANT-2 — deliberately OUTSIDE
+    // `/admin/*`: PLANNER/TEAM_LEADER/ENGINEER can adjust a schedule
+    // (`PUT /assets/{assetId}/schedule`) but must not gain the rest of the
+    // admin area. See `MachineSchedules`' own module doc.
+    if (matchPath('/schedule', path)) return <MachineSchedules />;
     if (matchPath('/admin/mfa-reset', path)) return <AdminMfaReset />;
     // Slice 13-UI-B — the admin area. Routing only; ADMIN-ness is decided by
     // the server per request (non-negotiable #6): a non-admin reaching any

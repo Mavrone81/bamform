@@ -1,17 +1,20 @@
 /// <reference types="@testing-library/jest-dom/vitest" />
+/// <reference types="node" />
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { AssetDocument, ScheduleRule } from '../api/admin-client';
 
 /**
  * Slice 29-SCHEDULE-UI — the missing half of the backfill workflow.
  * `MachineDocuments` lets an admin attach a document; this proves the screen
  * that lets anyone actually set when its work is due, and — the property
- * that matters most — that the past-due warning names the CONSEQUENCE
- * (a job raised on the next hourly sweep), not a bare red dot. A machine
- * that has just been given a document has a schedule anchored in the past,
- * and setting real dates is the same sitting's work as tagging the document,
- * not next week's.
+ * that matters most — that the past-due warning is true about BOTH the past
+ * and the future (review IMPORTANT-3): a sweep may already have raised a job
+ * against the old date, adjusting the date here does not remove it, and this
+ * app has no control anywhere that voids one, so the banner says so instead
+ * of inventing a path.
  */
 
 const getAssetSchedule = vi.fn();
@@ -33,7 +36,7 @@ vi.mock('../auth', () => ({
 }));
 
 // Imported AFTER the mocks so the component binds to them.
-import { MachineSchedule } from './MachineSchedule';
+import { MachineSchedule, MIN_REASON } from './MachineSchedule';
 
 const DOC: AssetDocument = {
   id: 'ad-1',
@@ -74,6 +77,16 @@ const PAST_RULE: ScheduleRule = {
   nextDueOn: '2020-01-01',
   adjustedReason: null,
   active: true,
+};
+
+/** A second overdue row on the same machine — the two-alert case MINOR-2
+ * flagged: `findByRole('alert')` throws on more than one match. */
+const ANOTHER_PAST_RULE: ScheduleRule = {
+  ...PAST_RULE,
+  id: 'rule-3',
+  frequency: 'M6',
+  intervalMonths: 6,
+  nextDueOn: '2019-01-01',
 };
 
 function seed(rules: ScheduleRule[], documents: AssetDocument[] = [DOC]) {
@@ -147,6 +160,55 @@ describe('U-SCHED-UI-02: the reason must be at least 10 characters, trimmed', ()
   });
 });
 
+describe('U-SCHED-UI-02b: an empty date cannot be submitted (review IMPORTANT-1)', () => {
+  it('keeps Save disabled once the date input is cleared, even with a valid reason', async () => {
+    setRole(['ENGINEER']);
+    seed([FUTURE_RULE]);
+    render(<MachineSchedule assetId="asset-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /adjust next due date/i }));
+
+    const dateField = screen.getByLabelText(/next due date/i);
+    const reasonField = screen.getByLabelText(/reason for this change/i);
+    const saveButton = screen.getByRole('button', { name: /^save$/i });
+
+    fireEvent.change(reasonField, { target: { value: 'a perfectly valid reason' } });
+    expect(saveButton).toBeEnabled();
+
+    // `<input type="date">` is clearable — a planner retyping the date on a
+    // tablet picker passes through '' mid-edit. Sending that would 422 with
+    // "Request body failed validation." and name no field
+    // (`z.string().min(1)`, `shared/src/schedule.ts`).
+    fireEvent.change(dateField, { target: { value: '' } });
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.change(dateField, { target: { value: '2028-01-01' } });
+    expect(saveButton).toBeEnabled();
+  });
+});
+
+describe('U-SCHED-UI-02c: MIN_REASON is pinned to the real shared schema (review MINOR)', () => {
+  it('matches `adjustedReason`’s actual minLength in shared/src/schedule.ts, not a re-typed guess', () => {
+    // Read the schema SOURCE rather than importing it: `web/tsconfig.json`
+    // sets `rootDir: "src"`, so a static import reaching outside `src/`
+    // fails `tsc --noEmit` even though vitest itself would happily run it —
+    // `web/e2e/support/fake-server.ts` gets to import the real schema
+    // because `e2e/tsconfig.json` carries no such `rootDir`. Reading the
+    // text still fails this test the moment the two numbers diverge, which
+    // is the property that matters (MIN_REASON silently drifting anywhere
+    // in 6..13 undetected).
+    // `import.meta.url` is a jsdom `URL` instance here (`environment:
+    // 'jsdom'`, vitest.config.ts), which `node:url`'s `fileURLToPath` does
+    // not accept — `process.cwd()` is vitest's own working directory
+    // (`web/`, proven by direct inspection), which is a plain string and
+    // sidesteps that entirely.
+    const schedulePath = resolve(process.cwd(), '../shared/src/schedule.ts');
+    const source = readFileSync(schedulePath, 'utf8');
+    const match = source.match(/adjustedReason:\s*z\.string\(\)\.trim\(\)\.min\((\d+)\)/);
+    expect(match).not.toBeNull();
+    expect(Number(match?.[1])).toBe(MIN_REASON);
+  });
+});
+
 describe('U-SCHED-UI-03: assetDocumentId is always sent on the PUT', () => {
   it('PUTs assetDocumentId, frequency, nextDueOn and the trimmed reason, then re-reads the list', async () => {
     setRole(['PLANNER']);
@@ -178,15 +240,17 @@ describe('U-SCHED-UI-03: assetDocumentId is always sent on the PUT', () => {
   });
 });
 
-describe('U-SCHED-UI-04: a past due date says what will happen, not just that it is red', () => {
-  it('names the consequence — a job raised on the next scheduler sweep', async () => {
+describe('U-SCHED-UI-04: a past due date says what will happen — true about the past too (review IMPORTANT-3)', () => {
+  it('names the consequence — a job may already exist, adjusting does not remove it, and this app cannot void one', async () => {
     setRole(['MAINTAINER']);
     seed([PAST_RULE]);
     render(<MachineSchedule assetId="asset-1" />);
-    const warning = await screen.findByRole('alert');
+    const [warning] = await screen.findAllByRole('alert');
     expect(warning).toHaveTextContent(/already passed/i);
     expect(warning).toHaveTextContent(/scheduler sweep/i);
-    expect(warning).toHaveTextContent(/overdue/i);
+    expect(warning).toHaveTextContent(/job may already exist/i);
+    expect(warning).toHaveTextContent(/does not remove that job/i);
+    expect(warning).toHaveTextContent(/no control to void/i);
   });
 
   it('raises no such warning for a rule due in the future', async () => {
@@ -195,6 +259,14 @@ describe('U-SCHED-UI-04: a past due date says what will happen, not just that it
     render(<MachineSchedule assetId="asset-1" />);
     expect(await screen.findByText(DOC.resolvedTitle)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('a machine with TWO overdue rows gets two warnings, not a thrown query (review MINOR)', async () => {
+    setRole(['MAINTAINER']);
+    seed([PAST_RULE, ANOTHER_PAST_RULE]);
+    render(<MachineSchedule assetId="asset-1" />);
+    const warnings = await screen.findAllByRole('alert');
+    expect(warnings).toHaveLength(2);
   });
 });
 
@@ -226,17 +298,19 @@ describe('U-SCHED-UI-05: a server refusal is shown verbatim, never a generic mes
   });
 });
 
-describe('U-SCHED-UI-06: a retired rule or document is visibly distinguished', () => {
+describe('U-SCHED-UI-06: a retired rule is visibly distinguished', () => {
+  // Review MINOR: only `rule.active` is tested here, not a retired
+  // DOCUMENT's rule. `GET`/`PUT /assets/{assetId}/schedule`
+  // (`asset-schedule.service.ts`) both filter to `assetDocument: { active:
+  // true }`, so a row belonging to a retired document can never reach this
+  // component from a real response — a test built on that combination would
+  // pin behaviour the server makes unreachable. `rule.active` itself is on
+  // the wire contract and currently unreachable too (no writer in the API
+  // ever sets it `false`), but it is kept live in the component because
+  // `job-generation.service.ts` honours it if something someday does.
   it('marks a rule whose own `active` flag is false', async () => {
     setRole(['MAINTAINER']);
     seed([{ ...FUTURE_RULE, active: false }]);
-    render(<MachineSchedule assetId="asset-1" />);
-    expect(await screen.findByText(/retired/i)).toBeInTheDocument();
-  });
-
-  it('marks a rule belonging to a retired document', async () => {
-    setRole(['MAINTAINER']);
-    seed([FUTURE_RULE], [{ ...DOC, active: false }]);
     render(<MachineSchedule assetId="asset-1" />);
     expect(await screen.findByText(/retired/i)).toBeInTheDocument();
   });

@@ -22,8 +22,9 @@ const FREQUENCY_LABELS: Record<Frequency, string> = {
 };
 
 /** Mirrors the server's `.trim().min(10)` on `adjustedReason` exactly
- * (`shared/src/schedule.ts`). */
-const MIN_REASON = 10;
+ * (`shared/src/schedule.ts`). Exported so the test can pin it against the
+ * real schema instead of a second hand-typed `10` that could drift. */
+export const MIN_REASON = 10;
 
 /**
  * Slice 29-SCHEDULE-UI — the missing half of the owner's backfill workflow.
@@ -44,6 +45,19 @@ const MIN_REASON = 10;
  * setting real dates here are the SAME SITTING's work, not two separate
  * tasks a week apart. Hence the past-due explanation on each row spells out
  * the CONSEQUENCE, not just that a date looks red.
+ *
+ * Review IMPORTANT-3: that consequence is not purely future. `adjust()`
+ * (`asset-schedule.service.ts`) writes only `nextDueOn`/`adjustedReason` — it
+ * never touches a `job` row — and job generation never advances a rule it
+ * has already fired for. If the hourly sweep ran between the document being
+ * tagged and this screen being opened (and that gap is, by construction,
+ * under an hour), a job already exists against the OLD date; saving a new
+ * one here does not remove it, and the next sweep raises a second job at the
+ * new date (no collision — the uniqueness key is `(asset_document_id,
+ * frequency_scope, due_on)`). There is no void action anywhere in this web
+ * app today — `POST /jobs/{jobId}/void` exists server-side but no screen
+ * calls it — so the past-due banner says this plainly instead of pointing
+ * at a control that does not exist.
  *
  * `GET /assets/{assetId}/schedule` carries no `@Roles()` — every
  * authenticated user may read it, so this component always renders the list.
@@ -184,13 +198,20 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
 
   const documentById = new Map((documents ?? []).map((doc) => [doc.id, doc]));
   const reasonTooShort = draftReason.trim().length < MIN_REASON;
+  // Review IMPORTANT-1: `<input type="date">` is clearable — a planner
+  // retyping the date on a tablet picker can send `nextDueOn: ''`, which
+  // fails `z.string().min(1)` (shared/src/schedule.ts) as a 422 whose whole
+  // detail is "Request body failed validation.", naming no field. Exactly
+  // the state `MachineDocuments.tsx` (review M-1) went out of its way to
+  // make unreachable for its own text field; the date field needs the same.
+  const dateMissing = draftDate === '';
 
   return (
     <section aria-labelledby="machine-schedule-heading" className="card">
       <h2 id="machine-schedule-heading">Preventive-maintenance schedule</h2>
       <p className="text-soft">
-        One row per frequency per document. Setting a next-due date here is what stops the next
-        scheduler sweep from raising work against a date that has already passed.
+        One row per frequency per document. A date left in the past keeps raising work against it
+        every sweep — set a real one here as soon as a document is tagged, not after.
       </p>
 
       {!canAdjust && (
@@ -222,13 +243,24 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
       <ul className="data-list">
         {(rules ?? []).map((rule) => {
           const doc = documentById.get(rule.assetDocumentId);
-          const retired = !rule.active || (doc ? !doc.active : false);
+          // Review MINOR: NOT `!rule.active || !doc.active`. The service's
+          // `where` on both GET and PUT (`asset-schedule.service.ts`) already
+          // filters to `assetDocument: { active: true }`, so a row belonging
+          // to a retired document never reaches this component at all — that
+          // half would be dead on arrival and, worse, untestable against a
+          // real response. `rule.active` alone is kept: it is on the wire
+          // contract (`shared/src/schedule.ts`) and `job-generation.service.ts`
+          // honours it, but no writer in the API sets it to `false` today
+          // (checked bootstrap/adjust/completion-cascade/void-recompute), so
+          // this branch is currently unreachable too — kept for the day
+          // something does, not because it fires now.
+          const retired = !rule.active;
           const overdue = rule.nextDueOn < todayLocalIsoDate();
           const isEditing = editingRuleId === rule.id;
 
           return (
             <li key={rule.id}>
-              <div className="card" data-rule={retired ? 'neutral' : overdue ? 'bad' : 'good'}>
+              <div className="card">
                 <div className="card-row">
                   <span className="card-title">{doc?.resolvedTitle ?? 'Unknown document'}</span>
                   <span className="job-code text-soft">
@@ -269,12 +301,20 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
                 )}
 
                 {/* The hazard this screen exists to prevent, said in terms of
-                    what will actually happen — never a bare red dot. */}
+                    what will actually happen — never a bare red dot. Review
+                    IMPORTANT-3: true about the past too, not just the future
+                    — see the module doc. There is no void control anywhere
+                    in this app to point to, so this says that plainly rather
+                    than inventing one. */}
                 {overdue && (
                   <p className="banner" data-tone="bad" role="alert">
-                    <span aria-hidden="true">⚠</span> This due date has already passed. The next
-                    scheduler sweep (hourly) will raise a job against it as already overdue — set a
-                    real date now, in this same sitting, not next week.
+                    <span aria-hidden="true">⚠</span> This due date has already passed. If the
+                    scheduler sweep already ran since this document was tagged (it runs hourly), a
+                    job may already exist against this OLD, overdue date — saving a new date here
+                    does NOT remove that job, and this app has no control to void one yet, so flag
+                    it before it is worked as real PM. Leaving this unset lets the next scheduler
+                    sweep raise another one — set a real date now, in this same sitting, not next
+                    week.
                   </p>
                 )}
 
@@ -316,7 +356,7 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
                         <button
                           type="submit"
                           className="btn-primary"
-                          disabled={busy || reasonTooShort}
+                          disabled={busy || reasonTooShort || dateMissing}
                         >
                           Save
                         </button>
