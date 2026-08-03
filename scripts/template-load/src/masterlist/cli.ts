@@ -163,8 +163,9 @@ export const WRITE_DONE_RE = /^\s+WRITE\s.*— done$/;
  * `main()`'s catch block (review fix round 3, MINOR), because this exact
  * classification logic has been wrong in each of the last two review
  * rounds (a false alarm, then a false all-clear) and must not go on
- * resting on hand-tracing. See `cli.spec.ts` for the regression tests —
- * built from REAL `import.ts` log output, not invented strings.
+ * resting on hand-tracing. See `cli-failure-banner.spec.ts` for the
+ * regression tests — built from REAL `import.ts` log output, not invented
+ * strings.
  */
 export function countRowOutcomes(logLines: readonly string[]): number {
   return logLines.filter((l) => ROW_OUTCOME_RE.test(l)).length;
