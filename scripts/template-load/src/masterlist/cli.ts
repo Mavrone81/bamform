@@ -8,7 +8,13 @@
  * the only way to write anything (`runImport`, Task 4, enforces this itself
  * — this CLI adds no shortcut, env var or prompt that could bypass it).
  *
- * Environment (no secrets on the command line):
+ * UNLIKE `cli-load.ts`, credentials are required ONLY on the `--apply` path
+ * (review fix round 1, IMPORTANT-1/minor): a dry run never constructs an
+ * `ApiClient` (`import.ts`'s `runImport` only does that when `apply ===
+ * true`), so demanding production credentials just to preview a workbook
+ * would make the safe, widely-runnable step needlessly gated.
+ *
+ * Environment — required for `--apply` only (no secrets ever on argv):
  *   BAMFORM_BASE_URL            e.g. https://form.bevorasg.com  (NO trailing slash)
  *   BAMFORM_AUTHOR_EMAIL        author account (roles DOC_CONTROLLER + ENGINEER)
  *   BAMFORM_AUTHOR_PASSWORD
@@ -18,22 +24,23 @@
  *   --year=2026          plan year (default: 2026 — the owner-decided plan year)
  *   --file=<path>        masterlist workbook to read (default: the committed fixture)
  *
- * Run:
+ * Run (from a checkout at the repo root — see docs/DEPLOYMENT_RUNBOOK.md §3.6
+ * for the full operator procedure, including WHERE this must run):
  *   npm run import:masterlist -- [flags]
  *   npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/masterlist/cli.ts [flags]
  *
- * See docs/DEPLOYMENT_RUNBOOK.md §3.6 for the full operator procedure —
- * always dry run first, diff `scripts/template-load/evidence/masterlist-import.md`
+ * Always dry run first, diff `scripts/template-load/evidence/masterlist-import.md`
  * against the paper masterlist, THEN `--apply`.
  */
 import { readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { parseYaml } from '../yaml-io';
 import { renderImportEvidence } from './evidence';
 import { runImport, type ImportReport, type ImportTemplateRef } from './import';
 import { parseMasterlist } from './parse';
 import { reconcile } from './reconcile';
 
+const REPO_ROOT = join(__dirname, '..', '..', '..', '..');
 const YAML_DIR = join(__dirname, '..', '..', 'yaml');
 const DEFAULT_FIXTURE = join(__dirname, '__fixtures__', 'masterlist.xlsx');
 const EVIDENCE_PATH = join(__dirname, '..', '..', 'evidence', 'masterlist-import.md');
@@ -47,13 +54,19 @@ function requireEnv(name: string): string {
   return value;
 }
 
-interface Args {
+export interface Args {
   apply: boolean;
   year: number;
   file: string;
 }
 
-function parseArgs(argv: readonly string[]): Args {
+/**
+ * Pure and exported so the dry-run-default safety property is unit-tested
+ * directly (review fix round 1, IMPORTANT-3): `apply` must default to
+ * `false`, `--apply` must be the ONLY spelling that flips it, and an
+ * unrecognised argument must be rejected rather than silently ignored.
+ */
+export function parseArgs(argv: readonly string[]): Args {
   let apply = false;
   let year = 2026;
   let file = DEFAULT_FIXTURE;
@@ -107,14 +120,35 @@ function loadTemplateCatalogue(yamlDir: string): {
   return { formFrequencies, templates };
 }
 
+/**
+ * Row-level log-line prefixes `import.ts` emits UNINDENTED, one per
+ * fully-resolved row outcome (skip / dry-run preview / unmapped-reuse /
+ * unmapped-block / hard-error / apply-mode left-unplanned). An ordinary
+ * successful `--apply` import does NOT get one of these — see `writeOpCount`
+ * below — so this undercounts machines in that specific case; it is used
+ * only as a lower-bound diagnostic in the mid-run failure path, never
+ * presented as an exact machine count.
+ */
+const ROW_OUTCOME_RE = /^(?:DRY|SKIP|ERROR|BLOCK|REUSE|NOTE)\s/;
+/** Indented lines recording an actual network write (`POST`/`PUT`). */
+const WRITE_OP_RE = /^\s+(?:POST|PUT)\s/;
+
 async function main(): Promise<void> {
   const { apply, year, file } = parseArgs(process.argv.slice(2));
 
-  const baseUrl = requireEnv('BAMFORM_BASE_URL').replace(/\/+$/, '');
-  const author = {
-    email: requireEnv('BAMFORM_AUTHOR_EMAIL'),
-    password: requireEnv('BAMFORM_AUTHOR_PASSWORD'),
-  };
+  // Credentials are read unconditionally (so a typo surfaces the same way
+  // either way) but only REQUIRED — via requireEnv's process.exit(2) — on
+  // the --apply path. A dry run runs with empty strings that `runImport`
+  // never uses (it only constructs an `ApiClient` when `apply === true`).
+  const baseUrl = apply
+    ? requireEnv('BAMFORM_BASE_URL').replace(/\/+$/, '')
+    : (process.env.BAMFORM_BASE_URL ?? '').replace(/\/+$/, '');
+  const author = apply
+    ? { email: requireEnv('BAMFORM_AUTHOR_EMAIL'), password: requireEnv('BAMFORM_AUTHOR_PASSWORD') }
+    : {
+        email: process.env.BAMFORM_AUTHOR_EMAIL ?? '',
+        password: process.env.BAMFORM_AUTHOR_PASSWORD ?? '',
+      };
 
   const { formFrequencies, templates } = loadTemplateCatalogue(YAML_DIR);
   const rows = parseMasterlist(file);
@@ -124,7 +158,8 @@ async function main(): Promise<void> {
   // processed, so if it rejects mid-run (network failure, unexpected
   // exception — see the catch below) everything printed up to that point
   // has ALREADY reached the operator's terminal in real time. The buffer
-  // just lets the failure message report how many lines that was.
+  // lets the failure message report accurate counts (see ROW_OUTCOME_RE /
+  // WRITE_OP_RE above), not just a raw, misleading line total.
   const logLines: string[] = [];
   const log = (line: string): void => {
     logLines.push(line);
@@ -139,18 +174,34 @@ async function main(): Promise<void> {
     // error (e.g. a network failure mid-`--apply`) — per-row RESULTS for
     // this run are lost, but every row already processed was already
     // logged above as it happened. Report that plainly rather than letting
-    // a bare stack trace be the only sign a migration died partway through.
+    // a bare stack trace be the only sign a migration died partway through
+    // — and report it ACCURATELY: a raw log-line count conflates a header
+    // line with a row outcome (review fix round 1, IMPORTANT-2), so count
+    // the two things that actually mean something instead.
+    const rowOutcomes = logLines.filter((l) => ROW_OUTCOME_RE.test(l)).length;
+    const writeOps = logLines.filter((l) => WRITE_OP_RE.test(l)).length;
+
     console.error('');
     console.error('='.repeat(78));
     console.error(
-      `IMPORT FAILED mid-run, in ${apply ? 'APPLY' : 'DRY RUN'} mode. ${logLines.length} ` +
-        'row-level log line(s) above are everything recoverable from this run — the importer ' +
-        'rejected before returning a structured report, so no summary or evidence file will be ' +
-        'written this time.',
+      `IMPORT FAILED mid-run, in ${apply ? 'APPLY' : 'DRY RUN'} mode. The importer rejected ` +
+        'before returning a structured report, so no summary or evidence file will be written ' +
+        'this time. From the log above:',
     );
-    if (apply) {
+    console.error(
+      `  ${rowOutcomes} row(s) reached a final logged outcome (skip / blocked / dry-run preview ` +
+        '/ left-unplanned) — a LOWER BOUND on rows processed: an ordinary successful --apply ' +
+        'write logs no single summary line, so this can under-count.',
+    );
+    console.error(`  ${writeOps} write call(s) (POST/PUT) were logged.`);
+    if (apply && writeOps > 0) {
       console.error(
-        'Some writes may already have happened for machines logged above before the failure.',
+        '  Because at least one write was logged, some machines above may already exist, ' +
+          'partially or fully, in the system.',
+      );
+    } else if (apply) {
+      console.error(
+        '  No writes were logged — nothing above appears to have been created or changed.',
       );
     }
     console.error(
@@ -173,14 +224,21 @@ async function main(): Promise<void> {
   console.log('');
   console.log(
     `DONE (${report.dryRun ? 'DRY RUN — nothing was written' : 'APPLY — writes were performed'}): ` +
-      `imported ${c.imported} · skipped ${c.skipped}` +
+      `imported ${c.imported} (of which ${c.leftUnplanned} left unplanned) · skipped ${c.skipped}` +
       `${skippedLabels.length ? ` (${skippedLabels.join(', ')})` : ''} · unmapped ${c.unmapped} · ` +
       `hardError ${c.hardError} · leftUnplanned ${c.leftUnplanned}` +
       `${leftUnplannedCodes.length ? ` (${leftUnplannedCodes.join(', ')})` : ''}`,
   );
 
   mkdirSync(dirname(EVIDENCE_PATH), { recursive: true });
-  writeFileSync(EVIDENCE_PATH, renderImportEvidence(report, { templates, file, year }));
+  // Repo-root-relative when possible, so the evidence file is reproducible
+  // across machines/runs of the SAME input (review fix round 1, minor) —
+  // an absolute path bakes in one laptop's home directory for no benefit.
+  const evidenceFile = file.startsWith(REPO_ROOT) ? relative(REPO_ROOT, file) : file;
+  writeFileSync(
+    EVIDENCE_PATH,
+    renderImportEvidence(report, { templates, file: evidenceFile, year }),
+  );
   console.log(
     `Evidence written to ${EVIDENCE_PATH} — diff this against the paper masterlist BEFORE --apply.`,
   );
@@ -195,7 +253,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+// Guarded so `parseArgs` (and, in principle, `main`) can be imported by
+// tests without running the CLI as a side effect of the import itself.
+/* istanbul ignore next -- entrypoint glue, exercised by running the CLI, not unit tests */
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

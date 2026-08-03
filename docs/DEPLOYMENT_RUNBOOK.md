@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.4 |
+| Revision | 0.5 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -25,6 +25,7 @@
 | 0.2 | 1 Aug 2026 | §3.4 added — create the first ADMIN account via the `bootstrap-admin` entrypoint (PR-RUN-21, PR-RUN-22); §11 gains the no-account-yet failure mode | Lead Engineer | _(pending)_ |
 | 0.3 | 2 Aug 2026 | §3.5 added — recover a lost password via the `reset-password` entrypoint (PR-RUN-23, PR-RUN-24), after a live lockout with five accounts and no known credentials; corrected the `psql` role in §3.3 and §7 from the non-existent `bamform` to `bamform_migrate` | Lead Engineer | _(pending)_ |
 | 0.4 | 3 Aug 2026 | §3.6 added — one-time PM masterlist import via `npm run import:masterlist` (PR-RUN-25, PR-RUN-26): dry run first, read the evidence file, then `--apply`; idempotent and safe to re-run; `DDA 03` deliberately absent; `AW06`/`BD01`/`EP01` deliberately left unplanned for a planner | Lead Engineer | _(pending)_ |
+| 0.5 | 3 Aug 2026 | §3.6 fix round 1 (quality review): removed the incorrect "re-run the dry run to verify `--apply`" claim from PR-RUN-26 — a dry run makes zero network calls and cannot detect prior writes — and replaced it with a Step 4 verification procedure (machines-screen count, one imported/one left-unplanned spot-check, confirm `DDA 03` absent); added explicit run-location and checkout/Node/HTTPS preconditions (this is a workstation CLI, not a container entrypoint); corrected "77 machines" to 76 and the wrong §3.4 template-load cross-reference | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -291,59 +292,80 @@ If NO users exist at all, this command says so and points at §3.4 instead.
 
 ## 3.6 Import the PM masterlist
 
-One-time migration of the plant's PM masterlist (`ML-S-MFT-00015 Rev 21`) into BamForm: it
-creates the plant's 77 real machines, attaches each one's PM document, and plans its 2026
-schedule, so the paper/Excel masterlist can be retired. This is separate from — and comes
-after — the template load in §3.4's prerequisites; it does not create templates, users or
-roles.
+One-time migration of the plant's PM masterlist (`ML-S-MFT-00015 Rev 21`) into BamForm: on the
+reference dataset it creates **76** real machines (one masterlist row, `DDA 03`, is deliberately
+absent — see Step 2), attaches each one's PM document, and plans its 2026 schedule, so the
+paper/Excel masterlist can be retired. This is separate from — and comes after — the PM
+template load (Prerequisites below; that procedure lives in
+`scripts/template-load/RUNBOOK.md`, not §3.4, which is the unrelated first-ADMIN-account
+bootstrap) and the account setup in §3.4. This step does not create templates, users or roles.
 
-**Prerequisites**
+**Where to run this.** Unlike §3.4/§3.5, this is **not** a container entrypoint — run it from a
+developer/controller workstation (or any machine that is not the `bamform-api` container)
+talking HTTPS to the real API. Do **not** attempt `docker compose exec bamform-api …`: the
+runtime image deletes `npm`, `npx` and `corepack` outright (PR-RUN-22), and `scripts/` is not
+copied into the image at all — both `npm run import:masterlist` and a direct `ts-node`
+invocation fail on the server.
 
-- Every PM document template the masterlist references (12 templates,
-  `scripts/template-load/yaml/*.yaml`) must already be loaded into this environment — see
-  `scripts/template-load/RUNBOOK.md`. The importer attaches documents by `documentNumber`; a
-  missing template is reported per row as a hard error, not guessed around.
-- An author account with roles **DOC_CONTROLLER + ENGINEER** (the same requirement as the
-  template-load CLI), with credentials available to set as environment variables.
+**Prerequisites** (mirrors `scripts/template-load/RUNBOOK.md` §0)
+
+- [ ] The working tree is a **clean checkout of the reviewed/merged commit** on `main`. This is
+      load-bearing, not bureaucratic: `--file` defaults to the committed fixture workbook
+      (`cli.ts`), so whichever commit the operator is standing on silently decides which
+      masterlist gets imported. Confirm with `git log -1` and `git status --porcelain` before
+      running anything.
+- [ ] `node -v` reports v22.x, and `npm ci` has been run at the repo root.
+- [ ] `BAMFORM_BASE_URL` will point at the real instance over **HTTPS**.
+- [ ] Every PM document template the masterlist references (12 templates,
+      `scripts/template-load/yaml/*.yaml`) is already loaded into this environment — see
+      `scripts/template-load/RUNBOOK.md`. The importer attaches documents by `documentNumber`; a
+      missing template is reported per row as a hard error, not guessed around.
+- [ ] An author account with roles **DOC_CONTROLLER + ENGINEER** (the same requirement as the
+      template-load CLI) exists, with credentials available to set as environment variables.
 
 **PR-RUN-25** Credentials come from the environment **only**, never the command line — exactly
 `BAMFORM_BASE_URL`, `BAMFORM_AUTHOR_EMAIL`, `BAMFORM_AUTHOR_PASSWORD`, matching `cli-load.ts`.
 The command rejects any argument it does not recognise rather than silently ignoring it. **Dry
 run is the default**; `--apply` is the only way to write anything, and there is no shortcut,
-env var or prompt that bypasses it.
+env var or prompt that bypasses it. Unlike `cli-load.ts`, credentials are required only on the
+`--apply` path — a dry run never contacts the API, so it needs none of them and can be run
+without holding production credentials at all.
 
-**Step 1 — dry run (always first)**
+**Step 1 — dry run (always first, from the checkout, no credentials required)**
 
 ```bash
-export BAMFORM_BASE_URL=https://form.bevorasg.com
-export BAMFORM_AUTHOR_EMAIL=<author email>
-export BAMFORM_AUTHOR_PASSWORD=<author password>
-
 npm run import:masterlist
 ```
 
 Defaults: `--year=2026` (the owner-decided plan year) and the committed fixture workbook. Pass
 `--file=<path>` to read a different workbook, `--year=YYYY` for a different plan year. A dry
 run makes **zero network calls** — nothing is read from or written to the running instance —
-so it is always safe to run against production.
+so it is always safe to run against production, and it needs no credentials.
 
 It prints one line per machine, then a summary:
 
 ```
-DONE (DRY RUN — nothing was written): imported 76 · skipped 1 (DDA 03) · unmapped 0 ·
-hardError 0 · leftUnplanned 3 (AW06, BD01, EP01)
+DONE (DRY RUN — nothing was written): imported 76 (of which 3 left unplanned) ·
+skipped 1 (DDA 03) · unmapped 0 · hardError 0 · leftUnplanned 3 (AW06, BD01, EP01)
 ```
+
+`imported` counts every machine + document created (including the 3 left unplanned); the
+evidence file (Step 2) splits that same 76 into 73 with a schedule planned and 3 left
+unplanned, so the two numbers reconcile rather than looking like a discrepancy.
 
 and writes `scripts/template-load/evidence/masterlist-import.md`.
 
 **Step 2 — read the evidence file**
 
 This is the artefact to diff against the paper masterlist, row by row, **before** anyone runs
-`--apply`. It has four sections:
+`--apply`. It has these sections:
 
 - **Machines imported with a schedule** — one row per machine: source label (verbatim column A,
-  so it matches the spreadsheet text directly), code, asset type, PM document, and every
-  frequency with its first planned due date.
+  so it matches the spreadsheet text directly), code, asset type, PM document, the
+  `machineNumber` that will print on every maintenance record, and every frequency with its
+  first planned due date **alongside the masterlist's own work week** (e.g. `M6: 2026-01-29
+  (WW5)`) — cross-check the work week, not the ISO date, against the spreadsheet's own WW
+  columns.
 - **Left unplanned for a planner** — machines where the PM document defines a frequency the
   plan does not schedule (a "surplus"). The machine and its document are still created, but the
   schedule is deliberately left blank — no `schedule_rule` rows exist for it yet. It appears in
@@ -356,12 +378,19 @@ This is the artefact to diff against the paper masterlist, row by row, **before*
   the reference dataset this section is empty. **If it is not empty, STOP** — resolve the
   underlying data problem (or get an owner decision) and re-run the dry run before considering
   `--apply`.
+- **Contestable mappings** — rows whose asset-type mapping is not obvious from the label alone
+  (e.g. `MS-620 ST01 → MB_E_TEST`, settled by a signed PM record, not by the label). Marked `†`
+  in the machines table; if the owner disputes one of these, resolve it before `--apply`.
 
 **Step 3 — apply**
 
 Once the evidence file has been checked against the spreadsheet and matches:
 
 ```bash
+export BAMFORM_BASE_URL=https://form.bevorasg.com
+export BAMFORM_AUTHOR_EMAIL=<author email>
+export BAMFORM_AUTHOR_PASSWORD=<author password>
+
 npm run import:masterlist -- --apply
 ```
 
@@ -372,25 +401,39 @@ trail all stay intact.
 
 **PR-RUN-26** The import is **idempotent and safe to re-run** — before every write it
 re-checks live state (list, then compare) rather than blindly retrying, and it never swallows a
-409 to force success. Re-running `npm run import:masterlist` (dry run) afterwards must report
-every machine already present and propose no further writes. It also never overwrites a
-schedule rule a human has since adjusted by hand in the app — a `nextDueOn` whose
-`adjustedReason` does not carry the migration's own provenance prefix is left untouched and
-logged as skipped.
+409 to force success. It also never overwrites a schedule rule a human has since adjusted by
+hand in the app — a `nextDueOn` whose `adjustedReason` does not carry the migration's own
+provenance prefix is left untouched and logged as skipped.
 
-**Step 4 — spot-check**
+**A second dry run does NOT prove `--apply` succeeded — do not use it as the verification
+step.** A dry run makes zero network calls by design (that is what makes it safe to run
+against production in Step 1), so it cannot know what already exists: it prints
+byte-identical output whether or not `--apply` already ran. Verify instead, in the web app:
 
-Pick one machine from the evidence file and confirm in the app: `GET /assets/{id}/schedule`
-returns the dates just planned, and a job appears once inside its lead time. On the reference
-dataset, `ED01` is a convenient check: 6M due `2026-01-29`, 3M due `2026-04-30`, Y due
-`2026-07-23`.
+**Step 4 — verify**
+
+1. **Whole-set count.** Before `--apply`, record the machine count on `/admin/machines`. After
+   `--apply`, confirm it rose by exactly the evidence file's "Imported total" (76 on the
+   reference dataset) — do not hardcode an absolute total, since the environment may already
+   hold machines.
+2. **One imported machine.** Open one machine from the "Machines imported with a schedule"
+   section (e.g. `ED01` on the reference dataset: 6M due `2026-01-29`, 3M due `2026-04-30`, Y
+   due `2026-07-23`) and confirm `GET /assets/{id}/schedule` returns those dates, and that a job
+   appears once inside its lead time.
+3. **One left-unplanned machine.** Open one machine from the "Left unplanned for a planner"
+   section (e.g. `AW06`, `BD01` or `EP01`) and confirm its schedule really is blank — no
+   `schedule_rule` rows, nothing due.
+4. **The skip.** Confirm `DDA 03` is absent from `/admin/machines`.
 
 **If the command fails partway through** (for example, a network blip mid-`--apply`), it prints
-a clear `IMPORT FAILED mid-run` banner naming how many rows were logged before the failure,
-exits non-zero, and does **not** write an evidence file for that run — per-row *results* are
-lost once this happens (only the log survives), but nothing already written is corrupted or
-duplicated. Because the import is idempotent (PR-RUN-26), the fix is simply: resolve the
-underlying problem, then re-run the exact same command.
+an `IMPORT FAILED mid-run` banner reporting how many rows reached a logged final outcome and how
+many write calls (`POST`/`PUT`) were logged before the failure — it distinguishes "nothing was
+written" from "some writes may already have happened" rather than reporting a raw, misleading
+line count — then exits non-zero without writing an evidence file for that run. Per-row
+*results* are lost once this happens (only the log survives), but nothing already written is
+corrupted or duplicated. Because the import is idempotent (PR-RUN-26), the fix is simply:
+resolve the underlying problem, then re-run the exact same command, and use Step 4 above — not
+a second dry run — to confirm the end state.
 
 ---
 

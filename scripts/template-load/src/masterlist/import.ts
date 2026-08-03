@@ -172,6 +172,21 @@ export interface MachineImportResult {
   /** frequency -> nextDueOn actually planned (or, under dry run, computed).
    *  Empty when `leftUnplanned`. */
   dueDates: Record<string, string>;
+  /** frequency -> the FIRST planned WORK WEEK (the masterlist's own unit —
+   *  see `mapping.ts`'s `workWeekToDate`) that produced the matching entry
+   *  in `dueDates`. Added for Task 6's evidence file: the paper masterlist
+   *  is written in work weeks, not ISO dates, so carrying this through lets
+   *  the owner cross-check a row directly instead of converting every date
+   *  by hand. Same keys as `dueDates`; empty when `leftUnplanned`. */
+  dueWeeks: Record<string, number>;
+  /** The value that would be (or was) written to `machineNumber` on the
+   *  asset-document (Task 2b's `machineNumberFor`) — `null` when the
+   *  template's title has no fillable blank, or when no template/mapping
+   *  was resolved for this row. Reported so the evidence file can surface
+   *  it: decision 4 flags a couple of templates as unverified against a
+   *  real specimen, and this is the one field an owner reviewing the
+   *  evidence file can actually catch a wrong guess on. */
+  machineNumber: string | null;
   /** Frequencies the form defines beyond the plan (Task 3's `surplus`) —
    *  informational; non-empty exactly when `leftUnplanned`. */
   surplus: string[];
@@ -279,6 +294,8 @@ async function processRow(r: Reconciliation, ctx: Ctx): Promise<MachineImportRes
       documentAttached: false,
       leftUnplanned: false,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber: null,
       surplus: [],
     };
   }
@@ -308,6 +325,8 @@ async function processRow(r: Reconciliation, ctx: Ctx): Promise<MachineImportRes
       documentAttached: false,
       leftUnplanned: false,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber: null,
       surplus: [],
       message: msg,
     };
@@ -347,6 +366,8 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
       documentAttached: false,
       leftUnplanned: false,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber: null,
       surplus: [],
       message: 'unmapped model — dry run cannot confirm whether it already exists',
     };
@@ -373,6 +394,8 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
       documentAttached: false,
       leftUnplanned: false,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber: null,
       surplus: [],
       message: 'reused an existing asset; unmapped model, so no document/schedule was touched',
     };
@@ -393,6 +416,8 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
     documentAttached: false,
     leftUnplanned: false,
     dueDates: {},
+    dueWeeks: {},
+    machineNumber: null,
     surplus: [],
     message: msg,
   };
@@ -414,6 +439,8 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       documentAttached: false,
       leftUnplanned: false,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber: null,
       surplus: [],
       message: msg,
     };
@@ -460,6 +487,8 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       documentAttached: true,
       leftUnplanned: leaveUnplanned,
       dueDates: leaveUnplanned ? {} : dueDates,
+      dueWeeks: leaveUnplanned ? {} : firstWeek,
+      machineNumber,
       surplus: leaveUnplanned ? [...r.surplus] : [],
       message: leaveUnplanned
         ? `left unplanned for a planner (surplus: ${r.surplus.join(', ')})`
@@ -483,6 +512,8 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       documentAttached: false,
       leftUnplanned: false,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber,
       surplus: [],
       message: msg,
     };
@@ -524,6 +555,8 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       documentAttached: false,
       leftUnplanned: false,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber,
       surplus: [],
       message: msg,
     };
@@ -563,6 +596,8 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       documentAttached: true,
       leftUnplanned: true,
       dueDates: {},
+      dueWeeks: {},
+      machineNumber,
       surplus: [...r.surplus],
       message: `left unplanned for a planner (surplus: ${r.surplus.join(', ')})`,
     };
@@ -620,6 +655,8 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     documentAttached: true,
     leftUnplanned: false,
     dueDates,
+    dueWeeks: firstWeek,
+    machineNumber,
     surplus: [],
   };
 }
