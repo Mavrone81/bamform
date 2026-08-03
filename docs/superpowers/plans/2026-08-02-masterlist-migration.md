@@ -41,9 +41,13 @@ export interface PlannedVisit {
 export interface MasterlistRow {
   /** Verbatim column A, whitespace-collapsed. */
   label: string;
-  /** Text before `--`, or the whole label when there is no separator. */
+  /** Text before `--`; without a separator, everything before the last token. */
   model: string;
-  /** Text after `--`, or the whole label when there is no separator. */
+  /**
+   * The plant's machine code — text after `--`, or the LAST whitespace-delimited
+   * token when there is no separator (`ConnX-Elite Lite KW01` -> `KW01`). This
+   * becomes the asset's identifier in the register and prints on every record.
+   */
   code: string;
   visits: PlannedVisit[];
 }
