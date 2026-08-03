@@ -1,9 +1,6 @@
 /// <reference types="@testing-library/jest-dom/vitest" />
-/// <reference types="node" />
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { AssetDocument, ScheduleRule } from '../api/admin-client';
 
 /**
@@ -36,7 +33,7 @@ vi.mock('../auth', () => ({
 }));
 
 // Imported AFTER the mocks so the component binds to them.
-import { MachineSchedule, MIN_REASON } from './MachineSchedule';
+import { MachineSchedule } from './MachineSchedule';
 
 const DOC: AssetDocument = {
   id: 'ad-1',
@@ -186,28 +183,12 @@ describe('U-SCHED-UI-02b: an empty date cannot be submitted (review IMPORTANT-1)
   });
 });
 
-describe('U-SCHED-UI-02c: MIN_REASON is pinned to the real shared schema (review MINOR)', () => {
-  it('matches `adjustedReason`’s actual minLength in shared/src/schedule.ts, not a re-typed guess', () => {
-    // Read the schema SOURCE rather than importing it: `web/tsconfig.json`
-    // sets `rootDir: "src"`, so a static import reaching outside `src/`
-    // fails `tsc --noEmit` even though vitest itself would happily run it —
-    // `web/e2e/support/fake-server.ts` gets to import the real schema
-    // because `e2e/tsconfig.json` carries no such `rootDir`. Reading the
-    // text still fails this test the moment the two numbers diverge, which
-    // is the property that matters (MIN_REASON silently drifting anywhere
-    // in 6..13 undetected).
-    // `import.meta.url` is a jsdom `URL` instance here (`environment:
-    // 'jsdom'`, vitest.config.ts), which `node:url`'s `fileURLToPath` does
-    // not accept — `process.cwd()` is vitest's own working directory
-    // (`web/`, proven by direct inspection), which is a plain string and
-    // sidesteps that entirely.
-    const schedulePath = resolve(process.cwd(), '../shared/src/schedule.ts');
-    const source = readFileSync(schedulePath, 'utf8');
-    const match = source.match(/adjustedReason:\s*z\.string\(\)\.trim\(\)\.min\((\d+)\)/);
-    expect(match).not.toBeNull();
-    expect(Number(match?.[1])).toBe(MIN_REASON);
-  });
-});
+// The MIN_REASON-vs-shared-schema pin now lives in
+// `MachineSchedule.schema-contract.test.ts`, asserted BEHAVIOURALLY against
+// `scheduleAdjustRequestSchema` itself (review MINOR round 2) rather than
+// regexed out of the schema's source text here. It is a separate file, not a
+// separate `describe` in this one, because it needs to import the real
+// schema from `shared/src` — see that file's own header for why.
 
 describe('U-SCHED-UI-03: assetDocumentId is always sent on the PUT', () => {
   it('PUTs assetDocumentId, frequency, nextDueOn and the trimmed reason, then re-reads the list', async () => {
@@ -240,17 +221,20 @@ describe('U-SCHED-UI-03: assetDocumentId is always sent on the PUT', () => {
   });
 });
 
-describe('U-SCHED-UI-04: a past due date says what will happen — true about the past too (review IMPORTANT-3)', () => {
-  it('names the consequence — a job may already exist, adjusting does not remove it, and this app cannot void one', async () => {
+describe('U-SCHED-UI-04: a past due date says what will happen — the RIGHT direction (review IMPORTANT-3, round 2)', () => {
+  it('says one job already exists, leaving it alone does not repeat it, ADJUSTING is what raises a second, and this app cannot void the first', async () => {
     setRole(['MAINTAINER']);
     seed([PAST_RULE]);
     render(<MachineSchedule assetId="asset-1" />);
     const [warning] = await screen.findAllByRole('alert');
     expect(warning).toHaveTextContent(/already passed/i);
-    expect(warning).toHaveTextContent(/scheduler sweep/i);
-    expect(warning).toHaveTextContent(/job may already exist/i);
-    expect(warning).toHaveTextContent(/does not remove that job/i);
-    expect(warning).toHaveTextContent(/no control to void/i);
+    expect(warning).toHaveTextContent(/already raised one job/i);
+    // The property round 1 got backwards: leaving it as-is must NOT be
+    // described as the thing that raises more work.
+    expect(warning).toHaveTextContent(/will not raise a second/i);
+    expect(warning).toHaveTextContent(/saving a new date here does not remove that job/i);
+    expect(warning).toHaveTextContent(/next sweep raises a second/i);
+    expect(warning).toHaveTextContent(/no control yet to void/i);
   });
 
   it('raises no such warning for a rule due in the future', async () => {

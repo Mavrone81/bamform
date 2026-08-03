@@ -46,18 +46,27 @@ export const MIN_REASON = 10;
  * tasks a week apart. Hence the past-due explanation on each row spells out
  * the CONSEQUENCE, not just that a date looks red.
  *
- * Review IMPORTANT-3: that consequence is not purely future. `adjust()`
- * (`asset-schedule.service.ts`) writes only `nextDueOn`/`adjustedReason` — it
- * never touches a `job` row — and job generation never advances a rule it
- * has already fired for. If the hourly sweep ran between the document being
- * tagged and this screen being opened (and that gap is, by construction,
- * under an hour), a job already exists against the OLD date; saving a new
- * one here does not remove it, and the next sweep raises a second job at the
- * new date (no collision — the uniqueness key is `(asset_document_id,
- * frequency_scope, due_on)`). There is no void action anywhere in this web
- * app today — `POST /jobs/{jobId}/void` exists server-side but no screen
- * calls it — so the past-due banner says this plainly instead of pointing
- * at a control that does not exist.
+ * Review IMPORTANT-3 (round 2 — the first attempt at this paragraph got the
+ * direction backwards, and the banner disagreed with it): `job` carries a
+ * PARTIAL UNIQUE INDEX on `(asset_document_id, frequency_scope, due_on)
+ * WHERE status <> 'voided' AND is_adhoc = false`
+ * (`20260730000010_job_period_key_by_document_concurrent`), and
+ * `JobGenerationService#generateForRule` catches the resulting `P2002` as an
+ * idempotent no-op. So a rule left with a past `nextDueOn` raises exactly
+ * ONE job, ever — every later sweep re-attempts the SAME `due_on`, collides
+ * with the row already there, and reports `alreadyExists`. Leaving it alone
+ * does not compound.
+ *
+ * `adjust()` (`asset-schedule.service.ts`) writes only
+ * `nextDueOn`/`adjustedReason` — it never touches that job row. So SAVING A
+ * NEW DATE is what creates a SECOND job: the next sweep now attempts a
+ * different `due_on`, does not collide with the first, and inserts —
+ * leaving the original, still-open job sitting at the old date with nothing
+ * pointing back at it. There is no void action anywhere in this web app
+ * today — `POST /jobs/{jobId}/void` exists server-side but no screen calls
+ * it — so the past-due banner says this plainly (one job already exists;
+ * adjusting creates a second; this app cannot void the first) instead of
+ * claiming adjusting "stops" anything.
  *
  * `GET /assets/{assetId}/schedule` carries no `@Roles()` — every
  * authenticated user may read it, so this component always renders the list.
@@ -210,8 +219,9 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
     <section aria-labelledby="machine-schedule-heading" className="card">
       <h2 id="machine-schedule-heading">Preventive-maintenance schedule</h2>
       <p className="text-soft">
-        One row per frequency per document. A date left in the past keeps raising work against it
-        every sweep — set a real one here as soon as a document is tagged, not after.
+        One row per frequency per document. A due date left in the past already raised its one job —
+        read the warning on that row before changing it, since setting a new date is what raises a
+        second.
       </p>
 
       {!canAdjust && (
@@ -302,19 +312,22 @@ export function MachineSchedule({ assetId }: { assetId: string }) {
 
                 {/* The hazard this screen exists to prevent, said in terms of
                     what will actually happen — never a bare red dot. Review
-                    IMPORTANT-3: true about the past too, not just the future
-                    — see the module doc. There is no void control anywhere
-                    in this app to point to, so this says that plainly rather
+                    IMPORTANT-3 (round 2): the causal direction was backwards
+                    before — see the module doc's own retelling of it. This
+                    now agrees with it: one job already exists against this
+                    date and will not repeat on its own; ADJUSTING is what
+                    raises a second. There is no void control anywhere in
+                    this app to point to, so this says that plainly rather
                     than inventing one. */}
                 {overdue && (
                   <p className="banner" data-tone="bad" role="alert">
-                    <span aria-hidden="true">⚠</span> This due date has already passed. If the
-                    scheduler sweep already ran since this document was tagged (it runs hourly), a
-                    job may already exist against this OLD, overdue date — saving a new date here
-                    does NOT remove that job, and this app has no control to void one yet, so flag
-                    it before it is worked as real PM. Leaving this unset lets the next scheduler
-                    sweep raise another one — set a real date now, in this same sitting, not next
-                    week.
+                    <span aria-hidden="true">⚠</span> This due date has already passed. It has
+                    already raised one job — job generation is keyed per due date, so leaving this
+                    one as-is will not raise a second. But saving a NEW date here does not remove
+                    that job: it stays open at this old date, and the next sweep raises a SECOND job
+                    at the new date once it falls due. This app has no control yet to void the first
+                    one, so flag it before it is worked as real PM. Set a real date now regardless,
+                    in this same sitting — this row's schedule stays wrong until you do.
                   </p>
                 )}
 

@@ -13,5 +13,19 @@
     "outDir": "dist",
     "types": ["vite/client"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    // Review MINOR (round 2, slice 29-SCHEDULE-UI): the ONLY file under
+    // `src/` that reaches into `shared/src` directly (see its own header for
+    // why). That import is outside `rootDir: "src"` above by construction,
+    // which this project's `tsc --noEmit` refuses — deliberately: it is what
+    // catches a browser-source file typechecking a Node-only global that
+    // does not exist at runtime, and a blanket `/// <reference types="node"
+    // />` would disarm that everywhere, not just here. Excluding this one
+    // file by name is `tsc`-only; `vitest.config.ts` discovers it
+    // independently (`include: ['src/**/*.test.{ts,tsx}']`, no dependency on
+    // this file), so it still runs in `npm run test:unit`. Nothing else
+    // imports it, so TypeScript's import graph never re-admits it.
+    "src/components/MachineSchedule.schema-contract.test.ts"
+  ]
 }
