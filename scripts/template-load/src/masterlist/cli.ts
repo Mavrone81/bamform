@@ -154,8 +154,40 @@ const ROW_OUTCOME_RE = /^(?:DRY|SKIP|ERROR|BLOCK|REUSE|NOTE)\s{2,}/;
  * unfiltered `GET /assets`, etc.) are NOT tagged `WRITE` and must never be
  * counted as a write attempt.
  */
-const WRITE_ATTEMPT_RE = /^\s+WRITE\s.*— attempting$/;
-const WRITE_DONE_RE = /^\s+WRITE\s.*— done$/;
+export const WRITE_ATTEMPT_RE = /^\s+WRITE\s.*— attempting$/;
+export const WRITE_DONE_RE = /^\s+WRITE\s.*— done$/;
+
+/**
+ * A LOWER BOUND on rows processed (see `ROW_OUTCOME_RE`'s doc comment) —
+ * exported, and extracted to its own function rather than left inline in
+ * `main()`'s catch block (review fix round 3, MINOR), because this exact
+ * classification logic has been wrong in each of the last two review
+ * rounds (a false alarm, then a false all-clear) and must not go on
+ * resting on hand-tracing. See `cli.spec.ts` for the regression tests —
+ * built from REAL `import.ts` log output, not invented strings.
+ */
+export function countRowOutcomes(logLines: readonly string[]): number {
+  return logLines.filter((l) => ROW_OUTCOME_RE.test(l)).length;
+}
+
+/**
+ * The three honest states the mid-run failure banner can report, given the
+ * WRITE-tagged lines the four state-changing `import.ts` calls emit before
+ * and after each `await` (see `WRITE_ATTEMPT_RE`/`WRITE_DONE_RE` above).
+ * Pure and exported for the same reason as `countRowOutcomes`.
+ */
+export type WriteState =
+  | { kind: 'nothing-attempted' }
+  | { kind: 'outcome-unknown'; attempted: number; confirmed: number }
+  | { kind: 'all-confirmed'; confirmed: number };
+
+export function classifyWriteState(logLines: readonly string[]): WriteState {
+  const attempted = logLines.filter((l) => WRITE_ATTEMPT_RE.test(l)).length;
+  const confirmed = logLines.filter((l) => WRITE_DONE_RE.test(l)).length;
+  if (attempted === 0) return { kind: 'nothing-attempted' };
+  if (attempted > confirmed) return { kind: 'outcome-unknown', attempted, confirmed };
+  return { kind: 'all-confirmed', confirmed };
+}
 
 async function main(): Promise<void> {
   const { apply, year, file } = parseArgs(process.argv.slice(2));
@@ -182,8 +214,9 @@ async function main(): Promise<void> {
   // processed, so if it rejects mid-run (network failure, unexpected
   // exception — see the catch below) everything printed up to that point
   // has ALREADY reached the operator's terminal in real time. The buffer
-  // lets the failure message report accurate counts (see ROW_OUTCOME_RE /
-  // WRITE_OP_RE above), not just a raw, misleading line total.
+  // lets the failure message report accurate counts (see
+  // `countRowOutcomes`/`classifyWriteState` above), not just a raw,
+  // misleading line total.
   const logLines: string[] = [];
   const log = (line: string): void => {
     logLines.push(line);
@@ -205,9 +238,8 @@ async function main(): Promise<void> {
     // "nothing was written" — a write logged "attempting" but not yet
     // "done" may have applied on the server regardless. Never assert more
     // than the log actually supports.
-    const rowOutcomes = logLines.filter((l) => ROW_OUTCOME_RE.test(l)).length;
-    const attempted = logLines.filter((l) => WRITE_ATTEMPT_RE.test(l)).length;
-    const confirmed = logLines.filter((l) => WRITE_DONE_RE.test(l)).length;
+    const rowOutcomes = countRowOutcomes(logLines);
+    const writeState = classifyWriteState(logLines);
 
     console.error('');
     console.error('='.repeat(78));
@@ -222,23 +254,23 @@ async function main(): Promise<void> {
         'write logs no single summary line, so this can under-count.',
     );
     if (apply) {
-      if (attempted === 0) {
+      if (writeState.kind === 'nothing-attempted') {
         console.error(
           '  No state-changing call (asset/document create, schedule read-or-materialise, ' +
             'schedule write) was even ATTEMPTED — nothing above appears to have been created ' +
             'or changed.',
         );
-      } else if (attempted > confirmed) {
+      } else if (writeState.kind === 'outcome-unknown') {
         console.error(
-          `  ${confirmed} of ${attempted} attempted write(s) were confirmed done. The LAST ` +
-            'attempted write never logged as done — its outcome is UNKNOWN: it may have ' +
-            'applied on the server even though this run never saw that happen. Treat the ' +
-            'system as possibly already changed by that one call.',
+          `  ${writeState.confirmed} of ${writeState.attempted} attempted write(s) were ` +
+            'confirmed done. The LAST attempted write never logged as done — its outcome is ' +
+            'UNKNOWN: it may have applied on the server even though this run never saw that ' +
+            'happen. Treat the system as possibly already changed by that one call.',
         );
       } else {
         console.error(
-          `  ${confirmed} write(s) were attempted AND confirmed before the failure — some ` +
-            'machines above already exist, partially or fully, in the system.',
+          `  ${writeState.confirmed} write(s) were attempted AND confirmed before the failure ` +
+            '— some machines above already exist, partially or fully, in the system.',
         );
       }
     }
