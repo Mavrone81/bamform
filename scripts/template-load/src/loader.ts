@@ -17,7 +17,8 @@
  * row (empty content — the paper archive holds it, PR-TLP-01) approved in
  * printed order so `sequence_ordinal` is contiguous (INV-02, defect B-02's
  * disposition); the FINAL revision carries the extracted content and ends
- * CURRENT. Doc 4's final revision is client revision D (B-04 correction).
+ * CURRENT. Doc 4 is CURRENT at revision C — the B-04 correction that created
+ * a revision D was withdrawn 2026-08-03.
  *
  * Idempotent: a template whose CURRENT revision already matches the YAML is
  * left completely untouched ('unchanged'); a mismatch produces ONE new

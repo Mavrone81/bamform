@@ -250,7 +250,7 @@ export function renderRegister(docs: ParsedDocument[]): string {
     '',
     '## Outstanding client decisions (TLP §8.2, updated by this load)',
     '',
-    '- [x] **B-04** — decided: corrected to 95 – 105 g, loaded as client revision D of CE 95 020 00 01.',
+    '- [x] **B-04** — WITHDRAWN 2026-08-03: the 95 – 105 g correction and its client revision D are reverted. The owner ruled the signed records authoritative, and every signed ASM Wire Bond specimen prints "95 - 28 g", as does the workbook cell itself. Now loaded verbatim as TEXT (the INV-04 mechanism); CE 95 020 00 01 is CURRENT at revision C.',
     '- [ ] B-02 — confirm the wording of the revision-gap note on CE 95 010 00 01.',
     '- [ ] B-03 — confirm the as-printed treatment of out-of-order revision dates (doc CE 95 055 00 01 per the TLP, and the same anomaly found on CE 95 020 00 02, CE 95 030 00 01, CE 95 050 00 01).',
     '- [ ] B-05 — confirm the mapping of short approver names (Sara/Suren) to individuals; history entries are loaded verbatim as free text.',
