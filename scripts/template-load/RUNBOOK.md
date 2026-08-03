@@ -22,9 +22,13 @@ this repository on the controller's workstation and talks HTTPS to the real API 
       been reviewed by the owner. The register's **outstanding client decisions** list has
       been read out loud: N-01, N-02, N-04 in particular are loaded provisionally
       (TEXT / positional numbering) and stay open items — the load does NOT resolve them.
-- [ ] Two REAL named accounts exist on the target (create via the admin UI as
-      samuel@vorkhive.com if needed): - an **author** holding roles `DOC_CONTROLLER` **and** `ENGINEER` - an **approver** holding role `DOC_CONTROLLER`, a **different person** (INV-03 —
-      self-approval is rejected by the API and the DB).
+- [ ] Two REAL named accounts exist on the target: an **author** holding roles
+      `DOC_CONTROLLER` **and** `ENGINEER`, and an **approver** holding role `DOC_CONTROLLER`,
+      a **different person** (INV-03 — self-approval is rejected by the API and the DB).
+      On a first install neither exists: a fresh system has exactly one account, the
+      bootstrap ADMIN, and it holds neither role. **`docs/DEPLOYMENT_RUNBOOK.md` §3.4.1 is the
+      procedure** — admin UI (`/admin/users/new`, roles are checkboxes so one account can hold
+      both) or `POST /users` as the ADMIN.
       Both must have MFA not enforced for the run (MFA flags are off by default).
 - [ ] A fresh DB backup exists (`scripts/server/bamform-backup.sh` on the droplet, or a
       manual `pg_dump`) — the rollback path of last resort.
@@ -38,7 +42,13 @@ npx ts-node -P scripts/template-load/tsconfig.json scripts/template-load/src/cli
 git status --porcelain scripts/template-load/
 ```
 
-**Expected:** the extract prints 12 documents / 146 items and `git status` shows NO
+**Expected:** `tsc` prints nothing and exits **0**. It typechecks the loader, the masterlist
+importer and their `*.spec.ts` files — `scripts/template-load/tsconfig.json` declares
+`"types": ["node", "jest"]` for exactly that reason. If it instead reports hundreds of
+`Cannot find name 'describe' / 'it' / 'expect'`, that `"jest"` entry is missing: you are on a
+checkout from before 2026-08-03, not looking at a real type error.
+
+Then the extract prints 12 documents / 146 items and `git status` shows NO
 modifications — the committed YAML/evidence equals what the sources produce. If anything is
 dirty, STOP: either the source workbooks or the parser changed since review; re-review before
 loading (PR-TLP-10).

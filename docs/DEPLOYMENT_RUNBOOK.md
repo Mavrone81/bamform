@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.9 |
+| Revision | 0.10 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -29,6 +29,7 @@
 | 0.6 | 3 Aug 2026 | §3.6 fix round 2 (quality re-review): the mid-run-failure banner could report a false "no writes were logged" all-clear when the process died DURING a write (writes are now logged before AND after the network call, so an in-flight write shows as "outcome unknown" instead); Step 4.1 now says to keep the ORIGINAL pre-`--apply` machine-count baseline across a retry, not a freshly recorded one | Lead Engineer | _(pending)_ |
 | 0.7 | 3 Aug 2026 | §3.6 owner decisions: (1) a left-unplanned (surplus) machine now gets NO PM document attached, only the machine — the prior "skip the schedule GET" approach was proven wrong (the scheduler's bootstrap sweep materialises a full schedule for any active document regardless), so Step 2 and Step 4.3 are corrected; (2) the plan is imported with its true, mostly-historical dates as written — no rolling forward — so the CLI now prints a `PAST-DUE` count after every run (dry run and apply), and Step 3 gains a prominent pre-`--apply` warning that clearing the resulting backlog re-anchors each machine's schedule via `CompletionCascadeService`, flattening the masterlist's deliberate stagger | Lead Engineer | _(pending)_ |
 | 0.8 | 3 Aug 2026 | Final review fixes: (I1) Step 2's "left unplanned" wording no longer claims `machineNumber` can only be set at attach time — it names `PATCH /asset-documents/{id}` as the correction path, since the API accepts it there too; (M1) a surplus row now still hard-errors if its template is not loaded in the target environment (previously silently skipped that check); (M2) the CLI's past-due warning undercounted the first sweep's real impact — job generation fires within a lead-time window, not only for rules already past due — so it now prints BOTH counts, and Step 1's sample output and Step 3's STOP box are corrected from "181 of 220" alone to "181 past due / 193 on the first sweep, of 220" | Lead Engineer | _(pending)_ |
+| 0.10 | 3 Aug 2026 | **First-install rehearsal fixes — a production first install could not be completed as written.** (F1, BLOCKER) §3.2.1 added: nothing in the application injects a password from `secrets/` into `DATABASE_URL`/`REDIS_URL`, so §3.2's `bamform-migrate` failed with `P1000: Authentication failed`; the credential must be written into the connection string by the operator, and there is now a verified argv-safe procedure for it, plus PR-RUN-28/29 on `.env` becoming secret-bearing and on rotation drift. `.env.example` carries `__…__` placeholders naming the secret file each URL needs. (F2) §3.1 rewritten: it generated 7 of the 13 secrets `docker-compose.yml` declares — `dek_wrapped`, `app_password`, `readonly_password`, `backup_password`, `minio_root_password` and `smtp_password` were missing entirely; `dek_wrapped` is a DEK wrapped under the KEK (AES-256-GCM, `nonce‖ct‖tag`, base64), not a random string, and now has a generation AND a verification command; the six URL/password secrets moved from base64 to `openssl rand -hex 32` because a base64 password containing `/` does not parse in a URL; PR-RUN-27 forbids `generate-dev-secrets.sh` on a server. (F3) `/api/v1/health` and `/api/v1/health/ready` do not exist and 404 — every curl in §3.2, §4.1, §5, §6.2 and §9.1 corrected to `/api/v1/healthz`, and §9's table gains PR-RUN-32; §4.1 and §8.3's `pg_dump`/`pg_restore -U bamform` corrected to `bamform_migrate` (the same fix rev 0.3 made in §3.3/§7), and §4.1 is marked as an abridged illustration of `scripts/server/auto-deploy-bamform.sh`, which is authoritative. (F4/F5) §3.6 gains Step 3a (stop `bamform-worker` before `--apply`) and Step 5 (start it after verifying), stated accurately: stopping the worker does NOT prevent the 220 schedule rules — the importer's own `GET /assets/{id}/schedule` materialises them through the API, measured at 220 rules with 0 jobs — it prevents JOB generation, so the ~193 controlled records can be inspected for before they exist. (F8) §3.4.1 added: §3.4 creates one ADMIN and nothing bridged it to the DOC_CONTROLLER+ENGINEER author §3.6 requires or the second DOC_CONTROLLER approver the template load requires; role codes verified against `roleCodeSchema`. (F9) `.env.example`'s `COMPOSE_FILE` made relative — the absolute `/opt/bamform/docker-compose.yml` broke every bare `docker compose` elsewhere and silently overrode the deploy script's own value | Lead Engineer | _(pending)_ |
 | 0.9 | 3 Aug 2026 | Owner decision: this migration no longer computes or sends a `machineNumber` — the blank in eight of the twelve PM form titles is filled in BY HAND by the technician on the printed record, not decided by this migration (confirmed by the signed specimen `April 2026/ED01.pdf`). `mapping.ts`'s `machineNumberFor` is deleted; the evidence file's `Machine #` column is removed and replaced with a plain statement of the above. Step 2 is corrected accordingly, and now says plainly that the blank prints unfilled on every generated record today, since nothing — not this migration, not the record-capture screen — fills it | Lead Engineer | _(pending)_ |
 
 ---
@@ -150,22 +151,129 @@ sudo touch /var/log/bamform-deploy.log
 
 ## 3.1 Secrets — generated on the server, never printed
 
+`docker-compose.yml`'s `secrets:` block declares **thirteen** files. Compose refuses to start
+any service that is granted a secret whose file is missing, `db/init/01-roles.sh` aborts the
+database's one-and-only initialisation if a password file is absent, and `bamform-api`
+crash-loops at `CryptoModule` without `dek_wrapped`. **All thirteen must exist before the first
+`docker compose` command in §3.2** — there is no "add it later" for the four database
+passwords, because `db/init/01-roles.sh` runs exactly once, at first initialisation of the
+`bamform_pgdata` volume.
+
+**PR-RUN-27** Do **not** run `scripts/dev/generate-dev-secrets.sh` on a server. It is
+dev/CI-only: it covers six of the thirteen and writes a **hardcoded, published, non-secret**
+`minio_root_password` (`ci_ephemeral_not_a_real_secret`). Its own header says so.
+
 ```bash
 cd /opt/bamform
 mkdir -p secrets && chmod 700 secrets
+umask 077
+```
 
-# Symmetric keys
+**(a) The four passwords that go into a connection string, plus the two other passwords.**
+Generated as **hex**, not base64, deliberately: these are pasted into `postgresql://` and
+`redis://` URLs in §3.2, and a base64 password containing `/` does not parse as a URL at all
+(`+` and `=` need percent-encoding too). Hex is 256 bits of entropy and URL-safe as-is.
+
+```bash
+openssl rand -hex 32 > secrets/postgres_password    # role bamform_migrate (the initdb superuser)
+openssl rand -hex 32 > secrets/app_password         # role bamform_app
+openssl rand -hex 32 > secrets/readonly_password    # role bamform_readonly
+openssl rand -hex 32 > secrets/backup_password      # role bamform_backup
+openssl rand -hex 32 > secrets/redis_password       # redis-server --requirepass
+openssl rand -hex 32 > secrets/minio_root_password  # MINIO_ROOT_PASSWORD_FILE
+```
+
+> **Note the naming mismatch, it is not a typo.** `secrets/postgres_password` is the password of
+> the role **`bamform_migrate`**, because `docker-compose.yml` sets
+> `POSTGRES_USER: bamform_migrate` with `POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password`
+> — `bamform_migrate` is the initdb superuser, not a role `db/init/01-roles.sh` creates. The
+> other three are the passwords that script assigns to `bamform_app`, `bamform_readonly` and
+> `bamform_backup`.
+
+**(b) Key material — base64, decoded by the application.** `kek` must be exactly 32 raw bytes
+(AES-256); `blind_index_key` must differ from the DEK or `bamform-api` refuses to start
+(PR-SEC-08).
+
+```bash
 openssl rand -base64 32 > secrets/kek
 openssl rand -base64 32 > secrets/blind_index_key
 openssl rand -base64 32 > secrets/minio_sse_key
-openssl rand -base64 32 > secrets/postgres_password
-openssl rand -base64 32 > secrets/redis_password
+```
 
-# Ed25519 keys — DISTINCT keys for tokens and record signing (PR-SEC-07)
+**(c) Ed25519 keys — DISTINCT keys for tokens and record signing (PR-SEC-07).** Both are
+asserted to be Ed25519 at startup; their distinctness is **not** asserted, so do not copy one
+to the other.
+
+```bash
 openssl genpkey -algorithm ed25519 -out secrets/jwt_signing_key.pem
 openssl genpkey -algorithm ed25519 -out secrets/record_signing_key.pem
+```
 
+**(d) `dek_wrapped` — a wrapped key, not a random string.** This is the single AES-256 Data
+Encryption Key, encrypted ("wrapped") under the KEK generated in (b). `openssl rand` here would
+produce a file that base64-decodes to garbage and fails GCM authentication at boot. The layout
+`api/src/crypto/key-wrapping.ts` requires is `nonce(12) || ciphertext(32) || authTag(16)`, 60
+bytes, base64-encoded — so a correct file is 81 bytes on disk including its newline. **Generate
+the KEK first**; this reads it.
+
+```bash
+# Run from /opt/bamform. Requires node on the host. If the host has none, replace
+# `node -e` with the following — verified equivalent, and `-u` keeps the file owned
+# by you rather than root, so the `chmod 400` below still works:
+#   docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/secrets:/secrets" -w / \
+#     node:22-alpine node -e '…same script…'
+node -e '
+  const { randomBytes, createCipheriv } = require("node:crypto");
+  const { readFileSync, writeFileSync } = require("node:fs");
+  const kek = Buffer.from(readFileSync("secrets/kek", "utf8").trim(), "base64");
+  const dek = randomBytes(32);
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", kek, nonce);
+  const ciphertext = Buffer.concat([cipher.update(dek), cipher.final()]);
+  const wrapped = Buffer.concat([nonce, ciphertext, cipher.getAuthTag()]);
+  writeFileSync("secrets/dek_wrapped", wrapped.toString("base64") + "\n");
+'
+```
+
+**(e) `smtp_password` — not generated here.** It is the credential of the mail relay named by
+`SMTP_HOST`/`SMTP_USER` in `.env`, supplied by whoever owns that relay. It must still exist as a
+file or `bamform-worker` will not start, and `NotificationsModule` reads it whenever
+`NOTIFICATION_ENABLED=true`. If the relay is not yet provisioned, set
+`NOTIFICATION_ENABLED=false` in `.env` and write a placeholder — the transport is then a no-op
+that never opens the file.
+
+```bash
+printf '%s' '<the SMTP relay password>' > secrets/smtp_password    # no trailing newline
+```
+
+**Confirm all thirteen exist before continuing** — this prints names and sizes only, never
+content:
+
+```bash
+ls -l secrets/    # expect exactly 13 files
+for s in kek dek_wrapped blind_index_key jwt_signing_key.pem record_signing_key.pem \
+         postgres_password app_password readonly_password backup_password redis_password \
+         minio_root_password minio_sse_key smtp_password; do
+  [ -s "secrets/$s" ] || echo "MISSING OR EMPTY: secrets/$s"
+done
 chmod 400 secrets/*
+```
+
+A correct `secrets/dek_wrapped` is 81 bytes. Verify it unwraps under the KEK **before** starting
+anything — a wrong one fails at `bamform-api` boot with an opaque GCM error:
+
+```bash
+node -e '
+  const { createDecipheriv } = require("node:crypto");
+  const { readFileSync } = require("node:fs");
+  const kek = Buffer.from(readFileSync("secrets/kek","utf8").trim(),"base64");
+  const w = Buffer.from(readFileSync("secrets/dek_wrapped","utf8").trim(),"base64");
+  const d = createDecipheriv("aes-256-gcm", kek, w.subarray(0,12));
+  d.setAuthTag(w.subarray(w.length-16));
+  const dek = Buffer.concat([d.update(w.subarray(12,w.length-16)), d.final()]);
+  if (dek.length !== 32) throw new Error("DEK is " + dek.length + " bytes, must be 32");
+  console.log("dek_wrapped OK — unwraps to a 32-byte DEK under this KEK");
+'
 ```
 
 **PR-RUN-04** Do not `cat` any file in `secrets/`. Do not paste one into a message, a ticket or
@@ -180,19 +288,91 @@ ls -l secrets/    # confirms presence and mode without disclosing content
 
 ## 3.2 Configuration and first start
 
+### 3.2.1 The database and Redis passwords must be written INTO the connection strings
+
+**This is the step whose absence stopped the first rehearsal dead.** Skip it and §3.2.3's
+`bamform-migrate` fails with:
+
+```
+Error: P1000: Authentication failed against database server,
+the provided database credentials for `bamform_migrate` are not valid.
+```
+
+Every *key* secret (KEK, DEK, blind index, both signing keys, the MinIO password) is read
+straight from its file by `SecretFileLoader`. **The four connection strings are the exception.**
+`PrismaService` and `RedisModule` hand `DATABASE_URL` and `REDIS_URL` to their drivers verbatim
+— nothing in the application opens `secrets/postgres_password` or `secrets/redis_password` and
+assembles a URL from it (`api/src/redis/redis.module.ts` says so in its own comment). The
+secret files are consumed by the *server* side only: the postgres image via
+`POSTGRES_PASSWORD_FILE`, `db/init/01-roles.sh` via `CREATE ROLE … PASSWORD`, and
+`redis-server --requirepass`. The *client* side is `.env`, and it is the operator who joins
+the two. `BAMFORM-ENV-001` §4.3 states the intent plainly: `REDIS_URL` "includes credential".
+
+`.env.example` ships each URL with a `__…__` placeholder naming the file it needs. This loop
+substitutes all four **without the password ever appearing in a process's argv** (where `ps`
+on this shared host could read it) — every substitution is a bash builtin, and nothing is
+printed to the terminal. That is what satisfies PR-RUN-04 here: the rule is against
+*disclosing* a secret, and a `$(cat …)` into a shell variable discloses nothing. Do not reach
+for `sed -i "s|…|$(cat secrets/…)|"` instead — that form does put the password in argv.
+
 ```bash
-cp .env.example .env
-# Edit .env — non-secret configuration only (BAMFORM-ENV-001 §4)
+cd /opt/bamform
+umask 077
+pg=$(cat secrets/postgres_password); app=$(cat secrets/app_password)
+ro=$(cat secrets/readonly_password); rd=$(cat secrets/redis_password)
+while IFS= read -r line; do
+  line=${line//__POSTGRES_PASSWORD__/$pg}
+  line=${line//__APP_PASSWORD__/$app}
+  line=${line//__READONLY_PASSWORD__/$ro}
+  line=${line//__REDIS_PASSWORD__/$rd}
+  printf '%s\n' "$line"
+done < .env.example > .env
+unset pg app ro rd
 chmod 600 .env
 
-# Build and start
+# No placeholder may survive — expect 0
+grep -c '__[A-Z_]*__' .env
+```
+
+**PR-RUN-28** This makes `.env` **secret-bearing** on a real host, which contradicts the older
+"non-secret configuration only" wording. Treat it accordingly: mode `600`, never in git (it is
+`.gitignore`d), and it belongs with the key custody backup, not the config backup.
+`scripts/server/bamform-backup.sh` already bundles it encrypted alongside `secrets/`.
+
+**PR-RUN-29** Nothing keeps `.env` and `secrets/` in sync. Rotating any of these four passwords
+(§13, annually) means `ALTER ROLE`/`CONFIG SET` **and** re-editing `.env` **and** restarting the
+services. There is no drift detection; a mismatch surfaces only as an authentication failure.
+
+### 3.2.2 Then edit the non-secret configuration
+
+Set at minimum `WEB_PORT` and `API_PORT` from the recon port table (compose refuses to start
+without them), `APP_BASE_URL`, `JWT_ISSUER`, and the `SMTP_*` values. Leave
+`MFA_ENABLED=false` and `FORCE_PASSWORD_CHANGE_ENABLED=false` — `.env.example` explains why.
+
+### 3.2.3 Build, migrate, start
+
+```bash
+cd /opt/bamform
 docker compose -f /opt/bamform/docker-compose.yml build
 docker compose -f /opt/bamform/docker-compose.yml run --rm bamform-migrate
 docker compose -f /opt/bamform/docker-compose.yml up -d
+```
 
-# Verify
+`run --rm bamform-migrate` starts `bamform-postgres` first, which is when
+`db/init/01-roles.sh` creates `bamform_app`, `bamform_readonly` and `bamform_backup` from their
+secret files. That happens **once per volume, forever** — if a password file was missing or
+wrong at this moment, the fix is `ALTER ROLE` by hand, not a re-run.
+
+### 3.2.4 Verify
+
+```bash
 docker compose -f /opt/bamform/docker-compose.yml ps
-curl -fsS http://127.0.0.1:${API_PORT}/api/v1/health
+
+# The liveness endpoint is /api/v1/healthz — NOT /api/v1/health, which 404s
+# (it is documented in openapi.yaml as future work and is not implemented;
+# see api/test/contract/known-gaps.ts). Expect: {"status":"ok"}
+set -a; . /opt/bamform/.env; set +a          # so ${API_PORT} is defined in this shell
+curl -fsS "http://127.0.0.1:${API_PORT}/api/v1/healthz"
 ```
 
 ## 3.3 Verify nothing else was disturbed
@@ -260,6 +440,93 @@ Sign in at the application URL with the address just entered, then create the re
 through the admin screens. Re-running the command afterwards is harmless — it refuses with
 `Bootstrap refused: 1 user(s) already exist.`
 
+## 3.4.1 Create the two accounts the template load and the masterlist import need
+
+§3.4 leaves the system with exactly one account, an **ADMIN**. Neither of the two data-load
+procedures can run as it:
+
+| Procedure | Needs |
+|---|---|
+| Template load — `scripts/template-load/RUNBOOK.md` §0 | an **author** with `DOC_CONTROLLER` **and** `ENGINEER`, plus a **second, different** person as **approver** with `DOC_CONTROLLER` |
+| Masterlist import — §3.6 | an **author** with `DOC_CONTROLLER` **and** `ENGINEER` (the same account serves both) |
+
+The approver must be a different account from the author: self-approval is rejected by both the
+API and a database constraint (INV-03). Two accounts are therefore the minimum, and neither is
+the bootstrap ADMIN.
+
+The bootstrap ADMIN cannot grant itself these roles either — `UserUpdate` (`PATCH /users/{id}`)
+is the role-editing path and it is `@Roles('ADMIN')`, so an ADMIN may edit anyone including
+itself, but the sound procedure is to create two named accounts and leave the ADMIN as an
+administrator. Real named people, not shared logins: every template revision and every imported
+machine is attributed to whoever authored it, permanently, in the audit chain.
+
+**The role codes are a closed set** seeded by migration (`shared/src/user.ts`,
+`roleCodeSchema`): `MAINTAINER`, `PLANNER`, `TEAM_LEADER`, `ENGINEER`, `DOC_CONTROLLER`,
+`ADMIN`, `AUDITOR`. `GET /api/v1/roles` returns the live catalogue. Any other spelling is
+rejected with 422.
+
+**Route A — the admin UI (preferred).** Sign in as the §3.4 ADMIN and go to
+`/admin/users/new`. Roles are checkboxes and more than one may be ticked, so the author is a
+single account with both boxes:
+
+1. **Author** — full name, email, password (≥12 chars), tick **Document Controller
+   (`DOC_CONTROLLER`)** and **Engineer (`ENGINEER`)**.
+2. **Approver** — a *different* real person, tick **Document Controller (`DOC_CONTROLLER`)**
+   only.
+
+**Route B — the API**, if the web app is not yet reachable (`POST /users` is ADMIN-only):
+
+```bash
+set -a; . /opt/bamform/.env; set +a
+BASE="http://127.0.0.1:${API_PORT}/api/v1"
+
+# Fill these in — names and addresses of the two REAL people
+ADMIN_EMAIL='<the §3.4 admin address>'
+AUTHOR_NAME='<author full name>';   AUTHOR_EMAIL='<author address>'
+APPROVER_NAME='<approver full name>'; APPROVER_EMAIL='<approver address>'
+
+# Sign in as the §3.4 ADMIN. Type the password at the prompt; it stays out of history.
+read -rs -p 'ADMIN password: ' PW; echo
+TOKEN=$(curl -fsS -X POST "$BASE/auth/login" -H 'content-type: application/json' \
+  --data "$(printf '{"email":"%s","password":"%s"}' "$ADMIN_EMAIL" "$PW")" \
+  | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).accessToken')
+
+# Author — BOTH roles on ONE account
+read -rs -p 'author password: ' PW; echo
+curl -fsS -X POST "$BASE/users" -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  --data "$(printf '{"fullName":"%s","email":"%s","password":"%s","roleCodes":["DOC_CONTROLLER","ENGINEER"]}' \
+            "$AUTHOR_NAME" "$AUTHOR_EMAIL" "$PW")" >/dev/null && echo "author created"
+
+# Approver — DOC_CONTROLLER only, a DIFFERENT person
+read -rs -p 'approver password: ' PW; echo
+curl -fsS -X POST "$BASE/users" -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  --data "$(printf '{"fullName":"%s","email":"%s","password":"%s","roleCodes":["DOC_CONTROLLER"]}' \
+            "$APPROVER_NAME" "$APPROVER_EMAIL" "$PW")" >/dev/null && echo "approver created"
+
+# Verify, without disclosing anything: expect the author to show
+# ["DOC_CONTROLLER","ENGINEER"] and the approver ["DOC_CONTROLLER"].
+curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/users?roleCode=DOC_CONTROLLER" \
+  | jq '.data[] | {email, roles}'
+
+unset PW TOKEN
+```
+
+A `409` means that email already exists — the account is there, not a failure to fix by
+re-running with a different address.
+
+**PR-RUN-30** `MFA_ENABLED` must be `false` while these two accounts are used for a load —
+`DOC_CONTROLLER` and `ENGINEER` are both in `MFA_REQUIRED_ROLES`, and neither CLI has any way
+to satisfy a TOTP challenge. `.env.example` ships `MFA_ENABLED=false` for an unrelated reason
+(no MFA UI yet); if that has since been flipped, turn it off for the duration of §3.6 and the
+template load, or the CLIs cannot authenticate at all.
+
+**PR-RUN-31** Record both addresses in the password manager alongside the ADMIN. §3.6 and the
+template-load runbook take them from the environment (`BAMFORM_AUTHOR_EMAIL`,
+`BAMFORM_AUTHOR_PASSWORD`, `BAMFORM_APPROVER_EMAIL`, `BAMFORM_APPROVER_PASSWORD`), never from
+the command line.
+
 ## 3.5 Recover a lost password
 
 The refusal above is the guard working, not a fault — the bootstrap is one-time
@@ -326,6 +593,10 @@ invocation fail on the server.
       missing template is reported per row as a hard error, not guessed around.
 - [ ] An author account with roles **DOC_CONTROLLER + ENGINEER** (the same requirement as the
       template-load CLI) exists, with credentials available to set as environment variables.
+      **§3.4 does not create it** — it creates one ADMIN and nothing else. Create it per
+      **§3.4.1**, which also covers the second (approver) account the template load needs.
+      If `MFA_ENABLED` has been turned on, see PR-RUN-30: both roles are in
+      `MFA_REQUIRED_ROLES` and this CLI cannot satisfy a TOTP challenge.
 
 **PR-RUN-25** Credentials come from the environment **only**, never the command line — exactly
 `BAMFORM_BASE_URL`, `BAMFORM_AUTHOR_EMAIL`, `BAMFORM_AUTHOR_PASSWORD`, matching `cli-load.ts`.
@@ -454,6 +725,31 @@ This is the artefact to diff against the paper masterlist, row by row, **before*
 Once the evidence file has been checked against the spreadsheet and matches, and the past-due
 consequence above has been confirmed with the owner:
 
+**Step 3a — stop the worker first.** On the server, before running `--apply`:
+
+```bash
+docker compose -f /opt/bamform/docker-compose.yml stop bamform-worker
+docker compose -f /opt/bamform/docker-compose.yml ps    # bamform-worker: Exited; api/web still Up
+```
+
+> **Be precise about what this does and does not do — it is easy to overstate.**
+>
+> **It does NOT stop schedule rules being created.** The importer materialises them itself, over
+> the API: its own `GET /assets/{id}/schedule` call triggers the bootstrap, so all **220** rules
+> are written by the CLI whether the worker runs or not. This was measured in rehearsal — 220
+> rules present while the job count was still 0, before any sweep had run. Stopping the worker
+> is *not* what keeps `AW06`/`BD01`/`EP01` unplanned either; withholding their PM document is
+> (Step 2), and that works with the worker running.
+>
+> **What it prevents is JOB GENERATION**, and that is the part that matters. Each of the ~**193**
+> first-sweep jobs is a **controlled record** someone must formally dispose of. Stopping the
+> worker buys you the window to run Step 4's verification against a clean system and, if
+> something is wrong, to correct it before 193 records exist that cannot simply be deleted.
+> Restarting the worker raises them all — deferred, not avoided.
+>
+> Restarting `bamform-worker` is safe and non-destructive (§2.3): the scheduler catches up on
+> its next tick and delayed jobs resume from Redis.
+
 ```bash
 export BAMFORM_BASE_URL=https://form.bevorasg.com
 export BAMFORM_AUTHOR_EMAIL=<author email>
@@ -490,8 +786,9 @@ byte-identical output whether or not `--apply` already ran. Verify instead, in t
    nothing is wrong.
 2. **One imported machine.** Open one machine from the "Machines imported with a schedule"
    section (e.g. `ED01` on the reference dataset: 6M due `2026-01-29`, 3M due `2026-04-30`, Y
-   due `2026-07-23`) and confirm `GET /assets/{id}/schedule` returns those dates, and that a job
-   appears once inside its lead time.
+   due `2026-07-23`) and confirm `GET /assets/{id}/schedule` returns those dates. The rules are
+   there now even though the worker is stopped — the importer wrote them (Step 3a). **Jobs are
+   not**, and must not be, until Step 5.
 3. **One left-unplanned machine.** Open one machine from the "Left unplanned for a planner"
    section (e.g. `AW06`, `BD01` or `EP01`) and confirm its schedule really is blank — no
    `schedule_rule` rows, nothing due. Also confirm it has **no PM document attached yet** — that
@@ -500,6 +797,23 @@ byte-identical output whether or not `--apply` already ran. Verify instead, in t
    A planner still needs to attach the document the evidence file names for that row and set its
    dates before this machine has any schedule.
 4. **The skip.** Confirm `DDA 03` is absent from `/admin/machines`.
+
+**Step 5 — start the worker again**
+
+Only once Step 4 passes. This is what raises the ~193 backlog jobs, so it is a deliberate act,
+not cleanup.
+
+```bash
+docker compose -f /opt/bamform/docker-compose.yml start bamform-worker
+docker compose -f /opt/bamform/docker-compose.yml logs --tail 50 bamform-worker
+```
+
+Within one `SCHEDULER_CRON` tick (hourly by default) the log shows one sweep with
+`generated > 0` and every later sweep `generated=0, alreadyExists=…` — no duplicates. On the
+reference dataset the first sweep reported `evaluated=193 generated=193 alreadyExists=0`,
+across 73 machines, with `AW06`/`BD01`/`EP01` getting 0 as intended. Confirm with §9.2's query
+that `max(generated_at)` has moved; a worker left stopped is the silent failure PR-RUN-16 warns
+about.
 
 **If the command fails partway through** (for example, a network blip mid-`--apply`), it prints
 an `IMPORT FAILED mid-run` banner and exits non-zero without writing an evidence file for that
@@ -565,6 +879,12 @@ digest changes, which is a deliberate, separately reviewed action.
 
 ## 4.1 `/root/auto-deploy-bamform.sh`
 
+> **The authoritative script is `scripts/server/auto-deploy-bamform.sh` in the repository, not
+> this listing.** The installed copy is bootstrapped from it once and thereafter keeps itself in
+> step after each green deploy. The listing below is an abridged illustration of the shape and
+> the safety properties; it omits the self-heal path (added after the 2026-07-29 four-hour
+> outage) and the installed-copy sync. Read the real file before changing anything.
+
 ```bash
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -576,7 +896,7 @@ REPO=/opt/bamform
 COMPOSE_FILE=$REPO/docker-compose.yml
 SERVICES="bamform-api bamform-worker bamform-web"
 BACKUP_DIR=/var/backups/bamform
-HEALTH_URL="http://127.0.0.1:${API_PORT:-3000}/api/v1/health"
+HEALTH_URL="http://127.0.0.1:${API_PORT:?API_PORT not set in .env}/api/v1/healthz"
 
 log() { printf '%s  %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 fail() { log "ERROR: $*"; exit 1; }
@@ -597,7 +917,7 @@ mkdir -p "$BACKUP_DIR"
 STAMP=$(date -u +'%Y%m%dT%H%M%SZ')
 log "Backing up database before migration"
 docker compose -f "$COMPOSE_FILE" exec -T bamform-postgres \
-  pg_dump -U bamform --format=custom bamform \
+  pg_dump -U bamform_migrate --format=custom bamform \
   > "$BACKUP_DIR/predeploy-$STAMP.dump" || fail "pre-deploy backup failed"
 find "$BACKUP_DIR" -name 'predeploy-*.dump' -mtime +7 -delete
 
@@ -681,7 +1001,7 @@ cd /opt/bamform && git rev-parse --short HEAD
 
 # Confirm services healthy
 docker compose -f /opt/bamform/docker-compose.yml ps
-curl -fsS http://127.0.0.1:${API_PORT}/api/v1/health
+curl -fsS http://127.0.0.1:${API_PORT}/api/v1/healthz
 
 # MANDATORY — confirm no other application was disturbed
 docker ps --format '{{.Names}}\t{{.Status}}'
@@ -724,7 +1044,7 @@ cd /opt/bamform
 git log --oneline -5                       # identify the last good commit
 git reset --hard <last-good-sha>
 docker compose -f docker-compose.yml up -d --build bamform-api bamform-worker bamform-web
-curl -fsS http://127.0.0.1:${API_PORT}/api/v1/health
+curl -fsS http://127.0.0.1:${API_PORT}/api/v1/healthz
 ```
 
 **PR-RUN-12** Then **push the revert to `main`**. Otherwise the cron job re-deploys the broken
@@ -814,7 +1134,7 @@ docker compose -f /opt/bamform/docker-compose.yml up -d bamform-postgres bamform
 
 # 3. Restore the database
 docker compose exec -T bamform-postgres \
-  pg_restore -U bamform -d bamform --clean --if-exists < /var/backups/bamform/<file>.dump
+  pg_restore -U bamform_migrate -d bamform --clean --if-exists < /var/backups/bamform/<file>.dump
 
 # 4. Restore objects to the same point in time
 mc mirror /var/backups/bamform/minio/ local/bamform-attachments/
@@ -847,16 +1167,27 @@ value was restored.
 
 | Endpoint | Purpose | Expected |
 |---|---|---|
-| `GET /api/v1/health` | Liveness | 200, version, commit SHA |
-| `GET /api/v1/health/ready` | Readiness — Postgres, Redis, MinIO | 200, all `ok` |
+| `GET /api/v1/healthz` | Liveness | 200 `{"status":"ok"}` |
 | `GET /api/v1/audit-events/chain-status` | Audit integrity | `intact: true` |
 | `docker compose ps` | Container health | All `healthy` |
+
+**PR-RUN-32** `GET /api/v1/health` and `GET /api/v1/health/ready` **do not exist** and return
+404. They appear in `api/openapi.yaml` as documented future work — the richer liveness response
+(version + commit) and a Postgres/Redis/MinIO readiness probe — and are named as unimplemented
+in `api/test/contract/known-gaps.ts#FUTURE_SLICE_OPENAPI_PATHS`. `/api/v1/healthz`
+(`health.controller.ts`) is the only implemented probe, and it is what
+`dist/healthcheck.js` and `scripts/server/auto-deploy-bamform.sh` both use. Do not treat a 404
+from `/health` as an outage; earlier revisions of this runbook told operators to curl it.
+
+Until a readiness endpoint exists, dependency health is read from the containers, whose
+healthchecks do probe Postgres (`pg_isready`), Redis (`redis-cli ping`) and MinIO (`mc ready`).
 
 ## 9.1 Daily operational check
 
 ```bash
-curl -fsS http://127.0.0.1:${API_PORT}/api/v1/health/ready | jq .
-docker compose -f /opt/bamform/docker-compose.yml ps
+set -a; . /opt/bamform/.env; set +a
+curl -fsS "http://127.0.0.1:${API_PORT}/api/v1/healthz"          # liveness
+docker compose -f /opt/bamform/docker-compose.yml ps             # readiness, per container
 df -h | grep -E 'docker|/$'
 tail -20 /var/log/bamform-deploy.log
 ```
@@ -1013,4 +1344,4 @@ backup that has never been restored is a hypothesis, not a control.
 
 ---
 
-*End of document — BAMFORM-RUN-001 Revision 0.1*
+*End of document — BAMFORM-RUN-001 Revision 0.10*
