@@ -574,6 +574,37 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     ctx.log(`  REUSE asset ${asset.id} (code=${row.code})`);
   }
 
+  // ---- Verify the template exists in this environment ---------------------
+  // Moved ahead of the surplus early return below (review finding M1): a
+  // surplus row is carried by exactly one machine for two templates in this
+  // masterlist (`CE 95 043 00 01`, `CE 95 012 00 01`), so if either template
+  // is missing here, skipping this check for a surplus row would report
+  // `hardError 0` and the evidence file would cheerfully tell a planner to
+  // attach a document that does not exist. Checked for EVERY row now, surplus
+  // or not, before either return below.
+  const liveTemplate = ctx.liveTemplates.find((t) =>
+    sameUnderContract(t.documentNumber, template.documentNumber),
+  );
+  if (!liveTemplate) {
+    const msg = `template ${template.documentNumber} is not loaded in this environment.`;
+    ctx.log(`ERROR   ${row.label} (${row.code}) — ${msg}`);
+    return {
+      label: row.label,
+      code: row.code,
+      assetTypeCode,
+      status: 'hard-error',
+      blocked: true,
+      assetId: asset.id,
+      documentAttached: false,
+      leftUnplanned: false,
+      dueDates: {},
+      dueWeeks: {},
+      machineNumber,
+      surplus: [],
+      message: msg,
+    };
+  }
+
   // ---- Surplus: create the machine only; no document is attached ----------
   // Owner decision 2026-08-03, following a whole-branch review: attaching
   // the document here would let the scheduler's bootstrap sweep
@@ -612,28 +643,6 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   }
 
   // ---- Step 6: attach the document idempotently by re-check ---------------
-  const liveTemplate = ctx.liveTemplates.find((t) =>
-    sameUnderContract(t.documentNumber, template.documentNumber),
-  );
-  if (!liveTemplate) {
-    const msg = `template ${template.documentNumber} is not loaded in this environment.`;
-    ctx.log(`ERROR   ${row.label} (${row.code}) — ${msg}`);
-    return {
-      label: row.label,
-      code: row.code,
-      assetTypeCode,
-      status: 'hard-error',
-      blocked: true,
-      assetId: asset.id,
-      documentAttached: false,
-      leftUnplanned: false,
-      dueDates: {},
-      dueWeeks: {},
-      machineNumber,
-      surplus: [],
-      message: msg,
-    };
-  }
   const tagged = await client.get<{ data: AssetDocument[] }>(
     `/api/v1/assets/${asset.id}/documents`,
   );

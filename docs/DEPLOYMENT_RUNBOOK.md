@@ -9,7 +9,7 @@
 |---|---|
 | Document title | Deployment and Operations Runbook — BamForm |
 | Document number | BAMFORM-RUN-001 |
-| Revision | 0.7 |
+| Revision | 0.8 |
 | Status | **Draft — sections 2, 3 and 5 PROVISIONAL pending Phase 0 recon (OI-07)** |
 | Date issued | 24 July 2026 |
 | Prepared by | Lead Engineer, BamForm project |
@@ -28,6 +28,7 @@
 | 0.5 | 3 Aug 2026 | §3.6 fix round 1 (quality review): removed the incorrect "re-run the dry run to verify `--apply`" claim from PR-RUN-26 — a dry run makes zero network calls and cannot detect prior writes — and replaced it with a Step 4 verification procedure (machines-screen count, one imported/one left-unplanned spot-check, confirm `DDA 03` absent); added explicit run-location and checkout/Node/HTTPS preconditions (this is a workstation CLI, not a container entrypoint); corrected "77 machines" to 76 and the wrong §3.4 template-load cross-reference | Lead Engineer | _(pending)_ |
 | 0.6 | 3 Aug 2026 | §3.6 fix round 2 (quality re-review): the mid-run-failure banner could report a false "no writes were logged" all-clear when the process died DURING a write (writes are now logged before AND after the network call, so an in-flight write shows as "outcome unknown" instead); Step 4.1 now says to keep the ORIGINAL pre-`--apply` machine-count baseline across a retry, not a freshly recorded one | Lead Engineer | _(pending)_ |
 | 0.7 | 3 Aug 2026 | §3.6 owner decisions: (1) a left-unplanned (surplus) machine now gets NO PM document attached, only the machine — the prior "skip the schedule GET" approach was proven wrong (the scheduler's bootstrap sweep materialises a full schedule for any active document regardless), so Step 2 and Step 4.3 are corrected; (2) the plan is imported with its true, mostly-historical dates as written — no rolling forward — so the CLI now prints a `PAST-DUE` count after every run (dry run and apply), and Step 3 gains a prominent pre-`--apply` warning that clearing the resulting backlog re-anchors each machine's schedule via `CompletionCascadeService`, flattening the masterlist's deliberate stagger | Lead Engineer | _(pending)_ |
+| 0.8 | 3 Aug 2026 | Final review fixes: (I1) Step 2's "left unplanned" wording no longer claims `machineNumber` can only be set at attach time — it names `PATCH /asset-documents/{id}` as the correction path, since the API accepts it there too; (M1) a surplus row now still hard-errors if its template is not loaded in the target environment (previously silently skipped that check); (M2) the CLI's past-due warning undercounted the first sweep's real impact — job generation fires within a lead-time window, not only for rules already past due — so it now prints BOTH counts, and Step 1's sample output and Step 3's STOP box are corrected from "181 of 220" alone to "181 past due / 193 on the first sweep, of 220" | Lead Engineer | _(pending)_ |
 
 ---
 
@@ -350,8 +351,11 @@ It prints one line per machine, then a summary, then a past-due warning:
 DONE (DRY RUN — nothing was written): imported 76 (of which 3 left unplanned) ·
 skipped 1 (DDA 03) · unmapped 0 · hardError 0 · leftUnplanned 3 (AW06, BD01, EP01)
 PAST-DUE: 181 of 220 schedule rule(s) about to be written already have a nextDueOn before
-today (2026-08-03), across 73 machine(s). The scheduler will raise a job for each of these
-on its next sweep — for maintenance the plant may already have performed on paper.
+today (2026-08-03), across 73 machine(s). FIRST SWEEP: 193 of 220 will generate a job on the
+scheduler's very first sweep — past due, plus due within the assumed 30-day lead time
+(DEFAULT_LEAD_TIME_DAYS; this CLI cannot read the live environment's configured value, confirm
+it matches) — across 73 machine(s). The scheduler will raise a job for each of these on its
+next sweep — for maintenance the plant may already have performed on paper.
 ```
 
 `imported` counts every machine created (including the 3 left unplanned, whose document is
@@ -359,11 +363,15 @@ deliberately NOT attached — see Step 2 below); the evidence file (Step 2) spli
 into 73 with a schedule planned and 3 left unplanned, so the two numbers reconcile rather than
 looking like a discrepancy.
 
-**Read the `PAST-DUE` line every time — it is not a bug report.** It reflects the exact
-consequence of owner decision 2 (2026-08-03): the plan is imported with the TRUE masterlist
-dates, not rolled forward to the run date, precisely because rewriting the dates was rejected.
-The count is computed at run time against the system date, so it will only grow the longer
-`--apply` is deferred; it never appears in the evidence file itself, because that file must stay
+**Read the `PAST-DUE`/`FIRST SWEEP` lines every time — neither is a bug report.** `PAST-DUE`
+reflects the exact consequence of owner decision 2 (2026-08-03): the plan is imported with the
+TRUE masterlist dates, not rolled forward to the run date, precisely because rewriting the dates
+was rejected. `FIRST SWEEP` is the larger, operationally relevant number: job generation
+(`job-generation.service.ts:97-99`) raises a job for a rule the moment its `nextDueOn` is on or
+before `today + leadTimeDays` — not only once it is strictly in the past — so on the reference
+dataset 12 more rules generate a job on the very first sweep than are counted as past due. Both
+counts are computed at run time against the system date, so they will only grow the longer
+`--apply` is deferred; neither appears in the evidence file itself, because that file must stay
 byte-identical across two runs of the exact same input, and a run-time date comparison would
 break that. See the prominent warning before Step 3 below before typing `--apply`.
 
@@ -413,13 +421,15 @@ This is the artefact to diff against the paper masterlist, row by row, **before*
 > writes past-due rules; this is a known, accepted consequence of owner decision 2 (2026-08-03:
 > import the plan exactly as written, do not roll the dates forward), not a defect. On the
 > reference dataset, **181 of the 220 rules `--apply` is about to write are already past
-> due**, touching all 73 scheduled machines (the dry run's `PAST-DUE` line, Step 1, reports the
-> live count for whatever workbook/date you are actually running against).**
+> due, and 193 of the 220 — the past-due 181 plus 12 more due within the scheduler's lead-time
+> window — will generate a job on the very FIRST sweep after this migration runs**, touching
+> all 73 scheduled machines either way (the dry run's `PAST-DUE`/`FIRST SWEEP` lines, Step 1,
+> report the live counts for whatever workbook/date you are actually running against).**
 >
 > Concretely, this means:
-> - The scheduler's next sweep raises a job for every one of those past-due rules — each one is
->   a **controlled record** someone must formally dispose of (verify, or otherwise close out),
->   not something to silently ignore or bulk-delete.
+> - The scheduler's next sweep raises a job for every one of those 193 first-sweep rules — each
+>   one is a **controlled record** someone must formally dispose of (verify, or otherwise close
+>   out), not something to silently ignore or bulk-delete.
 > - Some of that maintenance may already have been performed on paper by the plant before this
 >   migration ever ran — the jobs raised do not know that, and will still ask for it.
 > - **The part that is easy to miss:** `CompletionCascadeService.apply()`

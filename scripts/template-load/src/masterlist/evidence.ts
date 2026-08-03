@@ -162,9 +162,10 @@ export function renderImportEvidence(report: ImportReport, meta: EvidenceMeta): 
       'With no document attached there is nothing for that sweep to iterate, so the schedule ' +
       'genuinely stays empty — no `schedule_rule` rows exist at all. **A planner must (1) ' +
       'attach the document named in the table below (the one that WOULD have been attached), ' +
-      'using the `Machine #` value below as the machineNumber to enter when attaching it (the ' +
-      'API only accepts that value on the attach call itself, which this migration is not ' +
-      "making), then (2) set each frequency's due date.** Until that happens, this machine has " +
+      'using the `Machine #` value below as the machineNumber to enter when attaching it. If ' +
+      'it is mistyped, it can be corrected afterwards with `PATCH /asset-documents/{id}` — the ' +
+      "machine number is not fixed at attach time. Then (2) set each frequency's due date.** " +
+      'Until that happens, this machine has ' +
       'no PM document and no schedule. This is intentional, not a gap or a failure.',
     '',
     '| Source label | Code | Asset type | Document to attach | Machine # (value to enter when attaching — not yet applied) | Surplus frequency (form defines it, plan does not schedule it) |',

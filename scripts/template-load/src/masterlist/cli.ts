@@ -207,6 +207,17 @@ export function classifyWriteState(logLines: readonly string[]): WriteState {
  * SAME input). Only rows that actually got a schedule count — a
  * left-unplanned (surplus) row's `dueDates` is always `{}` (decision 1), so
  * it contributes nothing here, correctly: there is no rule to be past due.
+ *
+ * Review finding M2: `pastDueRules` alone undercounts the operator-relevant
+ * number. Job generation (`job-generation.service.ts:97-99`) fires for a
+ * rule the moment `dateOnly(rule.nextDueOn) <= today + leadTimeDays` — NOT
+ * only for rules already strictly in the past — so on the reference dataset
+ * roughly 14 more rules sit inside that lead-time window and raise a job on
+ * the very FIRST sweep, without ever having been "past due" at import time.
+ * `firstSweepRules`/`firstSweepMachines` report that superset (past due,
+ * plus due within the lead-time window) so the STOP box an operator reads
+ * before `--apply` states the true first-sweep impact, not just the
+ * past-due subset of it.
  */
 export interface PastDueSummary {
   /** Every schedule_rule about to be written (or, under dry run, that WOULD
@@ -216,26 +227,73 @@ export interface PastDueSummary {
   pastDueRules: number;
   /** How many distinct machines have at least one past-due rule among them. */
   pastDueMachines: number;
+  /** Of `totalRules`, how many will generate a job on the scheduler's very
+   *  first sweep: past due, PLUS due within the lead-time window (boundary
+   *  inclusive — see `leadTimeDays`). Always >= `pastDueRules`. */
+  firstSweepRules: number;
+  /** How many distinct machines have at least one first-sweep rule among them. */
+  firstSweepMachines: number;
+  /** The lead-time window (days) used for `firstSweepRules`/`firstSweepMachines`. */
+  leadTimeDays: number;
   /** `YYYY-MM-DD`, local system date, exactly as compared against. */
   today: string;
 }
+
+/**
+ * The scheduler's own default (`scheduler.service.ts:45`,
+ * `Number(this.config.get('DEFAULT_LEAD_TIME_DAYS') ?? 30)`) lives in
+ * environment configuration read inside the running API process — there is
+ * no shared, importable constant this standalone CLI can pull it from, and
+ * a per-asset-type override (`assetType.leadTimeDays`,
+ * `job-generation.service.ts:97`) can only be read with a network call a
+ * dry run must never make. So this is an ASSUMPTION, not a fetched value —
+ * `formatPastDueWarning` says so explicitly rather than presenting it as
+ * fact, so an operator whose environment configures something other than
+ * 30 is not misled.
+ */
+export const ASSUMED_LEAD_TIME_DAYS = 30;
 
 function localDateStr(now: Date): string {
   const pad = (n: number): string => String(n).padStart(2, '0');
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+/**
+ * Adds `days` to a `YYYY-MM-DD` calendar-date string and returns the result
+ * in the same format. Deliberately does the arithmetic via `Date.UTC` on
+ * the parsed Y/M/D components (never a timezone-sensitive local `Date`
+ * constructor) so a DST transition in the runner's local timezone can never
+ * shift the result by a day — mirrors `job-generation.service.ts`'s own
+ * `addDays`/`dateOnly` helpers, which operate the same way.
+ */
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+}
+
 export function computePastDueSummary(
   machines: readonly MachineImportResult[],
   now: Date,
+  leadTimeDays: number = ASSUMED_LEAD_TIME_DAYS,
 ): PastDueSummary {
   const today = localDateStr(now);
+  // Boundary confirmed against `job-generation.service.ts:97-99`: it skips
+  // a rule only when `dateOnly(rule.nextDueOn) > cutoff`, so a rule due
+  // EXACTLY on the cutoff date still generates a job — inclusive, not
+  // exclusive.
+  const cutoff = addDaysToDateStr(today, leadTimeDays);
   let totalRules = 0;
   let pastDueRules = 0;
   let pastDueMachines = 0;
+  let firstSweepRules = 0;
+  let firstSweepMachines = 0;
   for (const m of machines) {
     if (m.status !== 'imported' || m.leftUnplanned) continue;
     let machineHasPastDue = false;
+    let machineHasFirstSweep = false;
     for (const nextDueOn of Object.values(m.dueDates)) {
       totalRules += 1;
       // Plain string comparison is safe and exact for `YYYY-MM-DD` — no
@@ -244,10 +302,23 @@ export function computePastDueSummary(
         pastDueRules += 1;
         machineHasPastDue = true;
       }
+      if (nextDueOn <= cutoff) {
+        firstSweepRules += 1;
+        machineHasFirstSweep = true;
+      }
     }
     if (machineHasPastDue) pastDueMachines += 1;
+    if (machineHasFirstSweep) firstSweepMachines += 1;
   }
-  return { totalRules, pastDueRules, pastDueMachines, today };
+  return {
+    totalRules,
+    pastDueRules,
+    pastDueMachines,
+    firstSweepRules,
+    firstSweepMachines,
+    leadTimeDays,
+    today,
+  };
 }
 
 /**
@@ -259,12 +330,21 @@ export function computePastDueSummary(
  * than a machine that has simply gone unmaintained — it raises a job for
  * every one of these on its next run, for maintenance the plant may already
  * have performed on paper before this migration ever ran.
+ *
+ * Review finding M2: reports BOTH the past-due count and the (larger)
+ * first-sweep count, and states the lead-time days it assumed, rather than
+ * letting the past-due count alone stand in for "what happens on the first
+ * sweep" — the two are not the same number.
  */
 export function formatPastDueWarning(summary: PastDueSummary): string {
   return (
     `PAST-DUE: ${summary.pastDueRules} of ${summary.totalRules} schedule rule(s) about to be ` +
     `written already have a nextDueOn before today (${summary.today}), across ` +
-    `${summary.pastDueMachines} machine(s). The scheduler will raise a job for each of these on ` +
+    `${summary.pastDueMachines} machine(s). FIRST SWEEP: ${summary.firstSweepRules} of ` +
+    `${summary.totalRules} will generate a job on the scheduler's very first sweep — past due, ` +
+    `plus due within the assumed ${summary.leadTimeDays}-day lead time (DEFAULT_LEAD_TIME_DAYS; ` +
+    "this CLI cannot read the live environment's configured value, confirm it matches) — across " +
+    `${summary.firstSweepMachines} machine(s). The scheduler will raise a job for each of these on ` +
     'its next sweep — for maintenance the plant may already have performed on paper.'
   );
 }

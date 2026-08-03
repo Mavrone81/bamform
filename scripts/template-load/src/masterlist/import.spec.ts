@@ -352,4 +352,103 @@ describe('runImport — surplus decision 2026-08-03 (whole-branch review): no do
       );
     });
   });
+
+  /**
+   * Review finding M1: the surplus early return used to precede the "is this
+   * template even loaded in this environment" check, so a surplus row whose
+   * template does not exist here silently succeeded — `hardError 0` — and
+   * the evidence file told a planner to attach a document that does not
+   * exist. `CE 95 043 00 01` and `CE 95 012 00 01` are each carried by
+   * exactly one machine, and that machine is a surplus row, so this is not
+   * hypothetical. Fixed by checking `ctx.liveTemplates` BEFORE the surplus
+   * early return; this proves a surplus row still hard-errors when its
+   * template is missing, same as a non-surplus row always has.
+   */
+  describe('--apply, template missing in this environment (review finding M1)', () => {
+    const BASE = 'http://fake-bamform-surplus-missing-template.test';
+    const jsonResponse = (data: unknown): Response =>
+      new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    const page = <T>(data: T[]) => ({ data, page: { hasMore: false, nextCursor: null } });
+
+    let log: string[];
+    let result: MachineImportResult;
+    let hardErrorCount: number;
+
+    async function mockFetch(input: string | URL, init?: RequestInit): Promise<Response> {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const path = String(input).replace(BASE, '');
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+      if (method === 'POST' && path === '/api/v1/auth/login')
+        return jsonResponse({ accessToken: 't' });
+      if (method === 'GET' && path === '/api/v1/asset-types') {
+        return jsonResponse(page([{ id: 'at-1', code: 'ASSET_A' }]));
+      }
+      // DOC-A is NOT loaded in this environment — the whole point of this test.
+      if (method === 'GET' && path === '/api/v1/templates') {
+        return jsonResponse(page([]));
+      }
+      if (method === 'GET' && path.startsWith('/api/v1/assets?assetTypeId='))
+        return jsonResponse(page([]));
+      if (method === 'POST' && path === '/api/v1/assets') {
+        return jsonResponse({
+          id: `asset-${body.code}`,
+          code: body.code,
+          assetTypeId: body.assetTypeId,
+        });
+      }
+      // Must never get this far — a missing template must hard-error before
+      // any document or schedule call, surplus row or not.
+      if (/\/documents(\?.*)?$/.test(path) || /\/schedule(\?.*)?$/.test(path)) {
+        throw new Error(
+          `REGRESSION: row with a missing template called ${method} ${path} — must hard-error first`,
+        );
+      }
+      throw new Error(`mockFetch: unhandled ${method} ${path}`);
+    }
+
+    beforeAll(async () => {
+      log = [];
+      const originalFetch = global.fetch;
+      // @ts-expect-error -- test double, narrower signature than lib.dom's fetch
+      global.fetch = mockFetch;
+      try {
+        const report = await runImport({
+          baseUrl: BASE,
+          author: { email: 'a@b.com', password: 'password12345' },
+          reconciliations,
+          templates,
+          year: 2026,
+          apply: true,
+          log: (l) => log.push(l),
+        });
+        result = report.machines[0];
+        hardErrorCount = report.counts.hardError;
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('is a hard error, not a silent success', () => {
+      expect(result.status).toBe('hard-error');
+      expect(result.blocked).toBe(true);
+      expect(result.leftUnplanned).toBe(false);
+      expect(hardErrorCount).toBe(1);
+    });
+
+    it('names the missing template in the message', () => {
+      expect(result.message).toMatch(/DOC-A.*not loaded in this environment/);
+    });
+
+    it('logs an ERROR row-outcome line for the machine', () => {
+      expect(log).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^ERROR {3}Surplus Machine \(SURPLUS-01\) — template DOC-A/),
+        ]),
+      );
+    });
+  });
 });
