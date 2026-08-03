@@ -561,3 +561,76 @@ describe('pendingCountAll — every unsent row on this device, whoever owns it (
     await expect(pendingCountAll(db)).resolves.toBe(2);
   });
 });
+
+/**
+ * Slice 31-TITLEBLANK, review I-1. `bootstrap()` is the only writer of
+ * `CachedJob.job`, and `drain()` deletes an acked row — which was the only
+ * other place the technician's value lived. `job.title_machine_number` also
+ * satisfies no clause of the server's `sinceOrConditions`, so no delta
+ * bootstrap re-sends it either. Without a write-through, a value that synced
+ * SUCCESSFULLY disappeared from the device and re-blocked submit.
+ */
+describe('drain — an acked title-machine-number is folded into the cached job (I-1)', () => {
+  async function seedJobSnapshot(titleMachineNumber: string | null) {
+    await db.jobs.put({
+      userId: 'user-1',
+      id: 'job-1',
+      job: { id: 'job-1', titleMachineNumber } as never,
+      cachedAt: new Date().toISOString(),
+      hasPendingOutbox: false,
+      submitState: 'none',
+      serverRemoved: false,
+      predictedDraftVersion: 1,
+    });
+  }
+
+  const titleRow = (titleMachineNumber: string | null) =>
+    input({
+      path: '/jobs/job-1/title-machine-number',
+      body: { titleMachineNumber },
+      ifMatch: null,
+    });
+
+  it('writes the acked value into the snapshot, and still deletes the row', async () => {
+    await seedJobSnapshot(null);
+    await append(db, titleRow('01'));
+
+    const summary = await drain(db, new MockSyncTransport(), 'user-1');
+
+    expect(summary.acked).toBe(1);
+    await expect(pendingCountForJob(db, 'user-1', 'job-1')).resolves.toBe(0);
+    expect((await db.jobs.get(['user-1', 'job-1']))?.job.titleMachineNumber).toBe('01');
+  });
+
+  it('writes an acked CLEAR through as null — never leaves a value the server dropped', async () => {
+    await seedJobSnapshot('01');
+    await append(db, titleRow(null));
+
+    await drain(db, new MockSyncTransport(), 'user-1');
+
+    expect((await db.jobs.get(['user-1', 'job-1']))?.job.titleMachineNumber).toBeNull();
+  });
+
+  it('leaves the snapshot alone for a REJECTED row — the row is retained, the value is not adopted', async () => {
+    await seedJobSnapshot(null);
+    const appended = (await append(db, titleRow('01'))) as { ok: true; entry: { id: string } };
+    const transport = new MockSyncTransport();
+    transport.forceConflict(appended.entry.id);
+
+    const summary = await drain(db, transport, 'user-1');
+
+    expect(summary.conflicted).toBe(1);
+    expect((await db.jobs.get(['user-1', 'job-1']))?.job.titleMachineNumber).toBeNull();
+  });
+
+  it('does NOT fold in any other acked route — an item result carries no title, and adopting a body wholesale would invent server state', async () => {
+    await seedJobSnapshot('01');
+    await append(db, input()); // the default: PUT /jobs/job-1/items/item-1
+
+    await drain(db, new MockSyncTransport(), 'user-1');
+
+    const cached = await db.jobs.get(['user-1', 'job-1']);
+    expect(cached?.job.titleMachineNumber).toBe('01');
+    expect(cached?.job).not.toHaveProperty('status', 'DONE');
+  });
+});

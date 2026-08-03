@@ -4,6 +4,7 @@ import {
   measurementResultInputSchema,
   partUsedInputSchema,
   partUpsertInputSchema,
+  titleMachineNumberInputSchema,
   type OutboxMutation,
   type OutboxResponse,
   type OutboxResult,
@@ -12,6 +13,7 @@ import type { ActorMeta } from '../common/actor-meta';
 import { outboxMutationNotAllowedProblem } from '../common/domain-problems';
 import { PartsService } from '../jobs/parts.service';
 import { ResultsService } from '../jobs/results.service';
+import { TitleMachineNumberService } from '../jobs/title-machine-number.service';
 import { matchOutboxRoute, parseMutationBody, toOutboxProblem } from './outbox-dispatch';
 import { encodeSyncToken } from './sync-cursor';
 
@@ -20,8 +22,10 @@ import { encodeSyncToken } from './sync-cursor';
  * PR-082). Dispatches each mutation to the SAME slice-6 service methods
  * `jobs.controller.ts` calls for the equivalent direct HTTP endpoint —
  * `ResultsService#recordItemResult`/`#recordMeasurementResult`,
- * `PartsService#recordPart`/`#upsertPart` (`api/src/jobs/results.service.ts`,
- * `parts.service.ts`) — IN-PROCESS, not by the api HTTP-calling itself.
+ * `PartsService#recordPart`/`#upsertPart`,
+ * `TitleMachineNumberService#recordTitleMachineNumber` (`api/src/jobs/
+ * results.service.ts`, `parts.service.ts`, `title-machine-number.service.ts`)
+ * — IN-PROCESS, not by the api HTTP-calling itself.
  *
  * Idempotency reuse point (PR-API-25): `mutation.id` is passed as
  * `idempotencyKey` straight into those methods' existing
@@ -60,6 +64,7 @@ export class SyncOutboxService {
   constructor(
     private readonly results: ResultsService,
     private readonly parts: PartsService,
+    private readonly titleMachineNumber: TitleMachineNumberService,
   ) {}
 
   async drain(
@@ -126,6 +131,21 @@ export class SyncOutboxService {
         case 'part-upsert': {
           const dto = parseMutationBody(partUpsertInputSchema, mutation.body);
           await this.parts.upsertPart(route.jobId, route.partId, dto, mutation.id, actor, roles);
+          return { id: mutation.id, status: 200, applied: true };
+        }
+        case 'title-machine-number': {
+          // Slice 31-TITLEBLANK. UNVERSIONED, like `part-upsert` above and
+          // unlike the item/measurement results: `ifMatch` is deliberately
+          // not passed on, because the service neither checks nor bumps
+          // `draftVersion` (see its class doc).
+          const dto = parseMutationBody(titleMachineNumberInputSchema, mutation.body);
+          await this.titleMachineNumber.recordTitleMachineNumber(
+            route.jobId,
+            dto,
+            mutation.id,
+            actor,
+            roles,
+          );
           return { id: mutation.id, status: 200, applied: true };
         }
       }

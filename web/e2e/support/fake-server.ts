@@ -20,6 +20,12 @@ import {
 // builds. `zod` is hoisted to the root `node_modules`, so it resolves without
 // any change to `web/package.json` or the lockfile.
 import { assetDocumentCreateSchema, assetDocumentUpdateSchema } from '../../../shared/src/asset';
+// Slice 31-TITLEBLANK, same rationale: THE REAL schema and THE REAL predicate
+// for the title's blank, so this fake cannot be kinder (or stricter) than the
+// api about what fills it, and cannot hold a second copy of the underscore-run
+// rule that could drift from the one the submit gate uses.
+import { titleMachineNumberInputSchema } from '../../../shared/src/job';
+import { titleHasFillableRun } from '../../../shared/src/template-title';
 // Same rationale as above: THE REAL SCHEMA for `PUT /assets/{assetId}/schedule`,
 // and the same interval-months table `ScheduleRuleBootstrapService` uses —
 // not a second, hand-typed `{M1: 1, ...}` that could quietly drift from it.
@@ -69,6 +75,16 @@ export interface SeedJob {
   draftVersion?: number;
   revisionId?: string;
   revisionCode?: string;
+  /**
+   * Slice 31-TITLEBLANK — the frozen revision's TEMPLATE TITLE. Defaults to a
+   * title with NO fillable run, so every pre-existing spec sees exactly the
+   * screen it always saw (no form-number box, no new submit precondition). A
+   * spec that wants the blank seeds a title carrying one, e.g.
+   * `'KNS Wire Bond Preventive Maintenance Record KW___'`.
+   */
+  title?: string;
+  /** Slice 31-TITLEBLANK — a value already captured on this record. */
+  titleMachineNumber?: string | null;
   items: Array<{ id: string; itemNo: number; instruction: string; mandatory?: boolean }>;
   /** Slice 14-DESIGN (review D-6): pre-recorded results carried on the job
    * payload, so a job seeded directly as `SUBMITTED` can look like one a
@@ -811,7 +827,22 @@ export class FakeServer {
     return match ? match[1] : null;
   }
 
+  /** Slice 31-TITLEBLANK — `job.title_machine_number`, mutated by the outbox
+   * route exactly as the real `TitleMachineNumberService` mutates the column.
+   * Kept SEPARATE from the immutable `SeedJob` for the same reason
+   * `jobStatus` is. */
+  private jobTitleMachineNumber = new Map<string, string | null>();
+
+  private titleOf(job: SeedJob): string {
+    return job.title ?? 'Preventive Maintenance Record';
+  }
+
+  private titleMachineNumberOf(job: SeedJob): string | null {
+    return this.jobTitleMachineNumber.get(job.id) ?? job.titleMachineNumber ?? null;
+  }
+
   private toApiJob(job: SeedJob) {
+    const title = this.titleOf(job);
     return {
       id: job.id,
       jobNumber: job.jobNumber,
@@ -827,10 +858,16 @@ export class FakeServer {
       assignedTo: 'user-1',
       assignedToName: 'Test Technician',
       draftVersion: this.draftVersionOf(job.id),
+      // Slice 31-TITLEBLANK. `titleHasFillableRun` is DERIVED from the title
+      // by the same shared predicate the api uses — never hand-set — so a
+      // fake job can never claim a blank its title does not have.
+      titleMachineNumber: this.titleMachineNumberOf(job),
+      titleHasFillableRun: titleHasFillableRun(title),
       templateRevision: {
         id: job.revisionId ?? `rev-${job.id}`,
         formTemplateId: 'tpl-1',
         documentNumber: 'CE 95 020 00 01',
+        title,
         revisionCode: job.revisionCode ?? 'A',
         sequenceOrdinal: 1,
         status: 'CURRENT',
@@ -1322,7 +1359,12 @@ export class FakeServer {
   private async handleOutbox(route: Route) {
     this.outboxRequestCount++;
     const body = route.request().postDataJSON() as {
-      mutations: Array<{ id: string; path: string; ifMatch?: number | null }>;
+      mutations: Array<{
+        id: string;
+        path: string;
+        ifMatch?: number | null;
+        body?: unknown;
+      }>;
     };
     this.receivedBatches.push(body.mutations.map((m) => ({ id: m.id, path: m.path })));
 
@@ -1388,6 +1430,32 @@ export class FakeServer {
               : undefined,
           },
         };
+      } else if (m.path.endsWith('/title-machine-number')) {
+        // Slice 31-TITLEBLANK. Validated against the REAL schema, not a
+        // paraphrase (same rule as `assetDocumentUpdateSchema` above): the
+        // server rejects `''` outright, so a client that ever sent one must
+        // fail here rather than sail through a fake that normalises it.
+        const parsed = titleMachineNumberInputSchema.safeParse(m.body ?? {});
+        if (!parsed.success) {
+          result = {
+            id: m.id,
+            status: 422,
+            applied: false,
+            problem: {
+              type: 'https://form.bevorasg.com/errors/validation-failed',
+              title: 'Validation failed',
+              status: 422,
+            },
+          };
+        } else {
+          this.appliedCount.set(m.id, (this.appliedCount.get(m.id) ?? 0) + 1);
+          // Deliberately does NOT bump `draftVersion`: this route is
+          // unversioned server-side (`title-machine-number.service.ts`), and a
+          // fake that bumped it would hide a client which wrongly predicted
+          // a version for it.
+          if (jobId) this.jobTitleMachineNumber.set(jobId, parsed.data.titleMachineNumber);
+          result = { id: m.id, status: 200, applied: true };
+        }
       } else {
         this.appliedCount.set(m.id, (this.appliedCount.get(m.id) ?? 0) + 1);
         if (jobId) this.draftVersions.set(jobId, currentVersion + 1);
@@ -1433,6 +1501,42 @@ export class FakeServer {
           title: 'Validation failed',
           status: 422,
           detail: 'drawnSignature is required (base64 PNG data-URL).',
+        }),
+      });
+      return;
+    }
+    // Slice 31-TITLEBLANK — the real server refuses a submission whose title
+    // carries a blank that was never filled (422 `/errors/incomplete-record`,
+    // pointer `/titleMachineNumber`), so the fake does too: a screen that
+    // stops capturing it must fail the suite rather than sail through.
+    //
+    // Review M-4: this is checked before the idempotency replay only because
+    // it is simpler to write that way. The REAL ordering is the opposite —
+    // `submission.service.ts` checks the replay first, then loads the job,
+    // then the outstanding-items gate, then this one. The difference is not
+    // observable: a refused submission never reaches `recordWithin`, so no
+    // replay entry for it can exist to be returned early.
+    const seededJob = this.jobs.get(jobId);
+    if (
+      seededJob &&
+      titleHasFillableRun(this.titleOf(seededJob)) &&
+      !this.titleMachineNumberOf(seededJob)
+    ) {
+      await route.fulfill({
+        status: 422,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({
+          type: '/errors/incomplete-record',
+          title: 'Record is incomplete',
+          status: 422,
+          detail: `The form number in the title has not been filled in — "${this.titleOf(seededJob)}".`,
+          errors: [
+            {
+              pointer: '/titleMachineNumber',
+              code: 'REQUIRED',
+              message: 'Form number in the title is required',
+            },
+          ],
         }),
       });
       return;

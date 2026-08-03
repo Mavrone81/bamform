@@ -728,6 +728,23 @@ describe('renderRecordHtml (PR-116/117/118, UR-056/057)', () => {
     expect(htmlA).not.toEqual(htmlB);
   });
 
+  /**
+   * Slice 31-TITLEBLANK. The document title stopped being purely
+   * admin-controlled text the moment a technician could type into its blank
+   * (`resolveTemplateTitle(title, job.titleMachineNumber)` —
+   * `pdf-record-assembly.service.ts#documentTitle`). The `esc()` call on this
+   * field predates that change and was never exercised; a form-fed
+   * `<script>` reaching a controlled record's heading unescaped is exactly
+   * what SECURITY_ARCHITECTURE.md §8 forbids.
+   */
+  it('escapes malicious content in the document title (SECURITY_ARCHITECTURE.md §8 — no markup injection)', () => {
+    const html = renderRecordHtml(
+      baseInput({ documentTitle: 'Record KW<script>alert(1)</script> & Co' }),
+    );
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('Record KW&lt;script&gt;alert(1)&lt;/script&gt; &amp; Co');
+  });
+
   it('escapes malicious content in a remark field (SECURITY_ARCHITECTURE.md §8 — no markup injection)', () => {
     const html = renderRecordHtml(
       baseInput({

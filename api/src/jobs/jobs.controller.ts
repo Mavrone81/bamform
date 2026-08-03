@@ -21,6 +21,7 @@ import {
   partUpsertInputSchema,
   partUsedInputSchema,
   submitJobRequestSchema,
+  titleMachineNumberInputSchema,
   type AssignJobRequest,
   type CreateAdhocJobRequest,
   type ItemResultInput,
@@ -28,6 +29,7 @@ import {
   type PartUpsertInput,
   type PartUsedInput,
   type SubmitJobRequest,
+  type TitleMachineNumberInput,
 } from '@bamform/shared';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -42,6 +44,7 @@ import { JobsService } from './jobs.service';
 import { PartsService } from './parts.service';
 import { ResultsService } from './results.service';
 import { SubmissionService } from './submission.service';
+import { TitleMachineNumberService } from './title-machine-number.service';
 
 /**
  * PR-030..033/045 — job read/list, result/part capture, submission gate.
@@ -59,6 +62,7 @@ export class JobsController {
     private readonly submission: SubmissionService,
     private readonly assignment: AssignmentService,
     private readonly adhoc: AdhocJobService,
+    private readonly titleMachineNumber: TitleMachineNumberService,
   ) {}
 
   @Get()
@@ -173,6 +177,34 @@ export class JobsController {
       templateMeasurementId,
       dto,
       { idempotencyKey, ifMatch },
+      { actorId: user.sub, ...requestMeta(req) },
+      user.roles,
+    );
+  }
+
+  /**
+   * Slice 31-TITLEBLANK — the technician's entry for the blank in the form's
+   * TITLE (`ED____` -> `ED01`). Same role gate and same offline-outbox
+   * plumbing as the capture routes above: it is a field on the form, filled
+   * by the person filling the form.
+   *
+   * No `If-Match`, deliberately — this route is UNVERSIONED, exactly like
+   * `PUT /jobs/{jobId}/parts/{partId}`. See `TitleMachineNumberService`'s
+   * class doc for the measured reason.
+   */
+  @Put(':jobId/title-machine-number')
+  @Roles(...JOB_RECORD_ROLES)
+  recordTitleMachineNumber(
+    @Param('jobId') jobId: string,
+    @Body(new ZodValidationPipe(titleMachineNumberInputSchema)) dto: TitleMachineNumberInput,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser() user: AccessTokenClaims,
+    @Req() req: Request,
+  ) {
+    return this.titleMachineNumber.recordTitleMachineNumber(
+      jobId,
+      dto,
+      idempotencyKey,
       { actorId: user.sub, ...requestMeta(req) },
       user.roles,
     );

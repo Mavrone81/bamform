@@ -17,6 +17,7 @@ import { PartsService } from './parts.service';
 import { ResultsService } from './results.service';
 import { StageEscalationService } from './stage-escalation.service';
 import { SubmissionService } from './submission.service';
+import { TitleMachineNumberService } from './title-machine-number.service';
 import { VerificationService } from './verification.service';
 
 /**
@@ -52,6 +53,7 @@ import { VerificationService } from './verification.service';
     JobsService,
     ResultsService,
     PartsService,
+    TitleMachineNumberService,
     SubmissionService,
     AssignmentService,
     AdhocJobService,
@@ -70,6 +72,17 @@ import { VerificationService } from './verification.service';
   // per-mutation-transactional methods — see `sync-outbox.service.ts`).
   // Slice 12's `records/records.module.ts` additionally reuses
   // `JobsRepository`/`JobAccessService`/`IntegrityService`.
-  exports: [JobsRepository, JobAccessService, ResultsService, PartsService, IntegrityService],
+  // `TitleMachineNumberService` joins the exported set for the same reason
+  // `ResultsService`/`PartsService` are there: slice 31-TITLEBLANK's capture
+  // PUT is outbox-reachable, and `sync-outbox.service.ts` dispatches into
+  // this exact method rather than reimplementing it.
+  exports: [
+    JobsRepository,
+    JobAccessService,
+    ResultsService,
+    PartsService,
+    TitleMachineNumberService,
+    IntegrityService,
+  ],
 })
 export class JobsModule {}

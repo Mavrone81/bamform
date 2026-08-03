@@ -71,10 +71,7 @@ export class PdfRecordAssemblyService {
       recordId: job.id,
       jobNumber: job.jobNumber,
       documentNumber: job.templateRevision.formTemplate.documentNumber,
-      documentTitle: resolveTemplateTitle(
-        job.templateRevision.formTemplate.title,
-        job.assetDocument.machineNumber,
-      ),
+      documentTitle: this.documentTitle(job),
       revisionCode: job.templateRevision.revisionCode,
       assetCode: job.asset.code,
       // Slice A/QA-format Task 2 — one record is one machine; the asset code
@@ -106,6 +103,35 @@ export class PdfRecordAssemblyService {
         renderedAt: new Date().toISOString(),
       },
     };
+  }
+
+  /**
+   * The title as it PRINTS on this record, with the blank filled in.
+   *
+   * Slice 31-TITLEBLANK — the TECHNICIAN's per-record entry
+   * (`job.title_machine_number`) wins; the admin-set
+   * `asset_document.machine_number` is the fallback, so every record signed
+   * before that field existed, and every document an admin has already
+   * labelled, keeps printing exactly as it does today.
+   *
+   * Both go through `resolveTemplateTitle`, which substitutes at RENDER and
+   * deliberately leaves the blank intact when there is nothing to write into
+   * it — the paper form reads that way too before someone writes on it. The
+   * result is `escapeHtml`'d by `pdf-html-template.ts` like every other
+   * interpolated string (`esc(input.documentTitle)`), so technician free text
+   * containing `&` or `<script>` is escaped, not injected.
+   *
+   * Whether the title can change after signing is NOT this function's
+   * concern and is not left to it: the value it reads is immutable from
+   * SUBMIT onwards — `assertJobWritable` refuses every capture route once the
+   * job leaves ASSIGNED/IN_PROGRESS, and `prevent_archived_job_update()` is
+   * the database backstop for an archived or voided row.
+   */
+  private documentTitle(job: JobFullRow): string {
+    return resolveTemplateTitle(
+      job.templateRevision.formTemplate.title,
+      job.titleMachineNumber ?? job.assetDocument.machineNumber,
+    );
   }
 
   /**

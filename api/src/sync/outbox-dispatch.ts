@@ -5,22 +5,25 @@ import { zodErrorToValidationProblem } from '../common/zod-validation.pipe';
 /**
  * The outbox-reachable mutation surface (API_SPECIFICATION.md §11.2, slice
  * 6's `JobsController`): PUT item/measurement result, POST a part, PUT a
- * client-keyed part upsert (slice 30, Task 4). Anything else —
- * `/jobs/{id}/submit` (PR-API-26), `/jobs/{id}/attachments` (PR-API-27),
- * DELETE anything (non-negotiable #7), or any unrecognised path — is NOT in
- * this union and must be rejected per-mutation by the caller
- * (`sync-outbox.service.ts`), never silently applied.
+ * client-keyed part upsert (slice 30, Task 4), PUT the title's machine number
+ * (slice 31-TITLEBLANK). Anything else — `/jobs/{id}/submit` (PR-API-26),
+ * `/jobs/{id}/attachments` (PR-API-27), DELETE anything (non-negotiable #7),
+ * or any unrecognised path — is NOT in this union and must be rejected
+ * per-mutation by the caller (`sync-outbox.service.ts`), never silently
+ * applied.
  */
 export type OutboxRoute =
   | { kind: 'item'; jobId: string; templateItemId: string }
   | { kind: 'measurement'; jobId: string; templateMeasurementId: string }
   | { kind: 'part'; jobId: string }
-  | { kind: 'part-upsert'; jobId: string; partId: string };
+  | { kind: 'part-upsert'; jobId: string; partId: string }
+  | { kind: 'title-machine-number'; jobId: string };
 
 const ITEM_PATH = /^\/jobs\/([^/]+)\/items\/([^/]+)$/;
 const MEASUREMENT_PATH = /^\/jobs\/([^/]+)\/measurements\/([^/]+)$/;
 const PARTS_PATH = /^\/jobs\/([^/]+)\/parts$/;
 const PARTS_UPSERT_PATH = /^\/jobs\/([^/]+)\/parts\/([^/]+)$/;
+const TITLE_MACHINE_NUMBER_PATH = /^\/jobs\/([^/]+)\/title-machine-number$/;
 
 /**
  * Pure path/method matcher — deliberately dependency-free (no Nest, no DB)
@@ -40,6 +43,14 @@ export function matchOutboxRoute(method: string, path: string): OutboxRoute | nu
     const measurement = MEASUREMENT_PATH.exec(path);
     if (measurement) {
       return { kind: 'measurement', jobId: measurement[1], templateMeasurementId: measurement[2] };
+    }
+
+    // Tested BEFORE the two-segment part-upsert pattern purely for
+    // readability — the two cannot collide, since `title-machine-number` is a
+    // single segment where `parts/{partId}` is two.
+    const titleMachineNumber = TITLE_MACHINE_NUMBER_PATH.exec(path);
+    if (titleMachineNumber) {
+      return { kind: 'title-machine-number', jobId: titleMachineNumber[1] };
     }
 
     const partUpsert = PARTS_UPSERT_PATH.exec(path);

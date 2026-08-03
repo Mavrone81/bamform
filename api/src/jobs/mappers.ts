@@ -5,6 +5,7 @@ import type {
   MeasurementResult as MeasurementResultRow,
   PartUsed as PartUsedRow,
 } from '@prisma/client';
+import { titleHasFillableRun } from '@bamform/shared';
 import type {
   ApprovalStep,
   Attachment,
@@ -61,6 +62,16 @@ export function toJob(row: JobFullRow, today: Date = new Date()): Job {
   return {
     ...toJobSummary(row, today),
     draftVersion: row.draftVersion,
+    // Slice 31-TITLEBLANK — the technician's entry for the blank in this
+    // record's title. Null until they fill it. On `Job`, not `JobSummary`:
+    // the capture screen and the offline bootstrap both read the full job,
+    // and no list view renders a resolved title.
+    titleMachineNumber: row.titleMachineNumber,
+    // DERIVED here, never stored — same rule as `asset-documents.service.ts`.
+    // The capture screen shows its field only when this is true, so the one
+    // implementation of "is there a blank" stays on the server and the
+    // client cannot drift from the submit gate that uses it.
+    titleHasFillableRun: titleHasFillableRun(row.templateRevision.formTemplate.title),
     // Slice 17-VOID annotation — null until a job is voided. Never part of
     // the signed canonical content (see canonical-job-record.ts's key pins).
     voidReason: row.voidReason,

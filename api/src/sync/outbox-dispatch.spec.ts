@@ -45,6 +45,21 @@ describe('matchOutboxRoute — outbox mutation-path allowlist (PR-API-24..27)', 
     });
   });
 
+  it('matches PUT /jobs/{jobId}/title-machine-number (slice 31-TITLEBLANK)', () => {
+    expect(matchOutboxRoute('PUT', `/jobs/${JOB_ID}/title-machine-number`)).toEqual({
+      kind: 'title-machine-number',
+      jobId: JOB_ID,
+    });
+  });
+
+  it('does not confuse the title route with a part upsert named "title-machine-number"', () => {
+    expect(matchOutboxRoute('PUT', `/jobs/${JOB_ID}/parts/title-machine-number`)).toEqual({
+      kind: 'part-upsert',
+      jobId: JOB_ID,
+      partId: 'title-machine-number',
+    });
+  });
+
   it('rejects an otherwise-allowed path with the WRONG method', () => {
     expect(matchOutboxRoute('POST', `/jobs/${JOB_ID}/items/${ITEM_ID}`)).toBeNull();
     expect(matchOutboxRoute('PUT', `/jobs/${JOB_ID}/parts`)).toBeNull();
@@ -59,6 +74,12 @@ describe('matchOutboxRoute — outbox mutation-path allowlist (PR-API-24..27)', 
   it('rejects a path with an extra trailing segment (not exactly the allowed shape)', () => {
     expect(matchOutboxRoute('PUT', `/jobs/${JOB_ID}/items/${ITEM_ID}/extra`)).toBeNull();
     expect(matchOutboxRoute('PUT', `/jobs/${JOB_ID}/parts/${PART_ID}/extra`)).toBeNull();
+    expect(matchOutboxRoute('PUT', `/jobs/${JOB_ID}/title-machine-number/extra`)).toBeNull();
+  });
+
+  it('rejects POST on the title route — it is a PUT (idempotent replacement), never a POST', () => {
+    expect(matchOutboxRoute('POST', `/jobs/${JOB_ID}/title-machine-number`)).toBeNull();
+    expect(matchOutboxRoute('DELETE', `/jobs/${JOB_ID}/title-machine-number`)).toBeNull();
   });
 
   it('rejects a part-upsert path with an empty partId segment (no traversal via //)', () => {

@@ -64,6 +64,18 @@ export function explainSubmitRejection(problem: unknown): string {
     );
   }
 
+  // Slice 31-TITLEBLANK. The generic branch below would render this as
+  // "titleMachineNumber: Form number in the title is required" — an API field
+  // name shown to someone holding a paper form. The server's `detail` quotes
+  // the actual title (…Record ED____), which is the thing they can act on.
+  if (fields.some((e) => (e.pointer ?? '').includes('titleMachineNumber'))) {
+    return (
+      'The form number in the title has not been filled in. ' +
+      (p?.detail ?? 'Enter what is printed on the machine, then submit again.') +
+      ' Your entries are safely held on this device.'
+    );
+  }
+
   const named = fields
     .map((e) => {
       const field = (e.pointer ?? '').replace(/^\//, '');
@@ -93,6 +105,11 @@ function activeReturn(job: CachedJob['job']): ApprovalStep | null {
   }
   return null;
 }
+
+/** The title's form-number box shares `debounceRef` with the measurement
+ * inputs, which key by `templateMeasurementId` (a UUID). A non-UUID key
+ * cannot collide with any of them. */
+const TITLE_MACHINE_NUMBER_DEBOUNCE_KEY = 'title-machine-number';
 
 interface StagedPhoto {
   key: string;
@@ -202,6 +219,46 @@ async function mergedParts(
   return merged;
 }
 
+/**
+ * Slice 31-TITLEBLANK. `cached.job.titleMachineNumber` only ever holds what
+ * the server last acknowledged; a number typed offline sits in the outbox,
+ * durable, but invisible there until it syncs. Without this, a reload while
+ * that PUT is still queued shows an EMPTY box and blocks Submit for a value
+ * the technician has already entered — the same class of defect the parts
+ * merge above exists to prevent, and worse here because the block is silent.
+ *
+ * The outbox is authoritative when it holds a row for this job's title: its
+ * body is the latest not-yet-applied entry. Rows are read in `sequence` order
+ * (never coalesced, only appended), so the LAST one is the most recent
+ * regardless of what order Dexie returned them in. `null` is a real value —
+ * the technician CLEARED the box — so absence is expressed by returning
+ * `undefined`, not by folding it into null.
+ *
+ * Only rows STILL ON THEIR WAY count (review M-3). A `conflict` or `failed`
+ * row is one the server REFUSED; hydrating the box from it would show a value
+ * the record does not have and, worse, would satisfy the client-side submit
+ * gate with it. Today `needsRecovery` blocks submit for those rows anyway, so
+ * nothing is visibly wrong — which is exactly why it is worth pinning now
+ * rather than relying on a second mechanism to keep covering for this one.
+ *
+ * Once a row is ACKED it is deleted from the outbox, and the cached job
+ * snapshot carries the value instead — see `outbox.ts#confirmAckIntoCachedJob`.
+ */
+export function pendingTitleMachineNumber(
+  jobId: string,
+  outboxRows: OutboxEntry[],
+): string | null | undefined {
+  const path = `/jobs/${jobId}/title-machine-number`;
+  let latest: string | null | undefined;
+  for (const row of [...outboxRows].sort((a, b) => a.sequence - b.sequence)) {
+    if (row.method !== 'PUT' || row.path !== path) continue;
+    if (row.status !== 'pending' && row.status !== 'sending') continue;
+    const body = row.body as { titleMachineNumber?: string | null } | null;
+    latest = body?.titleMachineNumber ?? null;
+  }
+  return latest;
+}
+
 export function RecordCapture({ jobId }: { jobId: string }) {
   const { navigate } = useRouter();
   const [cached, setCached] = useState<CachedJob | undefined | null>(null);
@@ -236,6 +293,17 @@ export function RecordCapture({ jobId }: { jobId: string }) {
    * server has ack'd it (non-negotiable #1), and an edit-in-progress must be
    * discardable without touching the confirmed value `parts` still holds. */
   const [draftPart, setDraftPart] = useState<PartRow | null>(null);
+  /** Slice 31-TITLEBLANK — the raw string in the title's form-number box.
+   * Kept as typed (not trimmed on every keystroke) for the same reason
+   * `readings` is: an in-progress entry must round-trip through the input. */
+  const [titleMachineNumber, setTitleMachineNumber] = useState('');
+  /** Slice 31-TITLEBLANK — the last form-number entry could not be written to
+   * the device's outbox for a reason that is NOT "storage full" (a closed or
+   * faulted IndexedDB; `append()` re-throws those rather than returning).
+   * Separate from `quotaBanner` because telling a technician their storage is
+   * full when it is not sends them to free up space that was never the
+   * problem. */
+  const [titleSaveFailed, setTitleSaveFailed] = useState(false);
 
   /**
    * Slice 22-SELFUPDATE: hold the self-update's reload while this screen is
@@ -251,6 +319,11 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   );
 
   const debounceRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  /** Slice 31-TITLEBLANK — the latest form number TYPED but not yet queued
+   * (i.e. still inside the debounce window), or null when there is nothing
+   * outstanding. A ref, not state, so `flushTitleMachineNumber` can send
+   * exactly what the timer would have sent without a re-render. */
+  const unsentTitleRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** H-7: staged/uploading photos are screen-local — leaving discards
    * them. The Back button confirms first instead of silently binning the
@@ -274,6 +347,37 @@ export function RecordCapture({ jobId }: { jobId: string }) {
           readingValues[m.templateMeasurementId] = String(m.readingNumeric);
       }
       setReadings(readingValues);
+      // Slice 31-TITLEBLANK. Hydrated HERE, on mount, and NOT in
+      // `refreshState` — for the same reason `readings` is not. `refreshState`
+      // re-runs after every mutation and every drain, including during the
+      // 400ms debounce window in which the technician has typed but nothing
+      // has been queued yet. In that window neither source knows the new value
+      // (no outbox row, stale snapshot), so re-deriving there would yank the
+      // box back to the old value under their fingers.
+      //
+      // The outbox wins over the snapshot while a row is still QUEUED — a
+      // reload mid-shift, offline, must show what the technician typed, not an
+      // empty box that silently blocks Submit. Once the row is ACKED it is
+      // deleted, and `outbox.ts#confirmAckIntoCachedJob` has already written
+      // the value into the snapshot, so the fallback below is then the correct
+      // answer rather than a stale one (review I-1). `null` is a real value
+      // (the box was cleared), so only `undefined` falls through.
+      //
+      // The outbox read is guarded on its own because it is the one hydration
+      // source not already in hand from `getCachedJob` above: an IndexedDB
+      // that faults between the two would otherwise reject INTO NOTHING
+      // (`loadCached` is `void`ed by its effect) and leave the screen stuck on
+      // "Loading…" with no explanation. Degrading to the server snapshot is
+      // the honest fallback — it is what the record actually says server-side
+      // — and the submit gate is enforced there regardless.
+      let pending: string | null | undefined;
+      try {
+        const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
+        pending = pendingTitleMachineNumber(jobId, rows);
+      } catch {
+        pending = undefined;
+      }
+      setTitleMachineNumber((pending !== undefined ? pending : job.job.titleMachineNumber) ?? '');
       // Parts are hydrated in `refreshState`, not here — see that
       // function's comment. It runs alongside this effect on every mount,
       // so parts still populate on first render.
@@ -314,6 +418,14 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       window.removeEventListener('offline', onOffline);
     };
   }, [loadCached, refreshState]);
+
+  // Slice 31-TITLEBLANK. Same ref-in-cleanup shape as the object-URL effect
+  // below, and for the same reason: an unmount-only effect would close over
+  // the first render's function. Leaving the screen must not swallow a form
+  // number typed inside the debounce window — see `flushTitleMachineNumber`.
+  const flushTitleRef = useRef<() => void>(() => {});
+  flushTitleRef.current = flushTitleMachineNumber;
+  useEffect(() => () => flushTitleRef.current(), []);
 
   // Object URLs leak unless revoked — release them when the screen goes.
   // Ref, not state, in the cleanup: an unmount-only effect would otherwise
@@ -378,6 +490,99 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       setQuotaBanner(false);
       void refreshState();
       triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
+    }, 400);
+  }
+
+  /**
+   * Slice 31-TITLEBLANK — queue the blank in the form's title.
+   *
+   * An empty (or whitespace-only) box is sent as `null`, never `''` — the
+   * server schema is `min(1)` and an empty string would 422 on drain, which
+   * on this route would strand the row as `failed` and block Submit. `null`
+   * is the legitimate "cleared it again" value.
+   *
+   * `versioned: false`, the same mechanism a part upsert uses (though not the
+   * same exposure — see `title-machine-number.service.ts`).
+   * `TitleMachineNumberService` neither checks `If-Match` nor bumps
+   * `draftVersion`, so predicting a version here would leave the prediction
+   * ahead of reality and 409 the next real mutation. It also removes the
+   * reverse failure, which was measured rather than theorised: this box
+   * flushes on blur, blurring it is almost always caused by TAPPING A
+   * CHECKLIST BUTTON, and two versioned appends in one tick both read the
+   * same predicted version — the second 409'd against the first on the very
+   * first interaction of the offline journey.
+   */
+  async function sendTitleMachineNumber(rawValue: string) {
+    const { db, transport } = getServices();
+    const userId = getSyncUserId();
+    if (!userId) return;
+    const trimmed = rawValue.trim();
+    let result: Awaited<ReturnType<typeof appendJobMutation>>;
+    try {
+      result = await appendJobMutation(db, {
+        userId,
+        jobId,
+        method: 'PUT',
+        path: `/jobs/${jobId}/title-machine-number`,
+        body: { titleMachineNumber: trimmed === '' ? null : trimmed },
+        clientRecordedAt: new Date().toISOString(),
+        versioned: false,
+      });
+    } catch {
+      // Review M-1. `outbox.append()` RETURNS a result for a quota refusal but
+      // RE-THROWS everything else (a closed or faulted IndexedDB). This
+      // function is invoked from a `void`ed timer AND from the unmount flush,
+      // so an uncaught throw here is an unhandled rejection rather than
+      // anything a technician ever sees — it is already visible in the web
+      // unit run as `DatabaseClosedError`, which vitest reports without
+      // failing. The entry did NOT land, so the one thing that must not happen
+      // is it looking saved: the failure is stated where the field is, and
+      // when the screen has already gone this at least stops being a silent
+      // rejection.
+      setTitleSaveFailed(true);
+      return;
+    }
+    if (!result.ok) {
+      setQuotaBanner(true);
+      return;
+    }
+    setQuotaBanner(false);
+    setTitleSaveFailed(false);
+    void refreshState();
+    triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
+  }
+
+  /**
+   * Send whatever is sitting in the debounce window RIGHT NOW.
+   *
+   * Not optional politeness. Without it, typing the number and immediately
+   * tapping Back (or any other control) inside the 400ms window left the
+   * entry un-queued: on returning to the record the box was EMPTY and Submit
+   * was blocked again, for a value the technician had already typed. Wired to
+   * both `onBlur` and unmount, because those are the two ways this screen
+   * stops being looked at.
+   */
+  function flushTitleMachineNumber() {
+    if (unsentTitleRef.current === null) return;
+    const value = unsentTitleRef.current;
+    unsentTitleRef.current = null;
+    clearTimeout(debounceRef.current[TITLE_MACHINE_NUMBER_DEBOUNCE_KEY]);
+    void sendTitleMachineNumber(value);
+  }
+
+  /** Debounced exactly like a measurement reading (same 400ms, same
+   * `debounceRef` map): this is a free-text box, and queueing one outbox row
+   * per keystroke would fill the device's storage with entries that are all
+   * superseded by the last one. `flushTitleMachineNumber` closes the window
+   * the debounce opens. */
+  function recordTitleMachineNumber(rawValue: string) {
+    setTitleMachineNumber(rawValue);
+    unsentTitleRef.current = rawValue;
+    clearTimeout(debounceRef.current[TITLE_MACHINE_NUMBER_DEBOUNCE_KEY]);
+    debounceRef.current[TITLE_MACHINE_NUMBER_DEBOUNCE_KEY] = setTimeout(() => {
+      if (unsentTitleRef.current === null) return; // already flushed
+      unsentTitleRef.current = null;
+      void sendTitleMachineNumber(rawValue);
     }, 400);
   }
 
@@ -742,12 +947,28 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   // away) are as much a dead end as conflicts: drains re-send them into
   // the same refusal forever. Both classes get the recovery panel.
   const needsRecovery = counts.conflict + counts.failed > 0;
+  /**
+   * Slice 31-TITLEBLANK. Shown ONLY when the SERVER says this record's title
+   * carries a blank — the flag is derived once, server-side, from the frozen
+   * revision's title (`Job.titleHasFillableRun`) and rendered here verbatim,
+   * never re-derived. A form with the number already printed (EP01, PM01) or
+   * with no machine designation at all shows no box, for the reason the
+   * shared helper's own doc gives about the admin screen and which holds just
+   * as hard here: nobody is shown a box that does nothing, so nobody can
+   * believe they have labelled a record when they have not.
+   */
+  const titleHasBlank = cached.job.titleHasFillableRun === true;
+  /** Required at submit, optional while drafting — the same rule the server
+   * enforces in `submission.service.ts`, mirrored here only so the button
+   * tells the truth. The server remains the gate. */
+  const titleMachineNumberMissing = titleHasBlank && titleMachineNumber.trim() === '';
   const canSubmit =
     counts.total === 0 &&
     !cached.serverRemoved &&
     !needsRecovery &&
     !uploadsInFlight &&
-    !photosAwaitingAction;
+    !photosAwaitingAction &&
+    !titleMachineNumberMissing;
   const recordedCount = items.filter((item) => itemResults[item.id] != null).length;
 
   /** D-2a: an item counts as changed-since-return when the SERVER recorded
@@ -910,6 +1131,65 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         <p className="banner" data-tone="good" role="status">
           <span aria-hidden="true">✓</span> {recoveryBanner}
         </p>
+      )}
+
+      {titleHasBlank && (
+        <section aria-label="Form number">
+          <h2 className="microlabel" style={{ marginBottom: 'var(--space-3)' }}>
+            Form number
+          </h2>
+          {/* Editable in exactly the window the rest of the capture is:
+              while the record is still the performer's to fill in. Same
+              `canEditParts` predicate, not a second copy of the rule. */}
+          {canEditParts ? (
+            <div className="field">
+              <label htmlFor="title-machine-number">Form number in the title</label>
+              <input
+                id="title-machine-number"
+                type="text"
+                autoComplete="off"
+                maxLength={50}
+                value={titleMachineNumber}
+                onChange={(e) => recordTitleMachineNumber(e.target.value)}
+                onBlur={flushTitleMachineNumber}
+                aria-describedby="title-machine-number-hint"
+                aria-invalid={titleMachineNumberMissing || undefined}
+              />
+              <p className="field-hint" id="title-machine-number-hint">
+                {/* The RAW title, blank and all — the one printed on the paper
+                    form the technician is holding. Deliberately not a preview
+                    of the resolved title: the server's resolved value goes
+                    stale the moment this is typed offline, and a preview built
+                    on the device would be a second implementation of a
+                    substitution rule that has exactly one. */}
+                {revision?.title ? (
+                  <>
+                    Required before you can submit. Type what is printed on the machine, into the
+                    blank in: <span className="numeric">{revision.title}</span>
+                  </>
+                ) : (
+                  <>Required before you can submit. Type what is printed on the machine.</>
+                )}
+              </p>
+              {titleSaveFailed && (
+                <p className="field-error" role="alert">
+                  This form number could NOT be held on this device — retype it and check it stays.
+                  Nothing else you have entered is affected.
+                </p>
+              )}
+              {titleMachineNumberMissing && (
+                <p className="field-error" role="status">
+                  Fill this in before submitting — the printed record would otherwise show the blank
+                  empty.
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="screen-meta">
+              {titleMachineNumber !== '' ? titleMachineNumber : 'Not recorded'}
+            </p>
+          )}
+        </section>
       )}
 
       <section aria-label="Checklist items">
@@ -1179,7 +1459,12 @@ export function RecordCapture({ jobId }: { jobId: string }) {
                 ? 'Resolve the sync problem above to submit'
                 : counts.sendable > 0
                   ? `Sending ${counts.sendable} entr${counts.sendable === 1 ? 'y' : 'ies'}…`
-                  : 'Sign and submit'}
+                  : // Slice 31-TITLEBLANK: a disabled button that still says
+                    // "Sign and submit" tells the technician nothing about why
+                    // it will not move.
+                    titleMachineNumberMissing
+                    ? 'Enter the form number above to submit'
+                    : 'Sign and submit'}
         </button>
       </div>
 

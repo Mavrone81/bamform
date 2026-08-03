@@ -33,6 +33,12 @@ export const EXPECTED_ROUTE_ROLES: Readonly<Record<string, readonly string[]>> =
   'POST /api/v1/jobs/{jobId}/submit': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'POST /api/v1/jobs/{jobId}/parts': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'PUT /api/v1/jobs/{jobId}/parts/{partId}': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
+  // Slice 31-TITLEBLANK. Exactly the roles that record results: the blank in
+  // the title is a field on the form, filled by the person filling the form.
+  // Deliberately NOT widened to ADMIN — an admin already has
+  // `PATCH /asset-documents/{id}` for the document-level default, and this
+  // one is the technician's own per-record entry.
+  'PUT /api/v1/jobs/{jobId}/title-machine-number': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'POST /api/v1/jobs/{jobId}/attachments': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'POST /api/v1/jobs/{jobId}/recall': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],
   'PUT /api/v1/jobs/{jobId}/items/{templateItemId}': ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'],

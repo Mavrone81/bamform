@@ -398,6 +398,12 @@ revision that changes the title stays correct.
 > **That guard covers that one endpoint** — it is not a general property of archived
 > records, and every other write path feeding the PDF assembly needs its own.
 
+**Superseded as the primary source by slice 31-TITLEBLANK.** The owner ruled that the blank
+is the *technician's* to fill, per record, as it is on paper — so `job.title_machine_number`
+is what the render now prefers. `asset_document.machine_number` is **kept** and is the
+fallback: every record signed before that column existed, and every document an admin has
+already labelled, keeps printing exactly as it does today. The admin UI for it is unchanged.
+
 **Deactivation, never deletion.** INV-16 forbids DELETE on record tables, and a document
 that has generated jobs must remain resolvable. `active = false` stops future job
 generation (`schedule-rule-bootstrap` and `job-generation` both filter on it) and leaves
@@ -421,13 +427,23 @@ the owning side. Slice 27-ASSETDOC then removed that side too — a document bel
 machine family at all. Which machines carry it is §6.8a `asset_document`.
 
 The `title` may carry a **fillable run** — two or more consecutive underscores, e.g.
-"…Record KW___" — into which `asset_document.machine_number` is substituted **at render**.
-8 of the 12 controlled documents carry one; `EP01` and `PM01` have the number printed
-already, and two have no machine designation at all. Never stored resolved, so a revision
-that changes the title stays correct. The rendered result is **not** frozen at archive —
-see §6.8a's note: slice 23-PDFA is unbuilt, the PDF re-renders live from current data, and
-what protects an archived record's title is the write-side guard on
-`PATCH /asset-documents/{id}`.
+"…Record KW___" — into which the captured form number is substituted **at render**. 8 of
+the 12 controlled documents carry one; `EP01` and `PM01` have the number printed already,
+and two have no machine designation at all. Never stored resolved, so a revision that
+changes the title stays correct.
+
+Since slice 31-TITLEBLANK the substituted value is `job.title_machine_number` — the
+technician's own per-record entry — falling back to `asset_document.machine_number` where
+the record has none. `titleHasFillableRun()` (`shared/src/template-title.ts`) is the single
+implementation of "is there a blank"; it is derived per response onto both `AssetDocument`
+and `Job` so no client ever re-derives it.
+
+The rendered result is **not** frozen at archive — see §6.8a's note: slice 23-PDFA is
+unbuilt, the PDF re-renders live from current data, and what protects an archived record's
+title is a write-side guard on each source. For the fallback that is
+`PATCH /asset-documents/{id}`; for the technician's own value it is `assertJobWritable`
+plus `prevent_archived_job_update()`, which close `job.title_machine_number` from submit
+onwards.
 
 ---
 
@@ -597,6 +613,23 @@ Frequencies still derive from each document's own current revision's distinct ac
 | `void_reason` | text | Y | INT | Min 10 chars (PR-046) |
 | `voided_by` | uuid | Y | INT | |
 | `draft_version` | integer | N | INT | Optimistic concurrency for offline sync (PR-064) |
+| `title_machine_number` | text | Y | CON | Slice 31-TITLEBLANK — the technician's entry for the blank in this record's title |
+
+**`title_machine_number` (slice 31-TITLEBLANK).** What the technician writes into the blank
+in the form's title (`…Record ED____` + `01` → `…Record ED01`), captured per record like any
+other field on the form. NULL until filled, and **never pre-filled from the machine code** —
+deciding which part of `AVS35-01` belongs in `AVS 35-____` is unverifiable and wrong on two
+of the eight real shapes. Required at **submit**, and only where the title actually carries a
+fillable run (§6.9); optional throughout drafting so a whole shift can be worked offline.
+Bounds mirror `asset_document.machine_number` exactly (trimmed, 1..50), backed by
+`job_title_machine_number_chk`. Substituted **at render**, never stored resolved, and
+preferred over `asset_document.machine_number`.
+
+Captured through `PUT /jobs/{id}/title-machine-number`, which is **unversioned** (no
+`If-Match`, no `draft_version` bump, no status transition) — the `PUT /jobs/{id}/parts/{partId}`
+shape, not the item/measurement shape. Immutable from submit onwards: `assertJobWritable`
+closes the API, and INV-09's `prevent_archived_job_update()` covers the column with no
+trigger change, because it compares `to_jsonb(OLD)` minus the annotation columns.
 
 **`asset_document_id` (slice 27-ASSETDOC).** `asset_id` alone was sufficient while a machine
 carried one document. With several it is not: `CompletionCascadeService` and
@@ -829,7 +862,8 @@ the trigger:
 | Printed from | Table | Protected by |
 |---|---|---|
 | checklist / measurement results, parts, attachments, status, due date | `job`, `item_result`, … | INV-09 trigger + `assertJobWritable` |
-| document title's machine number | `asset_document.machine_number` | **application guard only** — `PATCH /asset-documents/{id}` (`/errors/archived-record-dependency`) |
+| document title's machine number — preferred source since slice 31-TITLEBLANK | `job.title_machine_number` | INV-09 trigger + `assertJobWritable` — it is a `job` scalar, so the trigger already covers it (`to_jsonb(OLD)` minus the annotation columns) |
+| document title's machine number — fallback, used where the record captured none | `asset_document.machine_number` | **application guard only** — `PATCH /asset-documents/{id}` (`/errors/archived-record-dependency`) |
 | machine code (PDF header + footer, and the `assetCode` column of an export manifest) | `asset.code` | **application guard only** — `PATCH /assets/{id}` (same problem type) |
 | signatory names | `app_user.full_name_ct` | **snapshotted at signing** onto `approval_step.actor_name_ct` / `on_behalf_of_name_ct` — but only for steps signed AFTER migration `20260801000000`. Earlier rows, and any step whose snapshot failed soft, have NULL there and still resolve the name live, so a later rename *does* reach those. No backfill is possible: today's `app_user` value is not evidence of what was true at signing |
 | stage caption, actor role | `approval_step.stage_label`, `.actor_role_code` | snapshotted at signing |
