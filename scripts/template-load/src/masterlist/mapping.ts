@@ -36,6 +36,12 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/asm\s+eagle/i, 'ASM_WIRE_BOND'],
   [/connx-elite/i, 'KNS_WIRE_BOND'],
   [/mb\s+(cme|cmt)/i, 'MB_ENCAPSULATION'],
+  // Owner decision 2026-08-03 (fix round 1), settled by evidence, not
+  // inference: of 204 real signed PM records supplied, February's
+  // `ST01-1M.pdf` is titled "MB E-Test Preventive Maintenance Record ST01",
+  // document CE 95 050 00 01 — the exact form MB_E_TEST was created from.
+  // `MS-620 ST01`'s parsed model is `MS-620`.
+  [/^ms-620/i, 'MB_E_TEST'],
   [/os\s+loading|imos/i, 'OS_LOADING'],
   [/pre\s?mixer|^dp\d/i, 'PRE_MIXER'],
   [/^bd\d/i, 'BUMP_DISPENSING'],
@@ -52,24 +58,39 @@ export function assetTypeCodeForModel(model: string, code: string): string | nul
 }
 
 /**
- * The blank in a template title is a run of underscores. The prefix before it
- * is already printed, so what gets supplied is the machine code's trailing
- * digits — `KW13` fills `KW___` with `13`, never `KW13`.
+ * The blank in a template title is a run of underscores (2+). What fills it
+ * is derived from the TOKEN immediately before that run — the contiguous
+ * non-whitespace, non-underscore text directly touching it (`Record
+ * KW___` -> `KW`; `Record______` -> `Record`; `Record IMOS 0__` -> `0`).
  *
- * No whitespace guard here. An earlier version of this function rejected any
- * code containing a space, to make `MS-620 ST01` return null — but at the
- * time `parseMasterlist` was handing this function whole labels like
- * `ConnX-Elite Lite KW01`, so the guard silently nulled 18 real machine
- * numbers across the KNS and Pre-Mixer families. The root cause was the
- * parse rule (Task 1's `code` field now takes the last whitespace-delimited
- * token when a label has no `--` separator), not this function, so this
- * always receives a bare code like `KW01`. `MS-620 ST01` now arrives as
- * `ST01` and yields `01` — harmless, because that machine maps to no asset
- * type and is imported with no document, so `machineNumber` is never read
- * for it.
+ * Owner decision 2026-08-03 (fix round 1), settled by two real specimens
+ * from the 204 signed PM records supplied:
+ *   - `KW08.pdf` fills `...Record KW___` with `08` — the code's REMAINDER
+ *     after the token, because the code `KW08` starts with the token `KW`.
+ *   - `ST01-1M.pdf` fills the bare `...Record______` with the WHOLE code
+ *     `ST01`, not `01` — because the code `ST01` does NOT start with the
+ *     token `Record`.
+ *
+ * So: if the code starts with the token (case-insensitively), supply the
+ * remainder; otherwise supply the whole code. An earlier version of this
+ * function always took the code's trailing digits, which happened to match
+ * the KW/ED/DP/EW families (their token IS their code's alpha prefix) but
+ * was never actually derived from the title, so it silently gave the wrong
+ * answer for e.g. `MB Encapsulation ... Record MB_____` against a code like
+ * `CM02` or `T8` (does not start with `MB` — whole code `CM02`/`T8`, not a
+ * trailing digit) and for `ST01` against `Record______` (`01`, not `ST01`).
+ *
+ * `AVS 35-____` and `IMOS 0__` are NOT yet confirmed against a specimen —
+ * this function is applied mechanically to them like every other template,
+ * not special-cased; see the task report for what it currently produces.
  */
 export function machineNumberFor(templateTitle: string, code: string): string | null {
-  if (!/_{2,}/.test(templateTitle)) return null;
-  const tail = /(\d+)\s*$/.exec(code.trim());
-  return tail ? tail[1] : null;
+  const blank = /([^\s_]*)_{2,}/.exec(templateTitle);
+  if (!blank) return null;
+  const token = blank[1];
+  const trimmedCode = code.trim();
+  const value = trimmedCode.toLowerCase().startsWith(token.toLowerCase())
+    ? trimmedCode.slice(token.length)
+    : trimmedCode;
+  return value.length > 0 ? value : null;
 }

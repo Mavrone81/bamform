@@ -39,7 +39,12 @@ describe('reconcile', () => {
   });
 
   it('leaves assetTypeCode null for an unmapped model', () => {
-    const [r] = reconcile([row('MS-620 ST01', 'MS-620 ST01', ['M1'])], forms);
+    // MS-620 ST01 (this test's example before fix round 1) is no longer
+    // unmapped — owner decision 2026-08-03, settled by evidence (a signed
+    // PM record titled "MB E-Test Preventive Maintenance Record ST01"):
+    // mapping.ts now maps it to MB_E_TEST. Using a synthetic example here
+    // instead so this test keeps testing the null path.
+    const [r] = reconcile([row('ZZ99', 'Some Unmapped Machine', ['M1'])], forms);
     expect(r.assetTypeCode).toBeNull();
   });
 

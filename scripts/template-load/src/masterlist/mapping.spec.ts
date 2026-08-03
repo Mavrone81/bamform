@@ -31,6 +31,11 @@ describe('assetTypeCodeForModel', () => {
     ['PM01', 'PM01', 'POWATEC_MOUNTING'],
     ['BD01', 'BD01', 'BUMP_DISPENSING'],
     ['AVS35-01', 'AVS35-01', 'AVS_35'],
+    // Owner decision 2026-08-03 (fix round 1) — settled by evidence, not
+    // inference: ST01-1M.pdf among the 204 supplied signed records is
+    // titled "MB E-Test Preventive Maintenance Record ST01", CE 95 050 00
+    // 01, the exact form MB_E_TEST was created from.
+    ['MS-620', 'ST01', 'MB_E_TEST'],
   ])('maps %s / %s', (model, code, expected) => {
     expect(assetTypeCodeForModel(model, code)).toBe(expected);
   });
@@ -42,29 +47,43 @@ describe('assetTypeCodeForModel', () => {
     expect(assetTypeCodeForModel('Besi ESEC 3100 plus', 'BW02')).toBe('BESI_ESEC_WIRE_BOND');
   });
 
-  it('returns null for a model with no form rather than guessing', () => {
-    expect(assetTypeCodeForModel('MS-620 ST01', 'MS-620 ST01')).toBeNull();
-  });
-
   it('lists DDA 03 as skipped', () => {
     expect(SKIPPED_LABELS).toContain('DDA 03');
   });
 });
 
 describe('machineNumberFor', () => {
-  it('returns the numeric tail for a title with a blank', () => {
+  // Shape 1: the code STARTS WITH the token immediately before the blank ->
+  // supply the remainder. Confirmed by KW08.pdf among the 204 signed records
+  // (fix round 1, owner decision 2026-08-03).
+  it('returns the remainder after the title-adjacent token, when the code starts with it', () => {
     expect(machineNumberFor('KNS Wire Bond Preventive Maintenance Record KW___', 'KW13')).toBe(
       '13',
     );
     expect(machineNumberFor('BESI Die Attach Preventive Maintenance Record ED____', 'ED01')).toBe(
       '01',
     );
+    expect(machineNumberFor('MB Encapsulation Preventive Maintenance Record MB_____', 'MB03')).toBe(
+      '03',
+    );
   });
 
-  it('handles a hyphenated code', () => {
-    expect(
-      machineNumberFor('Preventive Maintenance Work Instruction / Record AVS 35-____', 'AVS35-01'),
-    ).toBe('01');
+  // Shape 2: the code does NOT start with that token -> supply the WHOLE
+  // code. Confirmed by ST01-1M.pdf: the bare "Record______" fills with
+  // "ST01", not "01" — its adjacent token is "Record", which "ST01" does
+  // not start with.
+  it('returns the whole code when it does not start with the title-adjacent token', () => {
+    expect(machineNumberFor('MB E-Test Preventive Maintenance Record______', 'ST01')).toBe('ST01');
+    // Same template family (MB_____), same token "MB" — but CM02/T8 do not
+    // start with "MB", so unlike MB03 above they get the whole code, not a
+    // trailing-digit remainder. This is exactly the case the old
+    // trailing-digit rule silently got wrong (it never looked at the title).
+    expect(machineNumberFor('MB Encapsulation Preventive Maintenance Record MB_____', 'CM02')).toBe(
+      'CM02',
+    );
+    expect(machineNumberFor('MB Encapsulation Preventive Maintenance Record MB_____', 'T8')).toBe(
+      'T8',
+    );
   });
 
   it('returns null when the title has no blank to fill', () => {
@@ -74,24 +93,8 @@ describe('machineNumberFor', () => {
     ).toBeNull();
   });
 
-  it('returns null when the code has no numeric tail rather than guessing', () => {
+  it('returns null when the code exactly equals the token, leaving nothing to fill', () => {
     expect(machineNumberFor('KNS Wire Bond Preventive Maintenance Record KW___', 'KW')).toBeNull();
-  });
-
-  it('extracts a tail from ST01 rather than nulling on it — parseMasterlist never hands this function a multi-word label', () => {
-    // Before Task 1's parse fix, parseMasterlist gave this function the
-    // whole label `MS-620 ST01`, and a whitespace guard here rejected it to
-    // keep this specific case null. That guard also nulled 18 real machine
-    // numbers (KW/DP families) that arrived as whole labels for the same
-    // reason. The guard is gone; the fix is upstream — parseMasterlist now
-    // always yields the bare code (`ST01`, not `MS-620 ST01`). Called
-    // directly with `ST01`, this function has no way to know the machine is
-    // untyped, so it returns '01' like any other code with a numeric tail.
-    // That's safe: `MS-620 ST01` maps to no asset type
-    // (assetTypeCodeForModel returns null for it) and is imported without a
-    // document, so no template title ever exists for machineNumberFor to be
-    // called against it in the real pipeline.
-    expect(machineNumberFor('MB E-Test Preventive Maintenance Record______', 'ST01')).toBe('01');
   });
 
   it('finds the underscore run even when the title carries a literal CRLF elsewhere', () => {
@@ -101,6 +104,20 @@ describe('machineNumberFor', () => {
     // still a contiguous underscore run, so the regex must not be thrown off
     // by unrelated line breaks in the string.
     const titleWithRealCrlf = 'Preventive Maintenance Work Instruction / \r\nRecord AVS 35-____';
-    expect(machineNumberFor(titleWithRealCrlf, 'AVS35-01')).toBe('01');
+    // NOT YET CONFIRMED against a specimen (unlike KW08/ST01 above). The
+    // token adjacent to the blank is "35-" (hyphen is not whitespace or an
+    // underscore); "AVS35-01" does not start with "35-", so this is the
+    // whole-code shape. Applied mechanically, not special-cased — see the
+    // task report.
+    expect(machineNumberFor(titleWithRealCrlf, 'AVS35-01')).toBe('AVS35-01');
+  });
+
+  it('is NOT YET CONFIRMED for IMOS — applied mechanically like every other template', () => {
+    // Token adjacent to "IMOS 0__"'s blank is "0" (one character); the real
+    // code "IMOS-01" does not start with "0", so this is also the
+    // whole-code shape. See the task report.
+    expect(machineNumberFor('OS Loading Preventive Maintenance Record IMOS 0__', 'IMOS-01')).toBe(
+      'IMOS-01',
+    );
   });
 });

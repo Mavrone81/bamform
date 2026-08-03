@@ -10,6 +10,22 @@
  * server never issues a provisional `PROV-XXXXXXXX`), and this module PATCHes
  * — really `PUT`s, see the note below — the planned due dates afterwards.
  *
+ * SURPLUS (Task 3 §6 — the form defines a frequency the plan does not
+ * schedule) is left BLANK for a planner, per owner decision 2026-08-03 (fix
+ * round 1): "create the machine but leave the schedule as blank for planner
+ * to plan." There is no HTTP call that deactivates a single schedule_rule
+ * frequency (verified against `asset-schedule.controller.ts`/
+ * `scheduleAdjustRequestSchema` — only `nextDueOn`/`adjustedReason` are
+ * settable, and `PATCH /asset-documents/{id} {active:false}` is document-wide,
+ * which would also disable this machine's genuinely planned frequencies on
+ * the same document). So for a machine with any `surplus`, this module
+ * creates the machine and attaches its document as normal, then deliberately
+ * SKIPS `GET /assets/{id}/schedule` — that GET is what lazily materialises
+ * the bootstrap rules, so skipping it leaves the machine with no schedule at
+ * all. It shows up in the planner as unplanned; a human decides from there.
+ * No API change, no invented write, no conflict prompt (dropped from this
+ * slice — see the plan's "Decisions since this plan was drafted").
+ *
  * DRY RUN IS THE DEFAULT (`options.apply` must be explicitly `true`). Under
  * dry run this module makes ZERO network calls — not even GETs — and only
  * logs the calls it would make, computed from `options.reconciliations` plus
@@ -135,28 +151,7 @@ export interface ImportOptions {
   year: number;
   /** Perform real writes. Default false: DRY RUN, zero network calls. */
   apply?: boolean;
-  /**
-   * Decide a machine's surplus conflict (Task 3 §6 — the form defines a
-   * frequency the plan does not schedule). Applies to ALL of that machine's
-   * surplus frequencies at once, matching Task 5's `promptConflict` shape.
-   * Omit only when no row in this run has any `surplus` — a real decision is
-   * REQUIRED, never defaulted (mirrors `parseConflictChoice`'s own refusal to
-   * default silently: "would schedule or drop PM work nobody chose").
-   */
-  resolveSurplus?: (r: Reconciliation) => Promise<'plan' | 'form'> | 'plan' | 'form';
-  /** When true, `resolveSurplus` is skipped and every conflict follows the
-   *  plan — Task 5's `--follow-plan`, needed to keep a dry run non-interactive. */
-  followPlan?: boolean;
   log?: (line: string) => void;
-}
-
-export interface SurplusResolution {
-  frequency: string;
-  choice: 'plan' | 'form';
-  /** True once the frequency was actually deactivated. See `processMapped`'s
-   *  surplus handling below — as of this task, always false: no HTTP endpoint
-   *  deactivates a single schedule_rule frequency (see the task report). */
-  deactivated: boolean;
 }
 
 export interface MachineImportResult {
@@ -169,9 +164,17 @@ export interface MachineImportResult {
   blocked: boolean;
   assetId?: string;
   documentAttached: boolean;
-  /** frequency -> nextDueOn actually planned (or, under dry run, computed). */
+  /** True when the machine was deliberately left with NO schedule (`surplus`
+   *  non-empty) — this module never calls `GET /assets/{id}/schedule` for
+   *  it, so no schedule_rule rows exist yet. Not `blocked`: this is the
+   *  intended owner-decided outcome, not a gap. */
+  leftUnplanned: boolean;
+  /** frequency -> nextDueOn actually planned (or, under dry run, computed).
+   *  Empty when `leftUnplanned`. */
   dueDates: Record<string, string>;
-  surplus: SurplusResolution[];
+  /** Frequencies the form defines beyond the plan (Task 3's `surplus`) —
+   *  informational; non-empty exactly when `leftUnplanned`. */
+  surplus: string[];
   message?: string;
 }
 
@@ -184,6 +187,7 @@ export interface ImportReport {
     hardError: number;
     imported: number;
     blocked: number;
+    leftUnplanned: number;
   };
 }
 
@@ -193,7 +197,6 @@ interface Ctx {
   year: number;
   log: (line: string) => void;
   templates: Record<string, ImportTemplateRef>;
-  resolveSurplus: (r: Reconciliation) => Promise<'plan' | 'form'> | 'plan' | 'form';
   // Populated once per run, live mode only.
   assetTypes: AssetType[];
   liveTemplates: FormTemplate[];
@@ -204,17 +207,6 @@ interface Ctx {
 export async function runImport(options: ImportOptions): Promise<ImportReport> {
   const log = options.log ?? (() => undefined);
   const dryRun = options.apply !== true;
-  const resolveSurplus: Ctx['resolveSurplus'] =
-    options.resolveSurplus ??
-    (options.followPlan
-      ? () => 'plan'
-      : (r: Reconciliation) => {
-          throw new Error(
-            `${r.row.label} has a surplus conflict (${r.surplus.join(', ')}) but no ` +
-              'resolveSurplus callback or followPlan flag was supplied — refusing to ' +
-              'default silently (would schedule or drop PM work nobody chose).',
-          );
-        });
 
   log(
     dryRun
@@ -228,7 +220,6 @@ export async function runImport(options: ImportOptions): Promise<ImportReport> {
     year: options.year,
     log,
     templates: options.templates,
-    resolveSurplus,
     assetTypes: [],
     liveTemplates: [],
     assetsByType: new Map(),
@@ -248,13 +239,21 @@ export async function runImport(options: ImportOptions): Promise<ImportReport> {
     machines.push(await processRow(r, ctx));
   }
 
-  const counts = { skipped: 0, unmapped: 0, hardError: 0, imported: 0, blocked: 0 };
+  const counts = {
+    skipped: 0,
+    unmapped: 0,
+    hardError: 0,
+    imported: 0,
+    blocked: 0,
+    leftUnplanned: 0,
+  };
   for (const m of machines) {
     if (m.status === 'skipped') counts.skipped += 1;
     else if (m.status === 'unmapped') counts.unmapped += 1;
     else if (m.status === 'hard-error') counts.hardError += 1;
     else counts.imported += 1;
     if (m.blocked) counts.blocked += 1;
+    if (m.leftUnplanned) counts.leftUnplanned += 1;
   }
   return { dryRun, machines, counts };
 }
@@ -278,6 +277,7 @@ async function processRow(r: Reconciliation, ctx: Ctx): Promise<MachineImportRes
       status: 'skipped',
       blocked: false,
       documentAttached: false,
+      leftUnplanned: false,
       dueDates: {},
       surplus: [],
     };
@@ -306,6 +306,7 @@ async function processRow(r: Reconciliation, ctx: Ctx): Promise<MachineImportRes
       status: 'hard-error',
       blocked: true,
       documentAttached: false,
+      leftUnplanned: false,
       dueDates: {},
       surplus: [],
       message: msg,
@@ -316,12 +317,18 @@ async function processRow(r: Reconciliation, ctx: Ctx): Promise<MachineImportRes
 }
 
 /**
- * `assetTypeCode === null` (e.g. `MS-620 ST01`). `POST /api/v1/assets`
- * requires `assetTypeId` — there is no "no family yet" bucket — so this
- * importer can only ever REUSE an asset that already carries this code; it
- * must never invent an asset type to satisfy the schema, which is exactly
- * the kind of guess the brief forbids. If no such asset exists yet, the row
- * is recorded `blocked`, not silently created under a wrong family.
+ * `assetTypeCode === null`. `POST /api/v1/assets` requires `assetTypeId` —
+ * there is no "no family yet" bucket — so this importer can only ever REUSE
+ * an asset that already carries this code; it must never invent an asset
+ * type to satisfy the schema, which is exactly the kind of guess the brief
+ * forbids. If no such asset exists yet, the row is recorded `blocked`, not
+ * silently created under a wrong family.
+ *
+ * As of fix round 1 (owner decision 2026-08-03), `MS-620 ST01` — this
+ * path's only real-fixture example — is no longer unmapped (`mapping.ts` now
+ * maps it to `MB_E_TEST`), so this function is unreachable for the current
+ * 77-row fixture. Left in place as the correct defensive behaviour for any
+ * future genuinely-unmapped row.
  */
 async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImportResult> {
   const { row } = r;
@@ -338,6 +345,7 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
       status: 'unmapped',
       blocked: true,
       documentAttached: false,
+      leftUnplanned: false,
       dueDates: {},
       surplus: [],
       message: 'unmapped model — dry run cannot confirm whether it already exists',
@@ -363,6 +371,7 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
       blocked: false,
       assetId: found.id,
       documentAttached: false,
+      leftUnplanned: false,
       dueDates: {},
       surplus: [],
       message: 'reused an existing asset; unmapped model, so no document/schedule was touched',
@@ -382,6 +391,7 @@ async function processUnmapped(r: Reconciliation, ctx: Ctx): Promise<MachineImpo
     status: 'unmapped',
     blocked: true,
     documentAttached: false,
+    leftUnplanned: false,
     dueDates: {},
     surplus: [],
     message: msg,
@@ -402,6 +412,7 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       status: 'hard-error',
       blocked: true,
       documentAttached: false,
+      leftUnplanned: false,
       dueDates: {},
       surplus: [],
       message: msg,
@@ -413,60 +424,46 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
   const anchorDate = Object.values(dueDates).sort()[0];
   const machineNumber = machineNumberFor(template.title, row.code);
 
-  // Step 4 — resolve every surplus frequency BEFORE any network call, so a
-  // dry run can show the decision without needing an asset to exist yet.
-  const surplusChoice: 'plan' | 'form' | null =
-    r.surplus.length > 0 ? await ctx.resolveSurplus(r) : null;
-  const surplus: SurplusResolution[] = r.surplus.map((frequency) => ({
-    frequency,
-    choice: surplusChoice as 'plan' | 'form',
-    deactivated: false,
-  }));
-  if (surplusChoice === 'plan') {
-    for (const s of surplus) {
-      // NEEDS_CONTEXT (see task report): `PUT /assets/{id}/schedule`
-      // (`ScheduleAdjust`) only accepts `nextDueOn`/`adjustedReason` — there
-      // is no `active` field. `PATCH /asset-documents/{id} {active:false}`
-      // deactivates the WHOLE document (every frequency on it), which would
-      // also disable this machine's genuinely PLANNED frequencies on the
-      // same document. No verified HTTP call exists that deactivates ONE
-      // schedule_rule frequency, so this is never performed — logged loudly
-      // instead of guessed.
-      ctx.log(
-        `BLOCKED ${row.label} (${row.code}) — chose to DROP surplus ${s.frequency}, but no ` +
-          'API call exists to deactivate a single schedule_rule frequency without also ' +
-          'disabling this document’s planned frequencies. Left ACTIVE at its bootstrap ' +
-          'default; needs an owner/API decision.',
-      );
-    }
-  } else if (surplusChoice === 'form') {
-    for (const s of surplus) {
-      ctx.log(
-        `NOTE    ${row.label} (${row.code}) — chose to FOLLOW THE FORM for ${s.frequency}: ` +
-          'left at its bootstrap default (no masterlist due date exists for it to migrate).',
-      );
-    }
-  }
+  // Owner decision 2026-08-03 (fix round 1): a surplus frequency means the
+  // schedule is left BLANK for a planner — not resolved at migration time.
+  // No conflict prompt, no callback. Create the machine and attach the
+  // document as normal; simply never call the schedule GET, so no
+  // schedule_rule rows ever materialise for this machine.
+  const leaveUnplanned = r.surplus.length > 0;
 
   if (ctx.dryRun) {
-    ctx.log(
-      `DRY     ${row.label} (${row.code}) -> ${assetTypeCode} / ${template.documentNumber} — ` +
-        `would GET/POST /api/v1/assets (code=${row.code}, scheduleAnchorDate=${anchorDate}), ` +
-        `GET/POST /assets/{id}/documents (machineNumber=${machineNumber ?? 'null'}), ` +
-        `GET /assets/{id}/schedule, then PUT it per frequency: ` +
-        Object.entries(dueDates)
-          .map(([f, d]) => `${f}=${d} (WW${firstWeek[f]})`)
-          .join(', '),
-    );
+    if (leaveUnplanned) {
+      ctx.log(
+        `DRY     ${row.label} (${row.code}) -> ${assetTypeCode} / ${template.documentNumber} — ` +
+          `would GET/POST /api/v1/assets (code=${row.code}, scheduleAnchorDate=${anchorDate}), ` +
+          `GET/POST /assets/{id}/documents (machineNumber=${machineNumber ?? 'null'}), then ` +
+          `STOP — surplus (${r.surplus.join(', ')}) means no /assets/{id}/schedule GET, left ` +
+          'unplanned for a planner.',
+      );
+    } else {
+      ctx.log(
+        `DRY     ${row.label} (${row.code}) -> ${assetTypeCode} / ${template.documentNumber} — ` +
+          `would GET/POST /api/v1/assets (code=${row.code}, scheduleAnchorDate=${anchorDate}), ` +
+          `GET/POST /assets/{id}/documents (machineNumber=${machineNumber ?? 'null'}), ` +
+          `GET /assets/{id}/schedule, then PUT it per frequency: ` +
+          Object.entries(dueDates)
+            .map(([f, d]) => `${f}=${d} (WW${firstWeek[f]})`)
+            .join(', '),
+      );
+    }
     return {
       label: row.label,
       code: row.code,
       assetTypeCode,
       status: 'imported',
-      blocked: surplus.some((s) => s.choice === 'plan'),
+      blocked: false,
       documentAttached: true,
-      dueDates,
-      surplus,
+      leftUnplanned: leaveUnplanned,
+      dueDates: leaveUnplanned ? {} : dueDates,
+      surplus: leaveUnplanned ? [...r.surplus] : [],
+      message: leaveUnplanned
+        ? `left unplanned for a planner (surplus: ${r.surplus.join(', ')})`
+        : undefined,
     };
   }
 
@@ -484,8 +481,9 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       status: 'hard-error',
       blocked: true,
       documentAttached: false,
+      leftUnplanned: false,
       dueDates: {},
-      surplus,
+      surplus: [],
       message: msg,
     };
   }
@@ -524,8 +522,9 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
       blocked: true,
       assetId: asset.id,
       documentAttached: false,
+      leftUnplanned: false,
       dueDates: {},
-      surplus,
+      surplus: [],
       message: msg,
     };
   }
@@ -541,6 +540,32 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     ctx.log(`  POST /assets/${asset.id}/documents -> ${template.documentNumber}`);
   } else {
     ctx.log(`  REUSE document ${assetDocument.id} (${template.documentNumber})`);
+  }
+
+  // ---- Surplus: leave the schedule blank for a planner ---------------------
+  // Deliberately do NOT call `GET /assets/{id}/schedule` — that GET is what
+  // lazily materialises the bootstrap rules (`schedule-rule-bootstrap.service`).
+  // Skipping it means no schedule_rule rows exist for this machine at all, so
+  // it shows up in the planner as unplanned. No PUT is possible either way
+  // (there is nothing to adjust yet), so this machine is done here.
+  if (leaveUnplanned) {
+    ctx.log(
+      `NOTE    ${row.label} (${row.code}) — surplus (${r.surplus.join(', ')}): left unplanned ` +
+        '(no GET /assets/{id}/schedule call, no schedule_rule rows). A planner decides.',
+    );
+    return {
+      label: row.label,
+      code: row.code,
+      assetTypeCode,
+      status: 'imported',
+      blocked: false,
+      assetId: asset.id,
+      documentAttached: true,
+      leftUnplanned: true,
+      dueDates: {},
+      surplus: [...r.surplus],
+      message: `left unplanned for a planner (surplus: ${r.surplus.join(', ')})`,
+    };
   }
 
   // ---- Step 7: materialise the schedule rules ------------------------------
@@ -590,10 +615,11 @@ async function processMapped(r: Reconciliation, ctx: Ctx): Promise<MachineImport
     code: row.code,
     assetTypeCode,
     status: 'imported',
-    blocked: surplus.some((s) => s.choice === 'plan'),
+    blocked: false,
     assetId: asset.id,
     documentAttached: true,
+    leftUnplanned: false,
     dueDates,
-    surplus,
+    surplus: [],
   };
 }
