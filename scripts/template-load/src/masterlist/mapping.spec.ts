@@ -36,6 +36,17 @@ describe('assetTypeCodeForModel', () => {
     // titled "MB E-Test Preventive Maintenance Record ST01", CE 95 050 00
     // 01, the exact form MB_E_TEST was created from.
     ['MS-620', 'ST01', 'MB_E_TEST'],
+    // Owner decision 2026-08-03 (fix round 2) — settled by evidence: `MB
+    // CME` and `MB CMT` carry DIFFERENT forms. April's MB01.pdf is "MB
+    // Encapsulation ... Record MB 01" (CE 95 030 00 01); CM01.pdf/
+    // T69.1.pdf are "MB E-Test ... Record CM01"/"...T69" (CE 95 050 00 01,
+    // same form as MS-620 ST01 above). A single `mb (cme|cmt)` rule sent
+    // all twelve to Encapsulation — these real model strings pin both
+    // halves of the split so that regression can't come back silently.
+    ['MB CME 3060 + TI2280', 'MB03', 'MB_ENCAPSULATION'],
+    ['MB CMT 6530', 'CM02', 'MB_E_TEST'],
+    ['MB CMT 6530', 'T8', 'MB_E_TEST'],
+    ['MB CMT 6560', 'CM01', 'MB_E_TEST'],
   ])('maps %s / %s', (model, code, expected) => {
     expect(assetTypeCodeForModel(model, code)).toBe(expected);
   });

@@ -35,13 +35,23 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/esec\s+2008/i, 'BESI_DIE_ATTACH'],
   [/asm\s+eagle/i, 'ASM_WIRE_BOND'],
   [/connx-elite/i, 'KNS_WIRE_BOND'],
-  [/mb\s+(cme|cmt)/i, 'MB_ENCAPSULATION'],
+  // Owner decision 2026-08-03 (fix round 2), settled by evidence: `MB CME`
+  // and `MB CMT` machines carry DIFFERENT forms, not one. April's
+  // `MB01.pdf` is titled "MB Encapsulation Preventive Maintenance Record MB
+  // 01", CE 95 030 00 01 (MB_ENCAPSULATION) — but `CM01.pdf`/`T69.1.pdf` are
+  // titled "MB E-Test Preventive Maintenance Record CM01"/"...T69", CE 95
+  // 050 00 01 (MB_E_TEST), the SAME form as `MS-620 ST01` below. A single
+  // `mb\s+(cme|cmt)` rule sent all twelve to Encapsulation — five machines
+  // (CM01-03, T8, T69) would have gotten the wrong checklist on a
+  // controlled record. Kept as two rules so `MB CME` cannot be shadowed.
+  [/mb\s+cme/i, 'MB_ENCAPSULATION'],
   // Owner decision 2026-08-03 (fix round 1), settled by evidence, not
   // inference: of 204 real signed PM records supplied, February's
   // `ST01-1M.pdf` is titled "MB E-Test Preventive Maintenance Record ST01",
   // document CE 95 050 00 01 — the exact form MB_E_TEST was created from.
-  // `MS-620 ST01`'s parsed model is `MS-620`.
-  [/^ms-620/i, 'MB_E_TEST'],
+  // `MS-620 ST01`'s parsed model is `MS-620`. `MB CMT` (fix round 2) joins
+  // it on the same asset type — see the comment above.
+  [/mb\s+cmt|^ms-620/i, 'MB_E_TEST'],
   [/os\s+loading|imos/i, 'OS_LOADING'],
   [/pre\s?mixer|^dp\d/i, 'PRE_MIXER'],
   [/^bd\d/i, 'BUMP_DISPENSING'],
