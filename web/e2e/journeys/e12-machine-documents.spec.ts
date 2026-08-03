@@ -11,6 +11,15 @@ import { E2E_TEMPLATES, E2E_USERS } from '../support/fake-server';
  * >    assigned machine and select the form to start.
  *
  * Runs at 375 / 768 / 1280 like every other journey (`VIEWPORT_WIDTH`).
+ *
+ * Slice 29-SCHEDULE-UI added `MachineSchedule` directly below this screen's
+ * document list, and it renders the SAME `resolvedTitle` text
+ * (`AdminMachineDetail.tsx`) once its own fetch has a document to show a
+ * rule for. Any assertion reached AFTER that fetch has resolved (a reload,
+ * or a machine whose document was already tagged before the page loaded)
+ * must scope its `getByText` to the documents section specifically —
+ * otherwise the same title now matches twice and Playwright's strict mode
+ * refuses to pick one.
  */
 
 test.describe('E-16: an admin tags documents to a machine', () => {
@@ -49,9 +58,14 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW13')).toBeVisible();
     await expect(page.getByText('Form number not set')).toHaveCount(0);
 
-    // It survives a reload — the change really reached the server.
+    // It survives a reload — the change really reached the server. Scoped to
+    // the documents section: `MachineSchedule` below it now shows the SAME
+    // resolved title on its own rule row once it too has fetched.
     await page.reload();
-    await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW13')).toBeVisible();
+    const docsSection = page.getByLabel('Preventive-maintenance documents');
+    await expect(
+      docsSection.getByText('KNS Wire Bond Preventive Maintenance Record KW13'),
+    ).toBeVisible();
 
     // Review M-1/M-2: the typo path. The screen promises that leaving the
     // field empty is allowed, and the server's schema
@@ -64,7 +78,9 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW___')).toBeVisible();
     await expect(page.getByText('Form number not set')).toBeVisible();
     await page.reload();
-    await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW___')).toBeVisible();
+    await expect(
+      docsSection.getByText('KNS Wire Bond Preventive Maintenance Record KW___'),
+    ).toBeVisible();
   });
 
   test('a title with the number already printed is offered NO form-number box at all', async ({
@@ -103,7 +119,13 @@ test.describe('E-16: an admin tags documents to a machine', () => {
     });
     await signInAs(page, E2E_USERS.admin.email);
     await page.goto(`/admin/machines/${machine.id}`);
-    await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW7')).toBeVisible();
+    // The document is already tagged when the page loads, so `MachineSchedule`
+    // below it fetches and renders the SAME resolved title on its own rule
+    // row from the start — scope to the documents section throughout.
+    const docsSection = page.getByLabel('Preventive-maintenance documents');
+    await expect(
+      docsSection.getByText('KNS Wire Bond Preventive Maintenance Record KW7'),
+    ).toBeVisible();
 
     const inert = page
       .getByRole('alert')
@@ -118,8 +140,10 @@ test.describe('E-16: an admin tags documents to a machine', () => {
 
     // There is no DELETE anywhere in this system: the row stays, marked, and
     // the machine is honestly reported as inert again.
-    await expect(page.getByText('Retired', { exact: true })).toBeVisible();
-    await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW7')).toBeVisible();
+    await expect(docsSection.getByText('Retired', { exact: true })).toBeVisible();
+    await expect(
+      docsSection.getByText('KNS Wire Bond Preventive Maintenance Record KW7'),
+    ).toBeVisible();
     await expect(inert).toBeVisible();
 
     // Reversible — it was retired, not destroyed.

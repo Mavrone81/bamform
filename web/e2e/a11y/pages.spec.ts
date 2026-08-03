@@ -484,6 +484,49 @@ test('A-01: the machine documents section (inert alarm, tagged row, form-number 
   await expectNoViolations(page);
 });
 
+/**
+ * Slice 29-SCHEDULE-UI — `MachineSchedule`'s three states: inert (no
+ * document tagged, so nothing scheduled), populated (a tagged document's
+ * rule, whose frequency chip carries an icon and a word, never colour
+ * alone — A-05), and the adjust-next-due-date form open.
+ */
+test('A-01/A-05: the machine schedule section (empty, populated, adjust form open) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  const machine = server.seedAsset({ code: 'AW12', assetTypeId: 'at-1' });
+  await signInAsAdmin(page);
+  await page.goto(`/admin/machines/${machine.id}`);
+
+  // No document tagged yet: the schedule section's own empty state.
+  await expect(
+    page.getByText(
+      'No maintenance is currently scheduled for this machine — nothing to adjust yet.',
+    ),
+  ).toBeVisible();
+  await expectNoViolations(page);
+
+  // Tag the wire-bond document (fake fixture: scheduled monthly). The
+  // schedule section only loads on mount, not on `MachineDocuments`'
+  // tagging — same as `e12-machine-documents.spec.ts`'s own "survives a
+  // reload" step — so its new rule appears after a reload.
+  await page.getByLabel('Document', { exact: true }).selectOption(E2E_TEMPLATES.wireBond);
+  await page.getByRole('button', { name: 'Tag this document' }).click();
+  await expect(page.getByText('KNS Wire Bond Preventive Maintenance Record KW___')).toBeVisible();
+  await page.reload();
+  const freqChip = page.locator('.status-chip').filter({ hasText: 'Monthly (1M)' });
+  await expect(freqChip).toBeVisible();
+  // A-05: icon AND text together, never a bare coloured chip.
+  const icon = await freqChip.locator('[aria-hidden="true"]').first().textContent();
+  expect(icon?.trim().length).toBeGreaterThan(0);
+  await expectNoViolations(page);
+
+  // The adjust-next-due-date form is its own interactive surface.
+  await page.getByRole('button', { name: /Adjust next due date for/ }).click();
+  await expect(page.getByLabel('Reason for this change')).toBeVisible();
+  await expectNoViolations(page);
+});
+
 test('A-01: the ad-hoc document picker has zero axe violations', async ({ page, server }) => {
   const machine = server.seedAsset({ code: 'AW10', assetTypeId: 'at-1' });
   server.seedAssetDocument({

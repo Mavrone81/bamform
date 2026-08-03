@@ -20,6 +20,11 @@ import {
 // builds. `zod` is hoisted to the root `node_modules`, so it resolves without
 // any change to `web/package.json` or the lockfile.
 import { assetDocumentCreateSchema, assetDocumentUpdateSchema } from '../../../shared/src/asset';
+// Same rationale as above: THE REAL SCHEMA for `PUT /assets/{assetId}/schedule`,
+// and the same interval-months table `ScheduleRuleBootstrapService` uses —
+// not a second, hand-typed `{M1: 1, ...}` that could quietly drift from it.
+import { scheduleAdjustRequestSchema } from '../../../shared/src/schedule';
+import { FREQUENCY_INTERVAL_MONTHS, type Frequency } from '../../../shared/src/frequency';
 
 /**
  * A fake backend for the offline suite, installed via Playwright route
@@ -237,6 +242,13 @@ export interface FakeTemplate {
   title: string;
   active: boolean;
   currentRevisionId: string | null;
+  /**
+   * Slice 27/29 — stands in for "the distinct active `frequency`s on this
+   * template's CURRENT revision" (`ScheduleRuleBootstrapService.ensureForOne`
+   * reads exactly that). A template with no current revision (`agingOven`)
+   * carries none, matching the real bootstrap's no-op for that case.
+   */
+  frequencies: Frequency[];
 }
 
 /**
@@ -260,6 +272,26 @@ export interface FakeAssetDocument {
   assetId: string;
   formTemplateId: string;
   machineNumber: string | null;
+  active: boolean;
+}
+
+/**
+ * Slice 29-SCHEDULE-UI — `schedule_rule`, hung off the document exactly as
+ * `AssetScheduleService`/`ScheduleRuleBootstrapService` model it (one row per
+ * `(assetDocumentId, frequency)`), not off the machine. `assetId` is NOT
+ * stored here, deliberately mirroring `toDto` in `asset-schedule.service.ts`,
+ * which derives it from `row.assetDocument.assetId` — this fake does the same
+ * lookup at read time via `assetDocumentsById`.
+ */
+export interface FakeScheduleRule {
+  id: string;
+  assetDocumentId: string;
+  frequency: Frequency;
+  intervalMonths: number;
+  anchorDate: string;
+  lastCompletedOn: string | null;
+  nextDueOn: string;
+  adjustedReason: string | null;
   active: boolean;
 }
 
@@ -334,6 +366,12 @@ export class FakeServer {
   private templatesById = new Map<string, FakeTemplate>();
   private assetDocumentsById = new Map<string, FakeAssetDocument>();
   private assetDocumentSeq = 0;
+  /** Slice 29-SCHEDULE-UI — hung off `assetDocumentsById`, not a parallel
+   * per-machine store, so tagging/retiring a document stays consistent with
+   * what `GET /assets/{assetId}/schedule` returns (see `bootstrapScheduleRules`
+   * and `scheduleRulesOf`). */
+  private scheduleRulesById = new Map<string, FakeScheduleRule>();
+  private scheduleRuleSeq = 0;
 
   constructor() {
     // A small canned asset-type catalogue (reference data the real system
@@ -348,6 +386,8 @@ export class FakeServer {
         title: 'KNS Wire Bond Preventive Maintenance Record KW___',
         active: true,
         currentRevisionId: 'rev-wb',
+        // One monthly item on the current revision.
+        frequencies: ['M1'] as Frequency[],
       },
       {
         id: E2E_TEMPLATES.epoxy,
@@ -355,6 +395,8 @@ export class FakeServer {
         title: 'Epoxy Dispenser EP01 Preventive Maintenance Record',
         active: true,
         currentRevisionId: 'rev-ep',
+        // A quarterly item on the current revision.
+        frequencies: ['M3'] as Frequency[],
       },
       {
         id: E2E_TEMPLATES.agingOven,
@@ -362,6 +404,9 @@ export class FakeServer {
         title: 'Aging Oven Preventive Maintenance Record ______',
         active: true,
         currentRevisionId: null,
+        // No CURRENT revision — `ensureForOne` no-ops for exactly this case,
+        // so this template schedules nothing, ever (mirrored, not invented).
+        frequencies: [] as Frequency[],
       },
     ]) {
       this.templatesById.set(template.id, template);
@@ -443,7 +488,43 @@ export class FakeServer {
       active: input.active ?? true,
     };
     this.assetDocumentsById.set(doc.id, doc);
+    this.bootstrapScheduleRules(doc);
     return doc;
+  }
+
+  /**
+   * Mirrors `ScheduleRuleBootstrapService.ensureForOne`: one `schedule_rule`
+   * per distinct frequency the document's template carries, anchored on the
+   * MACHINE's `scheduleAnchorDate` (several documents on one machine share
+   * one anchor), `nextDueOn` starting equal to it. `skipDuplicates`-style
+   * idempotency (`(assetDocumentId, frequency)`) so calling this twice for
+   * the same document never doubles its rows.
+   */
+  private bootstrapScheduleRules(doc: FakeAssetDocument): void {
+    const template = this.templatesById.get(doc.formTemplateId);
+    if (!template || template.frequencies.length === 0) return;
+    const asset = this.assetsById.get(doc.assetId);
+    const anchor = asset?.scheduleAnchorDate ?? new Date().toISOString().slice(0, 10);
+    const existing = new Set(
+      Array.from(this.scheduleRulesById.values())
+        .filter((r) => r.assetDocumentId === doc.id)
+        .map((r) => r.frequency),
+    );
+    for (const frequency of template.frequencies) {
+      if (existing.has(frequency)) continue;
+      const rule: FakeScheduleRule = {
+        id: `sched-${++this.scheduleRuleSeq}`,
+        assetDocumentId: doc.id,
+        frequency,
+        intervalMonths: FREQUENCY_INTERVAL_MONTHS[frequency],
+        anchorDate: anchor,
+        lastCompletedOn: null,
+        nextDueOn: anchor,
+        adjustedReason: null,
+        active: true,
+      };
+      this.scheduleRulesById.set(rule.id, rule);
+    }
   }
 
   /** Scopes a user directly (bypassing the PUT endpoint) so a spec can set
@@ -2337,6 +2418,133 @@ export class FakeServer {
     });
   }
 
+  /**
+   * `assetDocument.active` filtered exactly like `AssetScheduleService.list`'s
+   * `where` — a retired document's rules never appear here, though the rows
+   * themselves are kept (returning the document to service brings them
+   * straight back). Same `orderBy` as the service too: `assetDocumentId`
+   * ascending, then `intervalMonths` ascending.
+   */
+  private scheduleRulesOf(assetId: string): FakeScheduleRule[] {
+    const activeDocIds = new Set(
+      this.documentsOf(assetId)
+        .filter((d) => d.active)
+        .map((d) => d.id),
+    );
+    return Array.from(this.scheduleRulesById.values())
+      .filter((r) => activeDocIds.has(r.assetDocumentId))
+      .sort((a, b) =>
+        a.assetDocumentId === b.assetDocumentId
+          ? a.intervalMonths - b.intervalMonths
+          : a.assetDocumentId.localeCompare(b.assetDocumentId),
+      );
+  }
+
+  /** Mirrors `toDto` in `asset-schedule.service.ts`: `assetId` is DERIVED
+   * from the document, not stored on the rule. */
+  private toApiScheduleRule(rule: FakeScheduleRule) {
+    const doc = this.assetDocumentsById.get(rule.assetDocumentId);
+    return {
+      id: rule.id,
+      assetDocumentId: rule.assetDocumentId,
+      assetId: doc?.assetId ?? 'unknown',
+      frequency: rule.frequency,
+      intervalMonths: rule.intervalMonths,
+      anchorDate: rule.anchorDate,
+      lastCompletedOn: rule.lastCompletedOn,
+      nextDueOn: rule.nextDueOn,
+      adjustedReason: rule.adjustedReason,
+      active: rule.active,
+    };
+  }
+
+  /**
+   * `GET`/`PUT /assets/{assetId}/schedule` — `asset-schedule.controller.ts`.
+   * `GET` carries NO role gate (every authenticated user may read it, area
+   * scope aside, since slice 5); `PUT` is PLANNER/TEAM_LEADER/ENGINEER/ADMIN,
+   * matching the controller's `@Roles(...)` exactly. The `GET` body is a BARE
+   * ARRAY — no `{data, page}` envelope, matching `scheduleRuleSchema`'s array
+   * and `AssetScheduleService.list`'s `Promise<ScheduleRule[]>` return type —
+   * a small, fixed-cardinality set scoped to one machine, same as
+   * `listAssetDocuments`, not a paginated collection.
+   */
+  private async handleAssetSchedule(route: Route, assetId: string): Promise<void> {
+    const isPut = route.request().method() === 'PUT';
+    const requester = isPut
+      ? await this.requireRoles(route, ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'])
+      : await this.requireUser(route);
+    if (!requester) return;
+    const asset = this.assetsById.get(assetId);
+    if (!asset) {
+      await this.fulfillProblem(route, 404, 'Asset not found', '/errors/not-found');
+      return;
+    }
+    if (!this.assetInScope(requester, asset)) {
+      await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
+      return;
+    }
+
+    if (!isPut) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(this.scheduleRulesOf(assetId).map((r) => this.toApiScheduleRule(r))),
+      });
+      return;
+    }
+
+    // The api's `ZodValidationPipe` runs BEFORE anything else in the
+    // handler: an unknown frequency, or a reason under 10 trimmed
+    // characters, never reaches the ambiguity check below.
+    const parsed = scheduleAdjustRequestSchema.safeParse(route.request().postDataJSON());
+    if (!parsed.success) {
+      await this.fulfillValidationFailed(route);
+      return;
+    }
+    const body = parsed.data;
+    // Mirrors `AssetScheduleService.adjust`'s `matches` query exactly,
+    // including that it is scoped to ACTIVE documents only.
+    const matches = this.scheduleRulesOf(assetId).filter(
+      (r) =>
+        r.frequency === body.frequency &&
+        (body.assetDocumentId ? r.assetDocumentId === body.assetDocumentId : true),
+    );
+    if (matches.length === 0) {
+      await this.fulfillProblem(
+        route,
+        404,
+        'Not found',
+        '/errors/not-found',
+        `ScheduleRule ${assetId}/${body.assetDocumentId ? `${body.assetDocumentId}/` : ''}${body.frequency} was not found.`,
+      );
+      return;
+    }
+    if (matches.length > 1) {
+      // Same detail text as `AssetScheduleService.adjust`'s
+      // `validationFailedProblem` — the refusal the real API gives when a
+      // machine carries several documents at the same frequency and the
+      // caller did not name which one.
+      await this.fulfillProblem(
+        route,
+        422,
+        'Validation failed',
+        '/errors/validation-failed',
+        `This machine carries ${matches.length} documents scheduled at ${body.frequency}. ` +
+          'Name the one to adjust with `assetDocumentId` — adjusting the wrong document’s ' +
+          'schedule would silently stop its PM coming due.',
+      );
+      return;
+    }
+    const rule = matches[0];
+    rule.nextDueOn = body.nextDueOn;
+    rule.adjustedReason = body.adjustedReason;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiScheduleRule(rule)),
+    });
+  }
+
   private assetInScope(requester: FakeAdminUser, asset: FakeAsset): boolean {
     if (requester.areaIds.length === 0) return true;
     return asset.areaId != null && requester.areaIds.includes(asset.areaId);
@@ -2687,6 +2895,21 @@ export class FakeServer {
           route,
           match ? decodeURIComponent(match[1]) : 'unknown',
         );
+      }),
+    );
+    // Slice 29-SCHEDULE-UI — same reasoning as `/assets/{id}/documents`
+    // above: `/assets/{id}/schedule` cannot collide with the anchored by-id
+    // route (that one ends at the id), registered after it regardless so the
+    // more specific path wins outright under Playwright's
+    // last-registered-first resolution.
+    await page.route(
+      /\/api\/v1\/assets\/([^/]+)\/schedule$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/assets\/([^/]+)\/schedule$/);
+        return this.handleAssetSchedule(route, match ? decodeURIComponent(match[1]) : 'unknown');
       }),
     );
 
