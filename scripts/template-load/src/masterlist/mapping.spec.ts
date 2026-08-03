@@ -1,5 +1,5 @@
 // scripts/template-load/src/masterlist/mapping.spec.ts
-import { workWeekToDate, assetTypeCodeForModel, machineNumberFor, SKIPPED_CODES } from './mapping';
+import { workWeekToDate, assetTypeCodeForModel, machineNumberFor, SKIPPED_LABELS } from './mapping';
 
 describe('workWeekToDate — calendar weeks, owner decision 2026-08-02', () => {
   it('puts week 1 on 1 January', () => {
@@ -47,7 +47,7 @@ describe('assetTypeCodeForModel', () => {
   });
 
   it('lists DDA 03 as skipped', () => {
-    expect(SKIPPED_CODES).toContain('DDA 03');
+    expect(SKIPPED_LABELS).toContain('DDA 03');
   });
 });
 
@@ -75,9 +75,23 @@ describe('machineNumberFor', () => {
   });
 
   it('returns null when the code has no numeric tail rather than guessing', () => {
-    expect(
-      machineNumberFor('MB E-Test Preventive Maintenance Record______', 'MS-620 ST01'),
-    ).toBeNull();
+    expect(machineNumberFor('KNS Wire Bond Preventive Maintenance Record KW___', 'KW')).toBeNull();
+  });
+
+  it('extracts a tail from ST01 rather than nulling on it — parseMasterlist never hands this function a multi-word label', () => {
+    // Before Task 1's parse fix, parseMasterlist gave this function the
+    // whole label `MS-620 ST01`, and a whitespace guard here rejected it to
+    // keep this specific case null. That guard also nulled 18 real machine
+    // numbers (KW/DP families) that arrived as whole labels for the same
+    // reason. The guard is gone; the fix is upstream — parseMasterlist now
+    // always yields the bare code (`ST01`, not `MS-620 ST01`). Called
+    // directly with `ST01`, this function has no way to know the machine is
+    // untyped, so it returns '01' like any other code with a numeric tail.
+    // That's safe: `MS-620 ST01` maps to no asset type
+    // (assetTypeCodeForModel returns null for it) and is imported without a
+    // document, so no template title ever exists for machineNumberFor to be
+    // called against it in the real pipeline.
+    expect(machineNumberFor('MB E-Test Preventive Maintenance Record______', 'ST01')).toBe('01');
   });
 
   it('finds the underscore run even when the title carries a literal CRLF elsewhere', () => {

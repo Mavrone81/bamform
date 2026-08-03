@@ -7,9 +7,13 @@ export interface PlannedVisit {
 export interface MasterlistRow {
   /** Verbatim column A, whitespace-collapsed. */
   label: string;
-  /** Text before `--`, or the whole label when there is no separator. */
+  /** Text before `--`; without a separator, everything before the last token. */
   model: string;
-  /** Text after `--`, or the whole label when there is no separator. */
+  /**
+   * The plant's machine code — text after `--`, or the LAST whitespace-delimited
+   * token when there is no separator (`ConnX-Elite Lite KW01` -> `KW01`). This
+   * becomes the asset's identifier in the register and prints on every record.
+   */
   code: string;
   visits: PlannedVisit[];
 }
@@ -44,9 +48,28 @@ export function parseMasterlist(path: string): MasterlistRow[] {
     if (colOf(ref) !== 'A' || rowOf(ref) < 6) continue;
     const label = sheet.cells[ref].replace(/\s+/g, ' ').trim();
     if (label === '') continue;
+    // Column A holds three shapes and all three must yield the plant's real
+    // machine code, because that code becomes the asset's identifier in the
+    // register and appears on every printed record:
+    //
+    //   `ESEC 2008 sc3 plus -- ED01`   separator present  -> ED01
+    //   `ConnX-Elite Lite KW01`        no separator       -> KW01  (last token)
+    //   `EP01`                         single token       -> EP01
+    //
+    // Reading the whole string as the code when there is no separator gives 18
+    // machines identifiers like `ConnX-Elite Lite KW01` — wrong in the register
+    // and wrong on the record.
     const sep = label.indexOf('--');
-    const model = (sep === -1 ? label : label.slice(0, sep)).trim();
-    const code = (sep === -1 ? label : label.slice(sep + 2)).trim();
+    let model: string;
+    let code: string;
+    if (sep !== -1) {
+      model = label.slice(0, sep).trim();
+      code = label.slice(sep + 2).trim();
+    } else {
+      const parts = label.split(/\s+/);
+      code = parts[parts.length - 1];
+      model = parts.length > 1 ? parts.slice(0, -1).join(' ') : label;
+    }
     byRow.set(rowOf(ref), { label, model, code, visits: [] });
   }
 

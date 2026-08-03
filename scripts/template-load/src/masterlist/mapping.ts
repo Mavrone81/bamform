@@ -16,8 +16,14 @@ export function workWeekToDate(workWeek: number, year: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Owner decision: the machine is not on site, so it is not imported at all. */
-export const SKIPPED_CODES = ['DDA 03'] as const;
+/**
+ * Owner decision: the machine is not on site, so it is not imported at all.
+ *
+ * Matched against the row's LABEL, not its code. Since Task 1's parse fix the
+ * code is the last token, so `DDA 03` yields the code `03` — checking the code
+ * would silently stop skipping it and import a machine called `03`.
+ */
+export const SKIPPED_LABELS = ['DDA 03'] as const;
 
 /**
  * ORDER MATTERS. `Besi ESEC 3xxx` (wire bond) must be tested before the
@@ -50,17 +56,20 @@ export function assetTypeCodeForModel(model: string, code: string): string | nul
  * is already printed, so what gets supplied is the machine code's trailing
  * digits — `KW13` fills `KW___` with `13`, never `KW13`.
  *
- * A legitimate machine code is a single token (`KW13`, `ED01`, `AVS35-01`).
- * `MS-620 ST01` — the masterlist's un-typed machine, imported without a
- * document — is a two-word model + station label, not a code, even though it
- * ends in digits. Extracting `01` from it would be a guess dressed up as a
- * regex match, so codes containing whitespace are treated as having no
- * numeric tail at all.
+ * No whitespace guard here. An earlier version of this function rejected any
+ * code containing a space, to make `MS-620 ST01` return null — but at the
+ * time `parseMasterlist` was handing this function whole labels like
+ * `ConnX-Elite Lite KW01`, so the guard silently nulled 18 real machine
+ * numbers across the KNS and Pre-Mixer families. The root cause was the
+ * parse rule (Task 1's `code` field now takes the last whitespace-delimited
+ * token when a label has no `--` separator), not this function, so this
+ * always receives a bare code like `KW01`. `MS-620 ST01` now arrives as
+ * `ST01` and yields `01` — harmless, because that machine maps to no asset
+ * type and is imported with no document, so `machineNumber` is never read
+ * for it.
  */
 export function machineNumberFor(templateTitle: string, code: string): string | null {
   if (!/_{2,}/.test(templateTitle)) return null;
-  const trimmed = code.trim();
-  if (/\s/.test(trimmed)) return null;
-  const tail = /(\d+)$/.exec(trimmed);
+  const tail = /(\d+)\s*$/.exec(code.trim());
   return tail ? tail[1] : null;
 }
