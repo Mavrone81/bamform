@@ -3002,7 +3002,7 @@ export class FakeServer {
   /**
    * WHO NORMALLY DOES THIS PM, and whether they would STILL be accepted.
    *
-   * `eligible` is recomputed on every read rather than stored, exactly as
+   * `eligibility` is recomputed on every read rather than stored, exactly as
    * `assignable-user.service.ts#resolveEligibility` does — the whole hazard
    * this field exists for is a default that was valid when it was set and is
    * not any more, so a fake that cached it could never reproduce it.
@@ -3014,7 +3014,13 @@ export class FakeServer {
     return {
       id: userId,
       fullName: user?.fullName ?? 'Unknown user',
-      eligible: user ? this.isAssignableTo(user, asset.areaId ?? null) : false,
+      // `'unknown'` mirrors the real service's missing-row branch: a fact
+      // about the DATABASE, never reported as ineligibility of a named person.
+      eligibility: user
+        ? this.isAssignableTo(user, asset.areaId ?? null)
+          ? 'assignable'
+          : 'not-assignable'
+        : 'unknown',
     };
   }
 
@@ -3131,7 +3137,9 @@ export class FakeServer {
           ? {
               id: user.id,
               fullName: user.fullName,
-              eligible: this.isAssignableTo(user, asset.areaId ?? null),
+              eligibility: this.isAssignableTo(user, asset.areaId ?? null)
+                ? 'assignable'
+                : 'not-assignable',
             }
           : null,
       }),

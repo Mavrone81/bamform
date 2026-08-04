@@ -1,6 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { UserStatusT, type Prisma } from '@prisma/client';
-import type { AssignableUser } from '@bamform/shared';
+import type { AssigneeEligibilityT, AssignableUser } from '@bamform/shared';
 import { decodeIdentityField } from '../auth/crypto/identity-codec';
 import { AreaScopeService } from '../common/area-scope';
 import { validationFailedProblem } from '../common/domain-problems';
@@ -10,10 +10,50 @@ import type { FieldEncryptionService } from '../crypto/field-encryption';
 import { PrismaService } from '../prisma/prisma.service';
 import { JOB_RECORD_ROLES } from './job-access';
 
+/**
+ * THE THREE-WAY VERDICT — review finding, slice 32-PLANNERJOB.
+ *
+ * Assignability used to be a boolean, and that was a fail-soft defect. The
+ * check reads three tables; when one of those reads FAILS (a dropped
+ * connection, a statement timeout), a boolean has nowhere to put "I could not
+ * tell" and the answer collapses into `false` — indistinguishable from a
+ * technician who genuinely lost their role.
+ *
+ * That mattered because the consequences are asymmetric and one of them is
+ * PERMANENT. On the sweep path a `false` writes `defaultAssigneeUnavailable:
+ * true` into the job's creation audit event, which is append-only, hash-
+ * chained and kept seven years — so a two-second database blip would have left
+ * a permanent, unfalsifiable record asserting that a named person was no
+ * longer eligible, and told the planner to go and fix a role grant that was
+ * never broken.
+ *
+ *   'assignable'     — the check ran and passed.
+ *   'not-assignable' — the check ran and REFUSED. A fact about the person.
+ *   'unknown'        — the check could not be completed. A fact about the
+ *                      SYSTEM, and never recorded as if it were about the
+ *                      person.
+ *
+ * Same class of bug as the swallowed Prisma error on
+ * `fix/archived-record-immutability`: a `catch` written for one failure mode
+ * silently absorbing another.
+ */
+export type AssigneeVerdict = AssigneeEligibilityT;
+
+/** The outcome of one eligibility check, with the reason where there is one. */
+export interface AssigneeCheck {
+  verdict: AssigneeVerdict;
+  /**
+   * For `'not-assignable'`, the server's own refusal text (which of the three
+   * conditions failed). For `'unknown'`, what went wrong instead. Never shown
+   * to a planner as a cause when the verdict is `'unknown'`.
+   */
+  detail: string | null;
+}
+
 /** One user, evaluated against one area. */
 export interface AssigneeEligibility {
   fullName: string;
-  eligible: boolean;
+  verdict: AssigneeVerdict;
 }
 
 /**
@@ -51,6 +91,8 @@ export interface AssigneeEligibility {
  */
 @Injectable()
 export class AssignableUserService {
+  private readonly logger = new Logger(AssignableUserService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly areaScope: AreaScopeService,
@@ -85,20 +127,45 @@ export class AssignableUserService {
   }
 
   /**
-   * The boolean form, for the two places that must REPORT rather than refuse:
+   * The NON-THROWING form, for the places that must REPORT rather than refuse:
    * `JobGenerationService` (which generates unassigned rather than failing —
-   * see its own note) and the planner grid (which warns that a rule will
-   * generate unassigned before it happens).
+   * see its own note) and the planner grid.
    *
-   * Never use this to gate a write. `assertAssignable` above is the gate, and
-   * it names the reason; this one deliberately cannot.
+   * IT NEVER THROWS, because the sweep runs unattended over every rule in the
+   * plant and one bad row must not abort the run. But it never LIES either:
+   * only a domain refusal (`HttpException` — `assertAssignable`'s own 422)
+   * becomes `'not-assignable'`. Anything else is the check FAILING rather than
+   * the person failing it, and is reported as `'unknown'` so the caller can
+   * say so instead of inventing a cause. See `AssigneeVerdict`.
+   *
+   * Never use this to gate a write. `assertAssignable` above is the gate; it
+   * names the reason and lets infrastructure errors propagate, which is
+   * correct for a request a human is waiting on.
    */
-  async isAssignable(assigneeId: string, areaId: string | null): Promise<boolean> {
+  async checkAssignable(assigneeId: string, areaId: string | null): Promise<AssigneeCheck> {
     try {
       await this.assertAssignable(assigneeId, areaId);
-      return true;
-    } catch {
-      return false;
+      return { verdict: 'assignable', detail: null };
+    } catch (error) {
+      // `assertAssignable` raises `validationFailedProblem`, an
+      // `UnprocessableEntityException`. Narrowing on `HttpException` — rather
+      // than on "anything thrown" — is the whole fix: a Prisma connection
+      // error, a statement timeout or a decrypt failure is NOT a verdict about
+      // this person and must never be recorded as one.
+      if (error instanceof HttpException) {
+        const body = error.getResponse();
+        const detail =
+          typeof body === 'object' && body !== null && 'detail' in body
+            ? String((body as { detail: unknown }).detail)
+            : error.message;
+        return { verdict: 'not-assignable', detail };
+      }
+      const detail = describeThrown(error);
+      this.logger.error(
+        `could not determine whether ${assigneeId} may be assigned in area ${areaId ?? 'none'}: ` +
+          `${detail}. Reporting 'unknown' — this is NOT a finding about the user.`,
+      );
+      return { verdict: 'unknown', detail };
     }
   }
 
@@ -145,14 +212,24 @@ export class AssignableUserService {
   }
 
   /**
-   * The BATCH form, for the planner grid: name and eligibility for a set of
+   * The BATCH form, for the planner grid: name and verdict for a set of
    * (user, area) pairs in a bounded number of queries rather than one pair at
-   * a time. Keyed `userId|areaId` — the same user can be eligible for one
+   * a time. Keyed `userId|areaId` — the same user can be assignable for one
    * machine's area and not another's.
    *
    * It exists because the grid must be able to say "this schedule will
    * generate UNASSIGNED work" BEFORE the sweep proves it, and doing that with
-   * `isAssignable` per row would be 220 round trips to draw one screen.
+   * `checkAssignable` per row would be 220 round trips to draw one screen.
+   *
+   * IT DEGRADES RATHER THAN DISAPPEARING. If the lookup fails, every pair is
+   * reported `'unknown'` instead of the error propagating: losing the whole
+   * year's plan because a supporting query blipped would be a far worse
+   * outcome than drawing it with "could not check who normally does this" on
+   * the affected lines. The grid's own rules query has already succeeded by
+   * this point, so the plan itself is sound.
+   *
+   * It never reports `'not-assignable'` for a reason it did not actually
+   * establish — same rule as `checkAssignable`.
    */
   async resolveEligibility(
     pairs: readonly { userId: string; areaId: string | null }[],
@@ -161,17 +238,25 @@ export class AssignableUserService {
     const userIds = [...new Set(pairs.map((pair) => pair.userId))];
     if (userIds.length === 0) return resolved;
 
-    const users = await this.prisma.appUser.findMany({
-      where: { id: { in: userIds } },
-      select: {
-        id: true,
-        status: true,
-        fullNameCt: true,
-        dekVersion: true,
-        userRoles: { where: { active: true }, select: { role: { select: { code: true } } } },
-        userAreaScopes: { where: { active: true }, select: { areaId: true } },
-      },
-    });
+    let users: Awaited<ReturnType<typeof this.findEligibilityRows>>;
+    try {
+      users = await this.findEligibilityRows(userIds);
+    } catch (error) {
+      this.logger.error(
+        `could not resolve standing-assignee eligibility for ${userIds.length} user(s): ` +
+          `${describeThrown(error)}. Reporting 'unknown' for all of them — this is NOT a finding ` +
+          'about them.',
+      );
+      for (const pair of pairs) {
+        resolved.set(eligibilityKey(pair.userId, pair.areaId), {
+          // No name either: it comes from the same row the lookup failed to
+          // read, and inventing one would be a second untruth.
+          fullName: 'Unknown',
+          verdict: 'unknown',
+        });
+      }
+      return resolved;
+    }
     const byId = new Map(users.map((user) => [user.id, user]));
 
     for (const pair of pairs) {
@@ -184,7 +269,10 @@ export class AssignableUserService {
       if (!user) {
         resolved.set(eligibilityKey(pair.userId, pair.areaId), {
           fullName: 'Unknown user',
-          eligible: false,
+          // 'unknown', NOT 'not-assignable'. A missing row is a fact about the
+          // DATABASE, and reporting it as ineligibility would tell a planner
+          // that a named person had lost their role.
+          verdict: 'unknown',
         });
         continue;
       }
@@ -201,10 +289,26 @@ export class AssignableUserService {
 
       resolved.set(eligibilityKey(pair.userId, pair.areaId), {
         fullName: this.nameOf(user.id, user.fullNameCt, user.dekVersion),
-        eligible,
+        verdict: eligible ? 'assignable' : 'not-assignable',
       });
     }
     return resolved;
+  }
+
+  /** The one query `resolveEligibility` makes — extracted so its failure has
+   * a single, catchable seam. */
+  private findEligibilityRows(userIds: string[]) {
+    return this.prisma.appUser.findMany({
+      where: { id: { in: userIds } },
+      select: {
+        id: true,
+        status: true,
+        fullNameCt: true,
+        dekVersion: true,
+        userRoles: { where: { active: true }, select: { role: { select: { code: true } } } },
+        userAreaScopes: { where: { active: true }, select: { areaId: true } },
+      },
+    });
   }
 
   /**
@@ -220,6 +324,27 @@ export class AssignableUserService {
       { column: 'full_name_ct', rowId: userId },
       this.fieldEncryption,
     );
+  }
+}
+
+/**
+ * A message for something thrown, WITHOUT assuming it is an `Error`.
+ *
+ * `(error as Error).message` is the idiom everywhere else in this codebase and
+ * is fine in a request handler, where a `TypeError` from a `throw null` simply
+ * becomes a 500. It is NOT fine in `checkAssignable`, whose whole contract is
+ * that it never throws: the scheduler sweep runs unattended over every rule in
+ * the plant, and a handler that blew up while REPORTING a failure would abort
+ * the run and leave the rest of the plant's PM unraised. Caught by
+ * `assignable-user.service.spec.ts`, which throws a bare `null` at it.
+ */
+function describeThrown(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return 'a non-serialisable value was thrown';
   }
 }
 

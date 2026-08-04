@@ -1046,7 +1046,7 @@ describe('Planner — assigning the work', () => {
     it('shows both, each under its own heading', async () => {
       const detail = await openVisit([
         withJob({
-          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: true },
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
           nextDueJob: {
             id: 'job-1',
             jobNumber: 'PM-2026-000123',
@@ -1068,7 +1068,9 @@ describe('Planner — assigning the work', () => {
 
     it('each control says what it affects BEFORE a name is chosen', async () => {
       const detail = await openVisit([
-        withJob({ defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: true } }),
+        withJob({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
       ]);
 
       fireEvent.click(within(detail).getByRole('button', { name: /Change who normally does/ }));
@@ -1091,7 +1093,7 @@ describe('Planner — assigning the work', () => {
         status: 200,
         value: {
           scheduleRuleId: 'rule-1',
-          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: true },
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
         },
       });
       const detail = await openVisit([withJob()]);
@@ -1117,7 +1119,9 @@ describe('Planner — assigning the work', () => {
         value: { scheduleRuleId: 'rule-1', defaultAssignee: null },
       });
       const detail = await openVisit([
-        rule({ defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: true } }),
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
       ]);
 
       fireEvent.click(within(detail).getByRole('button', { name: /Change who normally does/ }));
@@ -1144,7 +1148,13 @@ describe('Planner — assigning the work', () => {
      */
     it('warns when the standing assignee can no longer be assigned here', async () => {
       const detail = await openVisit([
-        rule({ defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: false } }),
+        rule({
+          defaultAssignee: {
+            id: 'tech-1',
+            fullName: 'Sam Maintainer',
+            eligibility: 'not-assignable',
+          },
+        }),
       ]);
 
       const warning = within(detail).getByTestId('default-assignee-lapsed');
@@ -1155,9 +1165,52 @@ describe('Planner — assigning the work', () => {
       expect(warning).toHaveAttribute('role', 'alert');
     });
 
+    /**
+     * REVIEW FINDING — "could not check" must not wear the accusation. The
+     * lapsed message names a person and says they lost their role; showing it
+     * because a lookup failed would send a planner to replace somebody who
+     * never did anything wrong.
+     */
+    it('says the check did not complete, WITHOUT accusing anyone, when eligibility is unknown', async () => {
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'unknown' },
+        }),
+      ]);
+
+      const unknown = within(detail).getByTestId('default-assignee-unknown');
+      expect(unknown).toHaveTextContent(/Could not check/);
+      expect(unknown).toHaveTextContent(/not a finding about them/);
+      expect(unknown).toHaveTextContent(/standing assignment is intact/);
+      // The accusing banner must NOT be shown, and its wording must not leak
+      // into this one.
+      expect(within(detail).queryByTestId('default-assignee-lapsed')).toBeNull();
+      expect(unknown.textContent).not.toMatch(/can no longer be assigned/);
+      expect(unknown.textContent).not.toMatch(/lost its maintainer/);
+      // `status`, not `alert`: nothing has gone wrong with the PLAN, so it must
+      // not interrupt the way a real lapse does.
+      expect(unknown).toHaveAttribute('role', 'status');
+    });
+
+    it('still names the person, so a planner knows which assignment was unverified', async () => {
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'unknown' },
+        }),
+      ]);
+      expect(within(detail).getByTestId('default-assignee-name')).toHaveTextContent(
+        'Sam Maintainer',
+      );
+      expect(within(detail).getByTestId('default-assignee-unknown')).toHaveTextContent(
+        'Sam Maintainer',
+      );
+    });
+
     it('says nothing of the sort while the assignee is still eligible', async () => {
       const detail = await openVisit([
-        rule({ defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: true } }),
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
       ]);
       expect(within(detail).queryByTestId('default-assignee-lapsed')).toBeNull();
     });
@@ -1167,7 +1220,9 @@ describe('Planner — assigning the work', () => {
     it('writes the job and nothing else', async () => {
       assignJob.mockResolvedValue({ ok: true, status: 200, value: {} });
       const detail = await openVisit([
-        withJob({ defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: true } }),
+        withJob({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
       ]);
 
       fireEvent.click(within(detail).getByRole('button', { name: /Assign job PM-2026-000123/ }));
@@ -1340,7 +1395,11 @@ describe('Planner — assigning the work', () => {
       const detail = await openVisit(
         [
           withJob({
-            defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligible: true },
+            defaultAssignee: {
+              id: 'tech-1',
+              fullName: 'Sam Maintainer',
+              eligibility: 'assignable',
+            },
           }),
         ],
         ['MAINTAINER'],
@@ -1356,7 +1415,9 @@ describe('Planner — assigning the work', () => {
 
   describe('a projected visit', () => {
     it('shows no assignment panel at all', async () => {
-      seed([withJob({ defaultAssignee: { id: 'tech-1', fullName: 'Sam', eligible: true } })]);
+      seed([
+        withJob({ defaultAssignee: { id: 'tech-1', fullName: 'Sam', eligibility: 'assignable' } }),
+      ]);
       await renderGrid();
       fireEvent.click(screen.getByRole('button', { name: /WW38/ }));
 

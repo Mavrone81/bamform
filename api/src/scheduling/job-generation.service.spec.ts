@@ -113,8 +113,13 @@ function auditAfter(audit: ReturnType<typeof fakeAudit>, call = 0): Record<strin
  * fixture above: `makeRule` names no `defaultAssigneeId`, so the check is
  * never consulted. The tests that DO care pass their own.
  */
-function fakeAssignableUsers(eligible = true) {
-  return { isAssignable: jest.fn(async () => eligible) };
+function fakeAssignableUsers(verdict: 'assignable' | 'not-assignable' | 'unknown' = 'assignable') {
+  return {
+    checkAssignable: jest.fn(async () => ({
+      verdict,
+      detail: verdict === 'assignable' ? null : `stub ${verdict}`,
+    })),
+  };
 }
 
 function fakeNotifications() {
@@ -309,7 +314,7 @@ describe('the standing assignee on a schedule rule', () => {
     const result = await makeService(
       prisma,
       fakeAudit(),
-      fakeAssignableUsers(true),
+      fakeAssignableUsers('assignable'),
       notifications,
     ).generateDueJobs(new Date('2026-07-24'), 30);
 
@@ -340,7 +345,7 @@ describe('the standing assignee on a schedule rule', () => {
     const result = await makeService(
       prisma,
       fakeAudit(),
-      fakeAssignableUsers(true),
+      fakeAssignableUsers('assignable'),
       notifications,
     ).generateDueJobs(new Date('2026-07-24'), 30);
 
@@ -366,7 +371,7 @@ describe('the standing assignee on a schedule rule', () => {
       const result = await makeService(
         prisma,
         audit,
-        fakeAssignableUsers(false),
+        fakeAssignableUsers('not-assignable'),
         notifications,
       ).generateDueJobs(new Date('2026-07-24'), 30);
       return { result, jobCreate, audit, notifications };
@@ -414,7 +419,7 @@ describe('the standing assignee on a schedule rule', () => {
     it('says nothing about an unavailable default on a rule that has none', async () => {
       const audit = fakeAudit();
       const prisma = fakePrisma({ activeItems: [{ frequency: 'M6' }] });
-      await makeService(prisma, audit, fakeAssignableUsers(false)).generateDueJobs(
+      await makeService(prisma, audit, fakeAssignableUsers('not-assignable')).generateDueJobs(
         new Date('2026-07-24'),
         30,
       );
@@ -442,11 +447,147 @@ describe('the standing assignee on a schedule rule', () => {
     const result = await makeService(
       prisma,
       fakeAudit(),
-      fakeAssignableUsers(true),
+      fakeAssignableUsers('assignable'),
       notifications,
     ).generateDueJobs(new Date('2026-07-24'), 30);
 
     expect(result.generated).toBe(1);
     expect(result.assignedFromDefault).toBe(1);
+  });
+});
+
+/**
+ * REVIEW FINDING — "could not tell" is not "not eligible".
+ *
+ * The eligibility check reads three tables. When one of those reads fails, the
+ * old boolean had nowhere to put the failure and returned `false`, so a
+ * dropped connection was recorded — in the append-only, hash-chained audit
+ * event, permanently — as "this named person is no longer eligible", and the
+ * log told the planner to go and fix a role grant that was never broken.
+ *
+ * These pin the distinction at the one place where the consequence is
+ * permanent.
+ */
+describe('when the eligibility check cannot be completed', () => {
+  function jobCreateSpy() {
+    return jest.fn(async (args: { data: Record<string, unknown> }) => ({
+      id: 'job-1',
+      jobNumber: 'PM-2026-000001',
+      dueOn: new Date(),
+      ...args.data,
+    }));
+  }
+
+  async function sweepWithIndeterminateCheck() {
+    const jobCreate = jobCreateSpy();
+    const audit = fakeAudit();
+    const notifications = fakeNotifications();
+    const prisma = fakePrisma({
+      rules: [makeRule({ defaultAssigneeId: 'tech-1' })],
+      activeItems: [{ frequency: 'M6' }],
+      jobCreate: jobCreate as never,
+    });
+    const result = await makeService(
+      prisma,
+      audit,
+      fakeAssignableUsers('unknown'),
+      notifications,
+    ).generateDueJobs(new Date('2026-07-24'), 30);
+    return { result, jobCreate, audit, notifications };
+  }
+
+  /**
+   * Generate rather than stall: `next_due_on` only advances on completion, so
+   * refusing over a transient blip would leave the rule overdue for ever. And
+   * generate UNASSIGNED rather than assigning anyway — handing controlled work
+   * to someone who may genuinely have left, with nothing having checked, is
+   * the worse error.
+   */
+  it('still generates the job, unassigned', async () => {
+    const { result, jobCreate } = await sweepWithIndeterminateCheck();
+    expect(result.generated).toBe(1);
+    const data = jobCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(data.assignedTo).toBeNull();
+    expect(data.status).toBe('scheduled');
+  });
+
+  it('counts it apart from a genuine ineligibility — the two need different responses', async () => {
+    const { result } = await sweepWithIndeterminateCheck();
+    expect(result.defaultAssigneeIndeterminate).toBe(1);
+    // NOT this one. That counter means "the plan is wrong, name someone else";
+    // this situation means "look at the database".
+    expect(result.defaultAssigneeUnavailable).toBe(0);
+    expect(result.assignedFromDefault).toBe(0);
+  });
+
+  /**
+   * THE POINT OF THE WHOLE FIX. `defaultAssigneeUnavailable: true` is a claim
+   * about a named human, it is unfalsifiable once chained, and it is kept for
+   * seven years. It must never be written on the strength of a failed lookup.
+   */
+  it('records a CHECK failure in the audit event, never a finding about the person', async () => {
+    const { audit } = await sweepWithIndeterminateCheck();
+    const after = auditAfter(audit);
+
+    expect(after.defaultAssigneeCheckFailed).toBe(true);
+    expect(after).not.toHaveProperty('defaultAssigneeUnavailable');
+    // The id is still recorded — an operator needs to know which assignment
+    // could not be verified — but nothing is asserted about them.
+    expect(after.defaultAssigneeId).toBe('tech-1');
+    expect(after.assignedTo).toBeNull();
+  });
+
+  it('notifies nobody — there is nobody it could honestly notify', async () => {
+    const { notifications } = await sweepWithIndeterminateCheck();
+    expect(notifications.enqueueNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The sweep runs unattended over every rule in the plant. `checkAssignable`
+   * is contractually non-throwing, but this pins the consequence at the
+   * generation layer too: one unresolvable rule must not abort the run and
+   * leave the rest of the plant's PM unraised.
+   */
+  it('does not abort the sweep — later rules still generate', async () => {
+    const jobCreate = jobCreateSpy();
+    const prisma = fakePrisma({
+      rules: [makeRule({ defaultAssigneeId: 'tech-1' }), { ...makeRule(), id: 'rule-2' }],
+      activeItems: [{ frequency: 'M6' }],
+      jobCreate: jobCreate as never,
+    });
+    const result = await makeService(
+      prisma,
+      fakeAudit(),
+      fakeAssignableUsers('unknown'),
+    ).generateDueJobs(new Date('2026-07-24'), 30);
+
+    expect(result.evaluated).toBe(2);
+    expect(result.generated).toBe(2);
+    expect(result.defaultAssigneeIndeterminate).toBe(1);
+  });
+
+  /**
+   * And the mirror: an ESTABLISHED refusal must still be recorded as one. The
+   * fix must not have made every failure indeterminate, which would be the
+   * same defect pointing the other way — a technician who really did leave,
+   * reported for ever as "we could not check".
+   */
+  it('leaves the established-ineligible path recording a real finding', async () => {
+    const audit = fakeAudit();
+    const prisma = fakePrisma({
+      rules: [makeRule({ defaultAssigneeId: 'tech-gone' })],
+      activeItems: [{ frequency: 'M6' }],
+    });
+    const result = await makeService(
+      prisma,
+      audit,
+      fakeAssignableUsers('not-assignable'),
+    ).generateDueJobs(new Date('2026-07-24'), 30);
+
+    expect(result.defaultAssigneeUnavailable).toBe(1);
+    expect(result.defaultAssigneeIndeterminate).toBe(0);
+    const after = auditAfter(audit);
+    expect(after.defaultAssigneeUnavailable).toBe(true);
+    expect(after).not.toHaveProperty('defaultAssigneeCheckFailed');
   });
 });

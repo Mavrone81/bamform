@@ -409,7 +409,7 @@ describe('Assignment — the picker, the standing assignee, and the check they s
       const res = await setDefault(await plannerToken(), ruleId, techId).expect(200);
       expect(res.body).toMatchObject({
         scheduleRuleId: ruleId,
-        defaultAssignee: { id: techId, fullName: 'Sam Maintainer', eligible: true },
+        defaultAssignee: { id: techId, fullName: 'Sam Maintainer', eligibility: 'assignable' },
       });
 
       const stored = await adminPool.query(
@@ -625,7 +625,7 @@ describe('Assignment — the picker, the standing assignee, and the check they s
       await setDefault(token, ruleId, techId).expect(200);
 
       expect(await plannerRow(token, ruleId)).toMatchObject({
-        defaultAssignee: { id: techId, fullName: 'Sam Maintainer', eligible: true },
+        defaultAssignee: { id: techId, fullName: 'Sam Maintainer', eligibility: 'assignable' },
       });
     });
 
@@ -655,9 +655,32 @@ describe('Assignment — the picker, the standing assignee, and the check they s
 
       // Still NAMED — a planner has to know who it was to know what changed.
       expect(await plannerRow(token, ruleId)).toMatchObject({
-        defaultAssignee: { id: techId, fullName: 'Sam Maintainer', eligible: false },
+        defaultAssignee: { id: techId, fullName: 'Sam Maintainer', eligibility: 'not-assignable' },
       });
     });
+
+    /**
+     * REVIEW FINDING, at the wire: the grid's field is three-valued, and
+     * `unknown` means "the check did not complete" rather than accusing the
+     * person of having lost their role.
+     *
+     * NOT EXERCISED HERE, deliberately. Both routes to `unknown` — a failed
+     * lookup, and a `default_assignee_id` whose row cannot be read — are
+     * unreachable against a healthy, correctly-constrained database: the FK is
+     * RESTRICT and nothing in this system deletes an `app_user` (INV-16). The
+     * only way to provoke either from an integration test is to drop the
+     * constraint or the connection mid-suite, and a first attempt at that did
+     * real damage: the assertion between the DROP and the re-add failed, the
+     * re-add never ran, and the schema stayed mutated for every test after it
+     * in a suite that shares one database.
+     *
+     * The seam is covered exactly and cheaply instead by
+     * `src/jobs/assignable-user.service.spec.ts`, which throws a connection
+     * error, a statement timeout and a bare `null` straight at
+     * `checkAssignable`/`resolveEligibility` and pins that none of them
+     * becomes `not-assignable`. That is a better test of this property than
+     * anything a real database can be talked into.
+     */
 
     it('reports a job’s own assignee, by name', async () => {
       const machine = await makeMachine();

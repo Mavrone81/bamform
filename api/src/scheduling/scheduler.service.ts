@@ -46,14 +46,19 @@ export class SchedulerService {
       const result = await this.jobGeneration.generateDueJobs(new Date(), leadTimeDays);
       await this.redis.set(SCHEDULER_LAST_RUN_KEY, new Date().toISOString());
       this.logger.log(
-        // Slice 32-PLANNERJOB adds the two assignment counters. `unavailable`
-        // is the one to watch: it means a schedule named a standing assignee
-        // who is no longer eligible, so PM went out with NOBODY on it — and an
-        // unassigned job is invisible to every MAINTAINER (`job-access.ts`).
+        // Slice 32-PLANNERJOB adds the assignment counters. Both non-zero
+        // cases mean PM went out with NOBODY on it — and an unassigned job is
+        // invisible to every MAINTAINER (`job-access.ts`) — but they call for
+        // DIFFERENT responses, which is why they are counted apart:
+        //   `unavailable`    — the plan is wrong. Name a new assignee.
+        //   `indeterminate`  — the CHECK failed, not the person. Look at the
+        //                      database; the standing assignee is probably
+        //                      still fine and has not been changed.
         `run complete: evaluated=${result.evaluated} generated=${result.generated} ` +
           `alreadyExists=${result.alreadyExists} skippedNoItems=${result.skippedNoItems} ` +
           `assignedFromDefault=${result.assignedFromDefault} ` +
-          `defaultAssigneeUnavailable=${result.defaultAssigneeUnavailable}`,
+          `defaultAssigneeUnavailable=${result.defaultAssigneeUnavailable} ` +
+          `defaultAssigneeIndeterminate=${result.defaultAssigneeIndeterminate}`,
       );
       return { ran: true, ...result };
     } finally {

@@ -54,6 +54,24 @@ export type PlannerVisitJob = z.infer<typeof plannerVisitJobSchema>;
  * told so in as many words, because a control that silently rewrote the plan
  * when someone covered a single visit would corrupt the schedule quietly.
  */
+/**
+ * Slice 32-PLANNERJOB — can this person be given this machine's work?
+ *
+ *   `assignable`     — the check ran and passed.
+ *   `not-assignable` — the check ran and REFUSED: inactive, holds no
+ *                      result-recording role, or their area scope does not
+ *                      reach the machine. A fact about the PERSON.
+ *   `unknown`        — the check could not be completed (a failed lookup). A
+ *                      fact about the SYSTEM, and deliberately distinct: a
+ *                      boolean would have collapsed it into "not eligible" and
+ *                      told a planner to fix a role grant that was never
+ *                      broken. On the sweep path that claim is permanent — it
+ *                      is written into the append-only, hash-chained audit
+ *                      record — so the distinction is not cosmetic.
+ */
+export const assigneeEligibilitySchema = z.enum(['assignable', 'not-assignable', 'unknown']);
+export type AssigneeEligibilityT = z.infer<typeof assigneeEligibilitySchema>;
+
 export const plannerDefaultAssigneeSchema = z.object({
   id: z.string().uuid(),
   /** Decrypted at read time — `app_user.full_name` is encrypted (DBD §6.2). */
@@ -64,11 +82,17 @@ export const plannerDefaultAssigneeSchema = z.object({
    *
    * Sent, rather than left for the sweep to discover, because eligibility
    * lapses silently and usually will — someone leaves, a role is revoked, an
-   * area scope is narrowed. When this is `false` the next sweep generates an
+   * area scope is narrowed. At `'not-assignable'` the next sweep generates an
    * UNASSIGNED job (it does not refuse — the job is the controlled record),
    * so a planner needs to see it BEFORE the work goes out with nobody on it.
+   *
+   * THREE VALUES, NOT A BOOLEAN — review finding. The check reads three
+   * tables, and when one of those reads fails there is no honest boolean to
+   * return: `false` would say "this person is not eligible", which is a claim
+   * about a named human that the server has not established. `'unknown'` says
+   * what actually happened. See `AssigneeEligibility` below.
    */
-  eligible: z.boolean(),
+  eligibility: assigneeEligibilitySchema,
 });
 export type PlannerDefaultAssignee = z.infer<typeof plannerDefaultAssigneeSchema>;
 

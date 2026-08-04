@@ -29,11 +29,22 @@ export interface GenerateDueJobsResult {
   assignedFromDefault: number;
   /**
    * Slice 32-PLANNERJOB — jobs generated UNASSIGNED because the rule named a
-   * standing assignee who is no longer eligible (left, role revoked, area
-   * scope narrowed). The job IS still created; this counter is what makes the
-   * silence impossible. See `resolveDefaultAssignee`.
+   * standing assignee who is ESTABLISHED to be no longer eligible (left, role
+   * revoked, area scope narrowed). The job IS still created; this counter is
+   * what makes the silence impossible. See `resolveDefaultAssignee`.
    */
   defaultAssigneeUnavailable: number;
+  /**
+   * Jobs generated UNASSIGNED because the eligibility check COULD NOT BE
+   * COMPLETED — a failed lookup, not a finding about the person.
+   *
+   * Counted separately from `defaultAssigneeUnavailable` on purpose (review
+   * finding): the operational response is different. That one means "go and
+   * fix the plan"; this one means "go and look at the database", and the
+   * standing assignee is very probably still perfectly valid. Conflating them
+   * sent a planner to correct a role grant that was never broken.
+   */
+  defaultAssigneeIndeterminate: number;
 }
 
 /**
@@ -42,6 +53,20 @@ export interface GenerateDueJobsResult {
  * from the machine's asset type (both are family-wide properties — the approval
  * chain is a property of the machine family, not of the document).
  */
+/**
+ * What `resolveDefaultAssignee` concluded. At most ONE of the two id fields is
+ * ever set, and they mean different things — see the audit annotation in
+ * `generateForRule`.
+ */
+interface DefaultAssigneeOutcome {
+  /** Who the job is assigned to, or `null` for an unassigned job. */
+  assigneeId: string | null;
+  /** Set when the check RAN and refused — a finding about the person. */
+  unavailableId: string | null;
+  /** Set when the check could not run — a finding about the system. */
+  indeterminateId: string | null;
+}
+
 type RuleWithDocument = ScheduleRule & {
   assetDocument: AssetDocument & { asset: Asset & { assetType: AssetType } };
 };
@@ -135,6 +160,7 @@ export class JobGenerationService {
       skippedNoItems: 0,
       assignedFromDefault: 0,
       defaultAssigneeUnavailable: 0,
+      defaultAssigneeIndeterminate: 0,
     };
 
     for (const rule of rules) {
@@ -194,24 +220,59 @@ export class JobGenerationService {
     rule: RuleWithDocument,
     asset: Asset,
     result: GenerateDueJobsResult,
-  ): Promise<{ assigneeId: string | null; unavailableId: string | null }> {
+  ): Promise<DefaultAssigneeOutcome> {
     // The overwhelmingly common path, and every pre-slice-32 row: no standing
     // assignee, so the job is born SCHEDULED and unassigned exactly as before.
     if (!rule.defaultAssigneeId) {
-      return { assigneeId: null, unavailableId: null };
+      return { assigneeId: null, unavailableId: null, indeterminateId: null };
     }
-    const eligible = await this.assignableUsers.isAssignable(rule.defaultAssigneeId, asset.areaId);
-    if (eligible) {
+
+    const check = await this.assignableUsers.checkAssignable(rule.defaultAssigneeId, asset.areaId);
+
+    if (check.verdict === 'assignable') {
       result.assignedFromDefault += 1;
-      return { assigneeId: rule.defaultAssigneeId, unavailableId: null };
+      return { assigneeId: rule.defaultAssigneeId, unavailableId: null, indeterminateId: null };
     }
+
+    /*
+     * COULD NOT TELL — review finding. Until this branch existed, a dropped
+     * connection or a statement timeout inside the eligibility check came back
+     * as a plain `false` and was recorded, permanently and in the hash chain,
+     * as "this named person is no longer eligible; go and fix the plan".
+     *
+     * STILL GENERATE, for the same reason the established-ineligible branch
+     * does: the job IS the controlled record, `next_due_on` only advances on
+     * completion, and refusing would stall the schedule for ever over a
+     * transient blip — the worst possible response to a two-second outage.
+     * Assigning ANYWAY was the other option and is worse: it would hand
+     * controlled work to someone who may genuinely have left, with nothing
+     * having checked.
+     *
+     * So: unassigned, exactly as before — but recorded as a failure of the
+     * CHECK, never as a finding about the person.
+     */
+    if (check.verdict === 'unknown') {
+      result.defaultAssigneeIndeterminate += 1;
+      this.logger.error(
+        `schedule_rule ${rule.id}: could NOT determine whether default assignee ` +
+          `${rule.defaultAssigneeId} may be assigned to asset ${asset.id} (${check.detail}). ` +
+          'Generating this job UNASSIGNED as the safe default. This is NOT a finding about that ' +
+          'user and their standing assignment is unchanged — investigate the database, not the plan.',
+      );
+      return {
+        assigneeId: null,
+        unavailableId: null,
+        indeterminateId: rule.defaultAssigneeId,
+      };
+    }
+
     result.defaultAssigneeUnavailable += 1;
     this.logger.error(
       `schedule_rule ${rule.id} names default assignee ${rule.defaultAssigneeId}, who is no longer ` +
-        `assignable for asset ${asset.id} (inactive, no result-recording role, or out of area scope) — ` +
+        `assignable for asset ${asset.id} (${check.detail}) — ` +
         'generating this job UNASSIGNED. Set a new default assignee on the plan.',
     );
-    return { assigneeId: null, unavailableId: rule.defaultAssigneeId };
+    return { assigneeId: null, unavailableId: rule.defaultAssigneeId, indeterminateId: null };
   }
 
   private async generateForRule(
@@ -254,7 +315,11 @@ export class JobGenerationService {
     // against `app_user`/`user_role`/`user_area_scope` and holding the job
     // insert's transaction open across it would widen the window on the very
     // table the idempotency index protects.
-    const { assigneeId, unavailableId } = await this.resolveDefaultAssignee(rule, asset, result);
+    const { assigneeId, unavailableId, indeterminateId } = await this.resolveDefaultAssignee(
+      rule,
+      asset,
+      result,
+    );
     const now = new Date();
 
     try {
@@ -301,14 +366,26 @@ export class JobGenerationService {
             status: job.status,
             assignedTo: assigneeId,
             // THE PERMANENT TRACE. Present only when a standing assignee was
-            // named and rejected — the audit chain is the one record of this
-            // that outlives log rotation, and without it a job that quietly
-            // arrived unassigned would be indistinguishable from a rule that
-            // never had a default at all. Ids only: `full_name` is encrypted
-            // and `audit_event` is append-only with 7-year retention
+            // named and NOT applied — the audit chain is the one record of
+            // this that outlives log rotation, and without it a job that
+            // quietly arrived unassigned would be indistinguishable from a
+            // rule that never had a default at all. Ids only: `full_name` is
+            // encrypted and `audit_event` is append-only with 7-year retention
             // (PR-SEC-02).
+            //
+            // TWO DISTINCT ANNOTATIONS, and the distinction is the review
+            // finding. `defaultAssigneeUnavailable` asserts something about a
+            // named HUMAN — that they lost their role, left, or moved out of
+            // area — and it is unfalsifiable once chained. It is therefore
+            // written ONLY when the check actually ran and refused.
+            // `defaultAssigneeCheckFailed` says the check could not be
+            // completed, which is a statement about the SYSTEM and leaves the
+            // person's standing assignment entirely uncontested.
             ...(unavailableId
               ? { defaultAssigneeUnavailable: true, defaultAssigneeId: unavailableId }
+              : {}),
+            ...(indeterminateId
+              ? { defaultAssigneeCheckFailed: true, defaultAssigneeId: indeterminateId }
               : {}),
           },
         });

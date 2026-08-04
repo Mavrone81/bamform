@@ -21,7 +21,11 @@ import {
 } from '../common/domain-problems';
 import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
 import type { FieldEncryptionService } from '../crypto/field-encryption';
-import { AssignableUserService, eligibilityKey } from '../jobs/assignable-user.service';
+import {
+  AssignableUserService,
+  eligibilityKey,
+  type AssigneeEligibility,
+} from '../jobs/assignable-user.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { decodeCursor, normaliseLimit, paginate, type Page } from '../common/pagination';
 import { JOB_STATUS_FROM_DB } from '../jobs/job-enums';
@@ -263,7 +267,7 @@ export class PlannerScheduleService {
     return {
       scheduleRuleId,
       defaultAssignee: entry
-        ? { id: dto.defaultAssigneeId, fullName: entry.fullName, eligible: entry.eligible }
+        ? { id: dto.defaultAssigneeId, fullName: entry.fullName, eligibility: entry.verdict }
         : null,
     };
   }
@@ -374,7 +378,7 @@ function toPlannerRow(
   defaultLeadTimeDays: number,
   job: ScheduledVisitJobRow | null,
   assigneeName: (job: ScheduledVisitJobRow) => string | null,
-  defaultAssignee: { fullName: string; eligible: boolean } | null,
+  defaultAssignee: AssigneeEligibility | null,
 ): PlannerScheduleRow {
   const asset = row.assetDocument.asset;
   const template = row.assetDocument.formTemplate;
@@ -433,7 +437,7 @@ function toPlannerRow(
         ? ({
             id: row.defaultAssigneeId,
             fullName: defaultAssignee.fullName,
-            eligible: defaultAssignee.eligible,
+            eligibility: defaultAssignee.verdict,
           } satisfies PlannerDefaultAssignee)
         : null,
   };

@@ -109,15 +109,38 @@ export function VisitAssignment({
          * narrowed. The next sweep will then generate an UNASSIGNED job — it
          * does not refuse, because the job is the controlled record — and
          * nobody would notice until the work was late. The server computes
-         * this (`defaultAssignee.eligible`) so the planner sees it BEFORE the
-         * sweep proves it.
+         * this (`defaultAssignee.eligibility`) so the planner sees it BEFORE
+         * the sweep proves it.
          */}
-        {defaultAssignee && !defaultAssignee.eligible && (
+        {defaultAssignee?.eligibility === 'not-assignable' && (
           <p className="banner" data-tone="bad" role="alert" data-testid="default-assignee-lapsed">
             <span aria-hidden="true">⚠</span> {defaultAssignee.fullName} can no longer be assigned
             to this machine — the account is inactive, has lost its maintainer/team-leader/engineer
             role, or its area scope no longer reaches here. The next scheduler sweep will still
             raise this job, but it will arrive UNASSIGNED. Pick somebody else.
+          </p>
+        )}
+
+        {/*
+         * COULD NOT CHECK — review finding, and deliberately NOT the message
+         * above. That one accuses a named person of having lost their role;
+         * saying it when the server merely failed to look would send a planner
+         * to "fix" a perfectly good assignment, and quite possibly to replace
+         * someone who never did anything wrong. So this states what actually
+         * happened and asks for nothing.
+         */}
+        {defaultAssignee?.eligibility === 'unknown' && (
+          <p
+            className="banner"
+            data-tone="attention"
+            role="status"
+            data-testid="default-assignee-unknown"
+          >
+            <span aria-hidden="true">?</span> Could not check whether {defaultAssignee.fullName} can
+            still be assigned to this machine — the lookup did not complete. This is not a finding
+            about them and nothing has changed: their standing assignment is intact. If the next
+            sweep cannot check either, it will raise the job unassigned as a precaution. Try again
+            shortly, and tell an administrator if it persists.
           </p>
         )}
 

@@ -2577,12 +2577,19 @@ export interface components {
        *     reach it.
        *
        *     Sent rather than left for the sweep to discover, because
-       *     eligibility lapses silently and usually will. When `false` the
-       *     next sweep generates an UNASSIGNED job (it does not refuse — the
-       *     job is the controlled record), so a planner needs to see it before
-       *     the work goes out with nobody on it.
+       *     eligibility lapses silently and usually will. At `not-assignable`
+       *     the next sweep generates an UNASSIGNED job (it does not refuse —
+       *     the job is the controlled record), so a planner needs to see it
+       *     before the work goes out with nobody on it.
+       *
+       *     THREE VALUES, NOT A BOOLEAN. The check reads three tables, and
+       *     when one of those reads fails there is no honest boolean: `false`
+       *     would assert that a named person is not eligible, which the server
+       *     has not established. `unknown` says the check could not be
+       *     completed — a fact about the system, not about the person.
+       * @enum {string}
        */
-      eligible: boolean;
+      eligibility: 'assignable' | 'not-assignable' | 'unknown';
     };
     SetDefaultAssigneeRequest: {
       /**

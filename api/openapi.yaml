@@ -3333,24 +3333,31 @@ components:
       description: |
         Slice 32-PLANNERJOB — the technician `JobGenerationService` hands each
         job generated from this schedule rule to.
-      required: [id, fullName, eligible]
+      required: [id, fullName, eligibility]
       properties:
         id: { type: string, format: uuid }
         fullName:
           type: string
           description: Decrypted at read time — `app_user.full_name` is application-layer encrypted (DBD §6.2).
-        eligible:
-          type: boolean
+        eligibility:
+          type: string
+          enum: [assignable, not-assignable, unknown]
           description: |
             Whether this person would STILL be accepted for this machine
             today: active, holding a result-recording role, and area-scoped to
             reach it.
 
             Sent rather than left for the sweep to discover, because
-            eligibility lapses silently and usually will. When `false` the
-            next sweep generates an UNASSIGNED job (it does not refuse — the
-            job is the controlled record), so a planner needs to see it before
-            the work goes out with nobody on it.
+            eligibility lapses silently and usually will. At `not-assignable`
+            the next sweep generates an UNASSIGNED job (it does not refuse —
+            the job is the controlled record), so a planner needs to see it
+            before the work goes out with nobody on it.
+
+            THREE VALUES, NOT A BOOLEAN. The check reads three tables, and
+            when one of those reads fails there is no honest boolean: `false`
+            would assert that a named person is not eligible, which the server
+            has not established. `unknown` says the check could not be
+            completed — a fact about the system, not about the person.
 
     SetDefaultAssigneeRequest:
       # Mirrors shared/src/planner.ts `setDefaultAssigneeRequestSchema` exactly.
