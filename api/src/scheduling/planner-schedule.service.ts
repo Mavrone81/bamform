@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuditActionT } from '@prisma/client';
 import {
@@ -26,6 +26,7 @@ import {
   eligibilityKey,
   type AssigneeEligibility,
 } from '../jobs/assignable-user.service';
+import { JOB_ASSIGNMENT_ROLES } from '../jobs/job-access';
 import { PrismaService } from '../prisma/prisma.service';
 import { decodeCursor, normaliseLimit, paginate, type Page } from '../common/pagination';
 import { JOB_STATUS_FROM_DB } from '../jobs/job-enums';
@@ -82,6 +83,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  */
 @Injectable()
 export class PlannerScheduleService {
+  private readonly logger = new Logger(PlannerScheduleService.name);
+
   constructor(
     private readonly repo: PlannerScheduleRepository,
     private readonly areaScope: AreaScopeService,
@@ -106,7 +109,11 @@ export class PlannerScheduleService {
     private readonly audit: AuditEventService,
   ) {}
 
-  async list(userId: string, query: PlannerScheduleQuery): Promise<Page<PlannerScheduleRow>> {
+  async list(
+    userId: string,
+    roles: string[],
+    query: PlannerScheduleQuery,
+  ): Promise<Page<PlannerScheduleRow>> {
     const { from, to } = resolveWindow(query);
     const limit = normaliseLimit(query.limit);
     const allowedAreaIds = await this.areaScope.getAllowedAreaIds(userId);
@@ -141,6 +148,24 @@ export class PlannerScheduleService {
     );
     const jobByVisit = indexJobsByVisit(jobs);
 
+    /*
+     * WHETHER THIS CALLER SEES NAMES — review finding.
+     *
+     * This endpoint carries no `@Roles()` and must not gain one: every
+     * authenticated user could already read these schedule rows one machine at
+     * a time through `GET /assets/{id}/schedule`, and slice 18's governing
+     * rule is "ADD, never remove". But the NAMES are new, and they are a
+     * different kind of thing from a due date — `GET /users` is ADMIN-only,
+     * the picker twenty lines away in this controller refuses AUDITOR and
+     * DOC_CONTROLLER outright, and `jobs/mappers.ts` deliberately omits
+     * `assignedToName` from every job read on exactly this reasoning.
+     *
+     * So the row stays readable by everyone and the name is withheld from
+     * anyone who cannot act on assignment. The ids remain, so a caller can
+     * still tell "nobody is assigned" from "a name you are not shown".
+     */
+    const maySeeNames = roles.some((role) => JOB_ASSIGNMENT_ROLES.includes(role));
+
     // Slice 32-PLANNERJOB — the STANDING assignee, and whether they would
     // still be accepted for that machine today. One batched query for the
     // whole page (`resolveEligibility`), never one per row: the grid draws 230
@@ -162,12 +187,13 @@ export class PlannerScheduleService {
           to,
           defaultLeadTimeDays,
           jobByVisit.get(visitKeyOf(row)) ?? null,
-          (job) => this.assigneeName(job),
+          (job) => (maySeeNames ? this.assigneeName(job) : null),
           row.defaultAssigneeId
             ? (eligibility.get(
                 eligibilityKey(row.defaultAssigneeId, row.assetDocument.asset.areaId),
               ) ?? null)
             : null,
+          maySeeNames,
         ),
       ),
       page: page.page,
@@ -296,14 +322,28 @@ export class PlannerScheduleService {
     return rule;
   }
 
+  /**
+   * PER-ROW RESCUE — review finding, same rule as
+   * `assignable-user.service.ts#nameOf`. One undecryptable `app_user` row must
+   * not 500 the whole year's plan for every planner; it degrades to the id,
+   * which names nobody but is true and is something an admin can look up.
+   */
   private assigneeName(job: ScheduledVisitJobRow): string | null {
     if (!job.assignee) return null;
-    return decodeIdentityField(
-      job.assignee.fullNameCt,
-      job.assignee.dekVersion,
-      { column: 'full_name_ct', rowId: job.assignee.id },
-      this.fieldEncryption,
-    );
+    try {
+      return decodeIdentityField(
+        job.assignee.fullNameCt,
+        job.assignee.dekVersion,
+        { column: 'full_name_ct', rowId: job.assignee.id },
+        this.fieldEncryption,
+      );
+    } catch (error) {
+      this.logger.error(
+        `could not decrypt the assignee name for job ${job.id} (user ${job.assignee.id}): ` +
+          `${(error as Error)?.message ?? String(error)}. Reporting the id in its place.`,
+      );
+      return job.assignee.id;
+    }
   }
 }
 
@@ -379,6 +419,7 @@ function toPlannerRow(
   job: ScheduledVisitJobRow | null,
   assigneeName: (job: ScheduledVisitJobRow) => string | null,
   defaultAssignee: AssigneeEligibility | null,
+  maySeeNames: boolean,
 ): PlannerScheduleRow {
   const asset = row.assetDocument.asset;
   const template = row.assetDocument.formTemplate;
@@ -436,7 +477,8 @@ function toPlannerRow(
       row.defaultAssigneeId && defaultAssignee
         ? ({
             id: row.defaultAssigneeId,
-            fullName: defaultAssignee.fullName,
+            // Withheld, not absent — see the `maySeeNames` note in `list`.
+            fullName: maySeeNames ? defaultAssignee.fullName : null,
             eligibility: defaultAssignee.verdict,
           } satisfies PlannerDefaultAssignee)
         : null,

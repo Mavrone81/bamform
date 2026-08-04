@@ -569,6 +569,47 @@ describe('Assignment — the picker, the standing assignee, and the check they s
       expect(job.rows[0].assigned_to).toBe(original);
     });
 
+    /**
+     * REVIEW FINDING (minor 7) — the test above proves only the ASSIGNED case.
+     * The reviewer added an `updateMany` filtered to `status = 'scheduled'`
+     * and all 32 tests still passed: a regression that pushed a new standing
+     * assignee onto already-raised but still-UNASSIGNED jobs would have
+     * shipped undetected, and that is the likelier mistake — "it has nobody on
+     * it, so it is safe to fill in" is exactly the reasoning someone would
+     * apply. It is not safe: the job exists, and the plan does not reach back.
+     */
+    it('does NOT touch an already-raised job that is still UNASSIGNED', async () => {
+      const machine = await makeMachine();
+      const token = await plannerToken();
+      const newDefault = await makeTechnician({ fullName: 'New', roleCodes: ['MAINTAINER'] });
+
+      const jobId = await createJob({
+        assetId: machine.assetId,
+        assetDocumentId: machine.assetDocumentId,
+        templateRevisionId: machine.templateRevisionId,
+        approvalRouteId: machine.approvalRouteId,
+        jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+        // Born the way every scheduler-generated job was before this slice:
+        // SCHEDULED and with nobody on it.
+        status: 'scheduled',
+        frequency: 'M3',
+        frequencyScope: ['M3'],
+        dueOn: '2026-03-19',
+      });
+
+      await setDefault(token, machine.ruleId, newDefault).expect(200);
+
+      const job = await adminPool.query(
+        `SELECT "assigned_to", "assigned_at", "status" FROM "job" WHERE id = $1`,
+        [jobId],
+      );
+      expect(job.rows[0].assigned_to).toBeNull();
+      expect(job.rows[0].assigned_at).toBeNull();
+      // And the status is untouched — a write here must not take the
+      // SCHEDULED -> ASSIGNED edge on a job it does not own.
+      expect(job.rows[0].status).toBe('scheduled');
+    });
+
     /** ...and the mirror: covering one visit must not rewrite the plan. */
     it('is NOT written back by POST /jobs/{jobId}/assign', async () => {
       const machine = await makeMachine();
@@ -681,6 +722,90 @@ describe('Assignment — the picker, the standing assignee, and the check they s
      * becomes `not-assignable`. That is a better test of this property than
      * anything a real database can be talked into.
      */
+
+    /**
+     * REVIEW FINDING (important 1). `GET /schedule` carries no `@Roles()` and
+     * must not gain one — every authenticated user could already read these
+     * rows one machine at a time, and removing that would break slice 18's
+     * "ADD, never remove". But the NAMES are new personal data: `GET /users`
+     * is ADMIN-only, the picker twenty lines away refuses these exact roles,
+     * and `jobs/mappers.ts` omits `assignedToName` from every job read for
+     * this reason. So the row stays and the name is withheld.
+     */
+    describe('technician names are withheld from roles that cannot assign', () => {
+      async function rowAs(role: string, ruleId: string) {
+        const { userId } = await createLoginableUser({
+          email: `reader-${randomUUID()}@bevorasg.com`,
+          password: 'CorrectHorseBattery1!',
+          fullName: `${role} Reader`,
+          roleCodes: [role],
+        });
+        return plannerRow(await mintAccessToken(app, userId, [role]), ruleId);
+      }
+
+      async function machineWithBothLevels() {
+        const machine = await makeMachine();
+        const token = await plannerToken();
+        const techId = await makeTechnician({
+          fullName: 'Sam Maintainer',
+          roleCodes: ['MAINTAINER'],
+        });
+        await setDefault(token, machine.ruleId, techId).expect(200);
+        const jobId = await createJob({
+          assetId: machine.assetId,
+          assetDocumentId: machine.assetDocumentId,
+          templateRevisionId: machine.templateRevisionId,
+          approvalRouteId: machine.approvalRouteId,
+          jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+          status: 'scheduled',
+          frequency: 'M3',
+          frequencyScope: ['M3'],
+          dueOn: '2026-03-19',
+        });
+        await request(app.getHttpServer())
+          .post(`/api/v1/jobs/${jobId}/assign`)
+          .set(...authHeader(token))
+          .send({ assigneeId: techId })
+          .expect(200);
+        return { ...machine, techId };
+      }
+
+      it('still returns the ROW to every authenticated role — nothing is taken away', async () => {
+        const machine = await machineWithBothLevels();
+        for (const role of ['MAINTAINER', 'AUDITOR', 'DOC_CONTROLLER'] as const) {
+          const row = await rowAs(role, machine.ruleId);
+          expect(row).toBeDefined();
+          expect(row.nextDueJob).not.toBeNull();
+          expect(row.defaultAssignee).not.toBeNull();
+        }
+      });
+
+      it('withholds both names from a role that cannot act on assignment', async () => {
+        const machine = await machineWithBothLevels();
+        for (const role of ['MAINTAINER', 'AUDITOR', 'DOC_CONTROLLER'] as const) {
+          const row = await rowAs(role, machine.ruleId);
+          expect(row.defaultAssignee.fullName).toBeNull();
+          expect(row.nextDueJob.assignedToName).toBeNull();
+          // The IDS stay, so a caller can still tell "nobody is assigned" from
+          // "a name you are not shown" — and nothing the plan already told
+          // them is removed.
+          expect(row.defaultAssignee.id).toBe(machine.techId);
+          expect(row.nextDueJob.assignedTo).toBe(machine.techId);
+          expect(row.defaultAssignee.eligibility).toBe('assignable');
+          // The decrypted name must not leak anywhere else on the row either.
+          expect(JSON.stringify(row)).not.toContain('Sam Maintainer');
+        }
+      });
+
+      it('shows both names to every role that CAN act on assignment', async () => {
+        const machine = await machineWithBothLevels();
+        for (const role of ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'] as const) {
+          const row = await rowAs(role, machine.ruleId);
+          expect(row.defaultAssignee.fullName).toBe('Sam Maintainer');
+          expect(row.nextDueJob.assignedToName).toBe('Sam Maintainer');
+        }
+      });
+    });
 
     it('reports a job’s own assignee, by name', async () => {
       const machine = await makeMachine();

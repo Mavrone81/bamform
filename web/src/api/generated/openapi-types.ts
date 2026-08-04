@@ -3061,7 +3061,7 @@ export interface components {
     };
     /**
      * @description Slice 32-PLANNERJOB — one candidate for `POST /jobs/{jobId}/assign`,
-     *     as `GET /jobs/{jobId}/assignable-users` returns them.
+     *     as `GET /schedule/{scheduleRuleId}/assignable-users` returns them.
      *
      *     Deliberately narrower than `User`: enough to choose a person, and no
      *     personal data beyond the name. `roles` carries only the

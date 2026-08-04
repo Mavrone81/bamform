@@ -1206,6 +1206,52 @@ describe('Planner — assigning the work', () => {
       );
     });
 
+    /**
+     * REVIEW FINDING (minor 11). A lapsed assignee is NOT in the candidate
+     * list — that is what lapsed means — so the select seeded from
+     * `currentAssigneeId` rendered blank and never said " — current", in
+     * exactly the recovery case the panel above warns about.
+     */
+    it('keeps a lapsed current holder visible in the picker, and unselectable', async () => {
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: {
+            id: 'tech-gone',
+            fullName: 'Gone Person',
+            eligibility: 'not-assignable',
+          },
+        }),
+      ]);
+      fireEvent.click(within(detail).getByRole('button', { name: /Change who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+
+      const lapsedOption = within(screen.getByLabelText('Technician')).getByRole('option', {
+        name: /Gone Person — current, no longer assignable/,
+      });
+      // Visible, so the planner sees who is being replaced...
+      expect(lapsedOption).toBeInTheDocument();
+      // ...and unselectable, so they cannot re-pick the person the server
+      // would refuse.
+      expect(lapsedOption).toBeDisabled();
+      expect(screen.getByTestId('assignee-lapsed-current')).toHaveTextContent(/Pick somebody else/);
+    });
+
+    /**
+     * REVIEW FINDING (minor 12). The "what this affects" sentence is the most
+     * load-bearing text on the panel and was loose prose a screen reader would
+     * never associate with the control. axe cannot flag a missing association,
+     * which is why the a11y suite passed without it.
+     */
+    it('names the control by what the change affects, for a screen reader', async () => {
+      const detail = await openVisit([withJob()]);
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+
+      const select = screen.getByLabelText('Technician');
+      expect(select).toHaveAccessibleDescription(/This is the PLAN/);
+      expect(select).toHaveAccessibleDescription(/does NOT change any job already raised/);
+    });
+
     it('says nothing of the sort while the assignee is still eligible', async () => {
       const detail = await openVisit([
         rule({
@@ -1249,8 +1295,12 @@ describe('Planner — assigning the work', () => {
 
       const options = within(screen.getByLabelText('Technician')).getAllByRole('option');
       expect(options[0]).toHaveTextContent('Choose a technician…');
-      expect(options.map((o) => o.textContent)).not.toContain(
-        expect.stringContaining('generate unassigned'),
+      // `toContain` is reference equality and silently ignores an asymmetric
+      // matcher, so the earlier `not.toContain(expect.stringContaining(...))`
+      // passed even with the string present — it asserted nothing. Plain
+      // predicate: no option offers "nobody".
+      expect(options.some((o) => (o.textContent ?? '').includes('generate unassigned'))).toBe(
+        false,
       );
       // ...and Save stays shut until a real person is chosen, so the 422 on a
       // missing `assigneeId` is unreachable.

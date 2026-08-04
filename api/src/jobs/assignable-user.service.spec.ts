@@ -187,9 +187,9 @@ describe('AssignableUserService#checkAssignable — three verdicts, not a boolea
 });
 
 describe('AssignableUserService#resolveEligibility — the grid degrades, it does not vanish', () => {
-  function makeService(findMany: () => Promise<unknown[]>) {
+  function makeService(findMany: () => Promise<unknown[]>, fieldEncryption: unknown = {}) {
     const prisma = { appUser: { findMany: jest.fn(findMany) } };
-    return new AssignableUserService(prisma as never, {} as never, {} as never);
+    return new AssignableUserService(prisma as never, {} as never, fieldEncryption as never);
   }
 
   /**
@@ -231,5 +231,66 @@ describe('AssignableUserService#resolveEligibility — the grid degrades, it doe
     const service = makeService(async () => []);
     const resolved = await service.resolveEligibility([{ userId: 'ghost', areaId: 'area-1' }]);
     expect(resolved.get(eligibilityKey('ghost', 'area-1'))?.verdict).toBe('unknown');
+  });
+
+  /**
+   * REVIEW FINDING (important 2). The try/catch covered the QUERY failing but
+   * not the DECRYPT — and a decrypt failure (a DEK rotated without
+   * re-wrapping, a hand-written row) is the likelier of the two. One bad
+   * `app_user` row returned 500 for the entire year's plan, every machine,
+   * every planner, over something the plan does not depend on.
+   */
+  it('reports the id in place of a name it cannot decrypt, rather than failing the read', async () => {
+    const service = makeService(
+      async () => [
+        {
+          id: 'u-1',
+          status: 'active',
+          fullNameCt: new Uint8Array([1, 2, 3]),
+          dekVersion: 1,
+          userRoles: [{ role: { code: 'MAINTAINER' } }],
+          userAreaScopes: [],
+        },
+      ],
+      {
+        decrypt: () => {
+          throw new Error('Unsupported state or unable to authenticate data');
+        },
+      },
+    );
+
+    const resolved = await service.resolveEligibility([{ userId: 'u-1', areaId: 'area-1' }]);
+    const entry = resolved.get(eligibilityKey('u-1', 'area-1'));
+
+    // The id names nobody, but it is TRUE and an admin can look it up.
+    expect(entry?.fullName).toBe('u-1');
+    // ...and the VERDICT is still correct: eligibility comes from status,
+    // roles and scopes, none of which the failed decrypt touched. Degrading
+    // the name must not degrade the answer.
+    expect(entry?.verdict).toBe('assignable');
+  });
+
+  it('does the same in the picker list, so one bad row cannot empty it', async () => {
+    const service = makeService(
+      async () => [
+        {
+          id: 'u-1',
+          status: 'active',
+          fullNameCt: new Uint8Array([1, 2, 3]),
+          dekVersion: 1,
+          userRoles: [{ active: true, role: { code: 'MAINTAINER' } }],
+        },
+      ],
+      {
+        decrypt: () => {
+          throw new Error('Unsupported state or unable to authenticate data');
+        },
+      },
+    );
+
+    const page = await service.list('area-1', {});
+    expect(page.data).toHaveLength(1);
+    expect(page.data[0].fullName).toBe('u-1');
+    expect(page.data[0].roles).toEqual(['MAINTAINER']);
   });
 });

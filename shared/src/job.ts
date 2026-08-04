@@ -388,7 +388,7 @@ export const assignJobRequestSchema = z.object({
 export type AssignJobRequest = z.infer<typeof assignJobRequestSchema>;
 
 /**
- * `GET /jobs/{jobId}/assignable-users` — slice 32-PLANNERJOB.
+ * `GET /schedule/{scheduleRuleId}/assignable-users` — slice 32-PLANNERJOB.
  *
  * WHY THIS ENDPOINT EXISTS. `POST /jobs/{jobId}/assign` is open to
  * PLANNER/TEAM_LEADER/ENGINEER/ADMIN, but `GET /users` is `@Roles('ADMIN')`,
@@ -399,9 +399,12 @@ export type AssignJobRequest = z.infer<typeof assignJobRequestSchema>;
  * do nothing about.
  *
  * So this returns exactly the users `AssignmentService#assertAssignableUser`
- * would accept FOR THIS JOB: active, holding a result-recording role
- * (MAINTAINER/TEAM_LEADER/ENGINEER — API_SPECIFICATION.md §4.1), and area-
- * scoped to reach the job's own area. The same service owns both the list and
+ * would accept for the machine a schedule rule hangs off: active, holding a
+ * result-recording role (MAINTAINER/TEAM_LEADER/ENGINEER —
+ * API_SPECIFICATION.md §4.1), and area-scoped to reach that machine. Keyed by
+ * the RULE rather than a job because the rule exists first — a visit whose job
+ * has not been generated yet still needs a picker, and the standing assignee
+ * and the job assignee are judged against the same machine's area. The same service owns both the list and
  * the check, so they cannot drift.
  *
  * DELIBERATELY NARROWER THAN `User`. Name and roles are what a planner needs

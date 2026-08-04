@@ -27,7 +27,18 @@ export const plannerVisitJobSchema = z.object({
   /**
    * The assignee's name, decrypted at read time (`app_user.full_name` is
    * application-layer encrypted, DBD §6.2). Sent because an id names nobody:
-   * the planner has to see a person. `null` exactly when `assignedTo` is.
+   * the planner has to see a person.
+   *
+   * `null` when `assignedTo` is — and ALSO when the caller holds no role that
+   * may decide assignment. `GET /schedule` carries no `@Roles()` (a schedule
+   * is not confidential, and every authenticated user could already read these
+   * rows one machine at a time), but a decrypted roster of who does what is a
+   * different thing: `GET /users` is ADMIN-only and `jobs/mappers.ts`
+   * deliberately omits `assignedToName` from every job read for this reason.
+   * So the ROW stays readable by everyone and the NAME is withheld —
+   * "ADD, never remove" for the plan, without opening a new door on personal
+   * data. Callers that need to tell "nobody" from "not shown" have
+   * `assignedTo`, which is always present.
    *
    * This is a NARROW, deliberate use of the decryption path `GET /users`
    * already uses — one name for a job that exists, not a bulk export of the
@@ -74,8 +85,17 @@ export type AssigneeEligibilityT = z.infer<typeof assigneeEligibilitySchema>;
 
 export const plannerDefaultAssigneeSchema = z.object({
   id: z.string().uuid(),
-  /** Decrypted at read time — `app_user.full_name` is encrypted (DBD §6.2). */
-  fullName: z.string(),
+  /**
+   * Decrypted at read time — `app_user.full_name` is encrypted (DBD §6.2).
+   *
+   * `null` means WITHHELD, not absent: the caller holds no role that may
+   * decide assignment, so they get the id and no name. See
+   * `PlannerVisitJob.assignedToName`, which is withheld by the same rule, and
+   * `jobs/mappers.ts`, which established the convention for exactly this
+   * reason. It is also `null` when the row could not be decrypted — the id is
+   * reported in the name's place rather than failing the whole read.
+   */
+  fullName: z.string().nullable(),
   /**
    * Whether this person would STILL be accepted for this machine today:
    * active, holding a result-recording role, and area-scoped to reach it.

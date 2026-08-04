@@ -3178,8 +3178,21 @@ export class FakeServer {
 
     const body = route.request().postDataJSON() as { assigneeId?: string };
     const assignee = body.assigneeId ? this.adminUsers.get(body.assigneeId) : undefined;
-    if (!assignee) {
-      await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+    // THE SAME CHECK ITS SIBLING MAKES — review finding. This used to accept
+    // anyone who merely EXISTED, so a regression making the job-level picker
+    // offer an AUDITOR, a deactivated account or somebody out of area passed
+    // E-19 green while the real `AssignmentService#assertAssignableUser` would
+    // have 422'd. `handleSetDefaultAssignee` already mirrored the rule; the
+    // job half did not, which left exactly half the feature unprotected.
+    const jobArea = this.assetAreaOfJob(job);
+    if (!assignee || !this.isAssignableTo(assignee, jobArea)) {
+      await this.fulfillProblem(
+        route,
+        422,
+        'Validation failed',
+        '/errors/validation-failed',
+        'That person cannot be assigned to this job.',
+      );
       return;
     }
 
@@ -3197,6 +3210,16 @@ export class FakeServer {
       contentType: 'application/json',
       body: JSON.stringify(this.toApiJob(job)),
     });
+  }
+
+  /**
+   * The area a job's machine sits in, for the assignability check. `SeedJob`
+   * carries `areaId` directly (it is the same field `jobInScope` filters on);
+   * `undefined` means the machine has no area, which `isAssignableTo` treats
+   * as reachable only by an unrestricted user — exactly as the real rule does.
+   */
+  private assetAreaOfJob(job: SeedJob): string | null {
+    return job.areaId ?? null;
   }
 
   /** The machine a rule hangs off, through its document. */
