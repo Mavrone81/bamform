@@ -233,6 +233,10 @@ model AppUser {
   revisionsAuthored  TemplateRevision[]      @relation("RevisionAuthor")
   revisionsApproved  TemplateRevision[]      @relation("RevisionApprover")
   jobsAssigned       Job[]                   @relation("JobAssignedTo")
+  /// Slice 32-PLANNERJOB — the PM schedules this user is the standing
+  /// assignee for. Back-relation only; `schedule_rule.default_assignee_id`
+  /// is the owning side.
+  scheduleDefaults   ScheduleRule[]          @relation("ScheduleRuleDefaultAssignee")
   jobsSubmitted      Job[]                   @relation("JobSubmittedBy")
   jobsVoided         Job[]                   @relation("JobVoidedBy")
   itemResults        ItemResult[]
@@ -688,13 +692,33 @@ model ScheduleRule {
   nextDueOn        DateTime   @map("next_due_on") @db.Date
   adjustedReason   String?    @map("adjusted_reason")
   active           Boolean    @default(true)
+  /// Slice 32-PLANNERJOB. WHO NORMALLY DOES THIS PM — the technician
+  /// `JobGenerationService` assigns each generated job to. NULL (the default,
+  /// and every pre-existing row) keeps the old behaviour exactly: the job is
+  /// born SCHEDULED and unassigned.
+  ///
+  /// A DEFAULT, NOT A LOCK. Reassigning a generated job writes `job.assigned_to`
+  /// and never this column; changing this column never touches a job already
+  /// generated. The two levels are independent by construction — see
+  /// `docs`/the planner UI, which says so to the planner in as many words.
+  ///
+  /// NOT VALIDATED BY THE DATABASE beyond the FK. Assignability (active,
+  /// holds a result-recording role, area scope reaches the machine) is a
+  /// three-table rule that changes AFTER the default is set — a technician
+  /// leaves, a role is revoked, an area scope is narrowed — so it is checked
+  /// at WRITE time (`PUT /schedule/{id}/default-assignee`) and again at
+  /// GENERATION time, where an ineligible default produces an unassigned job
+  /// plus an audit record saying why (`job-generation.service.ts`).
+  defaultAssigneeId String?   @map("default_assignee_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  assetDocument AssetDocument @relation(fields: [assetDocumentId], references: [id])
+  assetDocument   AssetDocument @relation(fields: [assetDocumentId], references: [id])
+  defaultAssignee AppUser?      @relation("ScheduleRuleDefaultAssignee", fields: [defaultAssigneeId], references: [id])
 
   @@unique([assetDocumentId, frequency])
+  @@index([defaultAssigneeId])
   @@map("schedule_rule")
 }
 

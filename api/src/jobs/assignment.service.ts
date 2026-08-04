@@ -1,13 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AuditActionT, JobStatusT, UserStatusT } from '@prisma/client';
+import { AuditActionT, JobStatusT } from '@prisma/client';
 import type { AssignJobRequest, Job } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
 import type { ActorMeta } from '../common/actor-meta';
-import { invalidTransitionProblem, validationFailedProblem } from '../common/domain-problems';
+import { invalidTransitionProblem } from '../common/domain-problems';
 import { IdempotencyService } from '../common/idempotency.service';
 import { NotificationQueueService } from '../notifications/notification-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { JOB_RECORD_ROLES, JobAccessService } from './job-access';
+import { AssignableUserService } from './assignable-user.service';
+import { JobAccessService } from './job-access';
 import { JOB_FULL_INCLUDE } from './job-include';
 import { JOB_STATUS_FROM_DB } from './job-enums';
 import { JobsService } from './jobs.service';
@@ -46,6 +47,7 @@ export class AssignmentService {
     private readonly audit: AuditEventService,
     private readonly idempotency: IdempotencyService,
     private readonly notificationQueue: NotificationQueueService,
+    private readonly assignableUsers: AssignableUserService,
   ) {}
 
   async assign(
@@ -160,37 +162,22 @@ export class AssignmentService {
   }
 
   /**
-   * The assignee must be able to actually WORK the job, or the assignment is
-   * a dead end by construction: result capture is `@Roles(JOB_RECORD_ROLES)`,
-   * a deactivated account is rejected at login (13a), and an area-scoped
-   * user cannot even open an out-of-scope job (`JobAccessService`). All three
-   * are 422 validation-failed — a client defect in the chosen assignee, not
-   * an authorisation failure of the CALLER (which would be 403).
+   * Slice 32-PLANNERJOB — now a DELEGATE to `AssignableUserService`.
    *
-   * PUBLIC since slice 18-WORKFLOW: `AdhocJobService` accepts an optional
-   * assignee at creation time and must apply the IDENTICAL rule — a job
-   * raised off-plan and handed to someone who could never open it is the
-   * same dead end, and duplicating the check is how the two drift apart.
+   * The rule itself moved because assignment gained a second level: a
+   * `schedule_rule` can carry a STANDING assignee, which the planner sets
+   * (`PUT /schedule/{scheduleRuleId}/default-assignee`) and
+   * `JobGenerationService` applies when it creates a job. Three callers, one
+   * rule — and `SchedulingModule` cannot import `JobsModule` (this module
+   * already imports IT, slice 15-SYSWIRE), so the rule lives in its own tiny
+   * module both can reach. See `assignable-user.service.ts`.
+   *
+   * KEPT AS A METHOD HERE, not deleted: `AdhocJobService` calls it for the
+   * optional assignee on `POST /jobs/adhoc` (slice 18-WORKFLOW), and a job
+   * raised off-plan and handed to someone who could never open it is the same
+   * dead end this check exists to prevent.
    */
-  async assertAssignableUser(assigneeId: string, jobAreaId: string | null): Promise<void> {
-    const assignee = await this.prisma.appUser.findUnique({
-      where: { id: assigneeId },
-      include: { userRoles: { where: { active: true }, include: { role: true } } },
-    });
-    if (!assignee || assignee.status !== UserStatusT.active) {
-      throw validationFailedProblem('assigneeId does not name an active user.');
-    }
-    const roleCodes = assignee.userRoles.map((userRole) => userRole.role.code);
-    if (!roleCodes.some((code) => JOB_RECORD_ROLES.includes(code))) {
-      throw validationFailedProblem(
-        'The assignee holds no role that can record results (MAINTAINER/TEAM_LEADER/ENGINEER — API_SPECIFICATION.md §4.1).',
-      );
-    }
-    const assigneeAreaIds = await this.access.getAllowedAreaIds(assigneeId);
-    if (assigneeAreaIds !== null && (!jobAreaId || !assigneeAreaIds.includes(jobAreaId))) {
-      throw validationFailedProblem(
-        "The assignee's area scope does not include this job's area — they could never open it (PR-API-10).",
-      );
-    }
+  assertAssignableUser(assigneeId: string, jobAreaId: string | null): Promise<void> {
+    return this.assignableUsers.assertAssignable(assigneeId, jobAreaId);
   }
 }

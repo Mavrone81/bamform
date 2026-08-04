@@ -972,6 +972,118 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
 
+  /schedule/{scheduleRuleId}/assignable-users:
+    parameters:
+      - $ref: '#/components/parameters/ScheduleRuleId'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+    get:
+      tags: [Scheduling]
+      operationId: listAssignableUsers
+      summary: Who this machine's PM may be given to
+      description: |
+        Slice 32-PLANNERJOB. PLANNER/TEAM_LEADER/ENGINEER/ADMIN — the SAME
+        role set as `PUT /schedule/{scheduleRuleId}/default-assignee` and
+        `POST /jobs/{jobId}/assign`: the right to see the candidates and the
+        right to choose one are the same right.
+
+        ONE PICKER FOR BOTH ASSIGNMENT LEVELS. The standing assignee on the
+        rule and the assignee on a job generated from it are judged against
+        the SAME machine's area, so the candidate sets are identical by
+        construction; two endpoints would be two lists that could disagree.
+        Keyed by the RULE rather than a job because the rule exists first — a
+        visit whose job has not been generated yet still needs a picker.
+
+        Returns exactly the users `POST /jobs/{jobId}/assign` would ACCEPT:
+        active, holding a result-recording role
+        (MAINTAINER/TEAM_LEADER/ENGINEER, §4.1), and area-scoped to reach the
+        machine (a machine with no area is assignable only to users with no
+        area restriction). Computed by the same service that enforces the
+        check, so a picker built on it cannot offer someone the server will
+        refuse.
+
+        It exists because `GET /users` is ADMIN-only, leaving three of the
+        four roles that may assign with no readable source for the list.
+        Deliberately NARROWER than `User`: a name and the roles that put the
+        person on the list, never email or employee id.
+
+        404 for an unknown rule; 403 `/errors/out-of-scope` when the rule's
+        machine is outside the caller's area scope — so this cannot enumerate
+        technicians against a machine the caller cannot see.
+      responses:
+        '200':
+          description: The users this machine's maintenance may be assigned to
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/AssignableUser' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /schedule/{scheduleRuleId}/default-assignee:
+    parameters:
+      - $ref: '#/components/parameters/ScheduleRuleId'
+    put:
+      tags: [Scheduling]
+      operationId: setScheduleDefaultAssignee
+      summary: Set who normally does this machine's PM
+      description: |
+        Slice 32-PLANNERJOB. PLANNER/TEAM_LEADER/ENGINEER/ADMIN — the same set
+        as `PUT /assets/{assetId}/schedule`: deciding when controlled work
+        happens and deciding who does it are the same planning job.
+
+        Writes `schedule_rule.default_assignee_id` and NOTHING ELSE.
+        `JobGenerationService` reads it when it CREATES a job, so this affects
+        work not yet generated: a job already raised keeps whoever it has, and
+        reassigning a generated job (`POST /jobs/{jobId}/assign`) never writes
+        back here. The two levels are independent by construction.
+
+        `defaultAssigneeId: null` clears the standing assignee, returning the
+        rule to generating unassigned jobs.
+
+        Validated with the same rule as `POST /jobs/{jobId}/assign`, against
+        this machine's area — and validated AGAIN at generation time, because
+        eligibility lapses in between (someone leaves, a role is revoked, an
+        area scope is narrowed). An ineligible default at generation time
+        produces an UNASSIGNED job plus an audit record naming the id that
+        failed; it never refuses to generate, because the job is the
+        controlled record.
+
+        No reason field, unlike `PUT /assets/{assetId}/schedule`: rostering
+        changes every time someone takes leave, and a mandatory reason there
+        would be typed through rather than thought about. The change is still
+        audited with before/after ids.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetDefaultAssigneeRequest' }
+      responses:
+        '200':
+          description: The rule's standing assignee after the change
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SetDefaultAssigneeResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403':
+          description: "`/errors/out-of-scope` - the rule's machine is outside the caller's area scope"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422':
+          description: '`/errors/validation-failed` - the assignee is unknown, inactive, holds no result-recording role, or cannot reach the machine''s area'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /approval-routes:
     get:
       tags: [Asset Types]
@@ -2668,6 +2780,12 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    ScheduleRuleId:
+      name: scheduleRuleId
+      in: path
+      required: true
+      description: A `schedule_rule` id, as `GET /schedule` returns on every row.
+      schema: { type: string, format: uuid }
     JobId:
       name: jobId
       in: path
@@ -3103,6 +3221,9 @@ components:
           active,
           plannedDates,
           cascadeFrequencies,
+          nextDueJob,
+          jobGenerationOpensOn,
+          defaultAssignee,
         ]
       properties:
         id:
@@ -3153,6 +3274,143 @@ components:
 
             Computed from the rules that actually exist on the document, not
             from divisibility alone (U-CAS-05).
+        defaultAssignee:
+          oneOf:
+            - $ref: '#/components/schemas/PlannerDefaultAssignee'
+            - type: 'null'
+          description: |
+            WHO NORMALLY DOES THIS PM — `schedule_rule.default_assignee_id`,
+            or `null` where nobody is named and every generated job therefore
+            arrives unassigned. Set with
+            `PUT /schedule/{scheduleRuleId}/default-assignee`.
+
+            Distinct from `nextDueJob.assignedTo`: this is the PLAN (affects
+            jobs not yet generated), that is ONE OCCURRENCE (affects that job).
+            Neither write touches the other.
+        nextDueJob:
+          oneOf:
+            - $ref: '#/components/schemas/PlannerVisitJob'
+            - type: 'null'
+          description: |
+            Slice 32-PLANNERJOB — the job the scheduler has already raised for
+            this rule's STORED `nextDueOn`, or `null` when it has not raised
+            one yet. This is how a planner reaches the form a technician
+            actually fills.
+
+            Belongs to `nextDueOn` only. Every other date in `plannedDates` is
+            a projection of it; job generation reads `schedule_rule.next_due_on`
+            and nothing else, so a projected visit has no job and cannot have
+            one until it becomes the stored date.
+
+            Identified by the tuple `(assetDocumentId, frequency, dueOn)` —
+            the same key as `job`'s partial unique index
+            `(asset_document_id, frequency_scope, due_on) WHERE status <>
+            'voided' AND is_adhoc = false`, reached through the columns a
+            schedule row can vouch for (`schedule_rule` is unique on
+            `(asset_document_id, frequency)`). A VOIDED job is never returned
+            (it releases its period, so a replacement is still to come) and
+            neither is an AD-HOC one (UR-028 — empty `frequency_scope`,
+            structurally unable to advance `next_due_on`).
+        jobGenerationOpensOn:
+          type: string
+          format: date
+          description: |
+            The earliest date on which a scheduler sweep will raise the job for
+            `nextDueOn`: `nextDueOn` minus this machine's effective lead time
+            (`asset_type.leadTimeDays`, falling back to the deployment's
+            `DEFAULT_LEAD_TIME_DAYS`).
+
+            Sent because a client cannot know it — the lead time is per asset
+            type over a server-configured default. It is a BOUNDARY, not an
+            appointment: the sweep runs on its own cron, so the job appears on
+            the first sweep on or after this date. It also promises nothing
+            about whether a job will be raised at all — a document with no
+            current revision, or no active items in scope, is skipped.
+
+    PlannerDefaultAssignee:
+      # Mirrors shared/src/planner.ts `plannerDefaultAssigneeSchema` exactly.
+      type: object
+      description: |
+        Slice 32-PLANNERJOB — the technician `JobGenerationService` hands each
+        job generated from this schedule rule to.
+      required: [id, fullName, eligibility]
+      properties:
+        id: { type: string, format: uuid }
+        fullName:
+          type: string
+          description: Decrypted at read time — `app_user.full_name` is application-layer encrypted (DBD §6.2).
+        eligibility:
+          type: string
+          enum: [assignable, not-assignable, unknown]
+          description: |
+            Whether this person would STILL be accepted for this machine
+            today: active, holding a result-recording role, and area-scoped to
+            reach it.
+
+            Sent rather than left for the sweep to discover, because
+            eligibility lapses silently and usually will. At `not-assignable`
+            the next sweep generates an UNASSIGNED job (it does not refuse —
+            the job is the controlled record), so a planner needs to see it
+            before the work goes out with nobody on it.
+
+            THREE VALUES, NOT A BOOLEAN. The check reads three tables, and
+            when one of those reads fails there is no honest boolean: `false`
+            would assert that a named person is not eligible, which the server
+            has not established. `unknown` says the check could not be
+            completed — a fact about the system, not about the person.
+
+    SetDefaultAssigneeRequest:
+      # Mirrors shared/src/planner.ts `setDefaultAssigneeRequestSchema` exactly.
+      type: object
+      required: [defaultAssigneeId]
+      properties:
+        defaultAssigneeId:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The standing assignee, or `null` to clear it. Explicitly nullable
+            rather than optional: "leave it alone" and "there is nobody" are
+            different intentions and an optional field cannot express the
+            second.
+
+    SetDefaultAssigneeResult:
+      # Mirrors shared/src/planner.ts `setDefaultAssigneeResultSchema` exactly.
+      type: object
+      required: [scheduleRuleId, defaultAssignee]
+      properties:
+        scheduleRuleId: { type: string, format: uuid }
+        defaultAssignee:
+          oneOf:
+            - $ref: '#/components/schemas/PlannerDefaultAssignee'
+            - type: 'null'
+
+    PlannerVisitJob:
+      type: object
+      description: |
+        Slice 32-PLANNERJOB — a HANDLE on the job raised for a planned visit:
+        enough to name it, say what state it is in, and open it. Deliberately
+        not a `JobSummary`: duplicating one into the planner grid would make
+        the plan a second, staler view of the work list.
+      required: [id, jobNumber, status, assignedTo, assignedToName]
+      properties:
+        id: { type: string, format: uuid }
+        jobNumber: { type: string, examples: ['PM-2026-000123'] }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        assignedTo:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            Who is responsible for doing it, or `null` while nobody is. A
+            scheduler-generated job is born unassigned and is invisible to the
+            MAINTAINER who should do it (a MAINTAINER sees only jobs assigned
+            to them), so "due, and nobody has it" is the state a planner is
+            scanning for.
+        assignedToName:
+          type: [string, 'null']
+          description: |
+            The assignee's name, decrypted at read time — an id names nobody.
+            `null` exactly when `assignedTo` is. The only personal field on
+            this row.
 
     ScheduleAdjust:
       type: object
@@ -3668,6 +3926,27 @@ components:
         reason: { type: [string, 'null'] }
         actedAt: { type: string, format: date-time }
         signingKeyId: { type: string }
+
+    AssignableUser:
+      # Mirrors shared/src/job.ts `assignableUserSchema` exactly.
+      type: object
+      description: |
+        Slice 32-PLANNERJOB — one candidate for `POST /jobs/{jobId}/assign`,
+        as `GET /jobs/{jobId}/assignable-users` returns them.
+
+        Deliberately narrower than `User`: enough to choose a person, and no
+        personal data beyond the name. `roles` carries only the
+        result-recording roles that put them on the list — the reason they are
+        offered, not their full role set.
+      required: [id, fullName, roles]
+      properties:
+        id: { type: string, format: uuid }
+        fullName:
+          type: string
+          description: Decrypted at read time — `app_user.full_name` is application-layer encrypted (DBD §6.2).
+        roles:
+          type: array
+          items: { type: string, examples: [MAINTAINER, TEAM_LEADER, ENGINEER] }
 
     AssignJobRequest:
       # Mirrors shared/src/job.ts `assignJobRequestSchema` exactly (contract

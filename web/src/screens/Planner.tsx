@@ -7,7 +7,7 @@ import {
   type PlannerScheduleRow,
 } from '../api/admin-client';
 import { getCurrentUser, onCurrentUserChange } from '../auth';
-import { rolesCanAdjustSchedule } from '../lib/permissions';
+import { rolesCanAdjustSchedule, rolesCanAssignJob } from '../lib/permissions';
 import { todayLocalIsoDate } from '../lib/local-date';
 import {
   describeWorkWeek,
@@ -24,6 +24,8 @@ import {
   ScheduleAdjustForm,
   refusalText,
 } from '../components/ScheduleAdjustForm';
+import { VisitAssignment } from '../components/VisitAssignment';
+import { VisitJobLink } from '../components/VisitJobLink';
 
 /**
  * THE PLANNER GRID — slice 31-PLANNER. The screen that replaces
@@ -107,6 +109,14 @@ export function Planner() {
   const [user, setUser] = useState(() => getCurrentUser());
   useEffect(() => onCurrentUserChange(setUser), []);
   const canAdjust = rolesCanAdjustSchedule(user?.roles);
+  /**
+   * Slice 32-PLANNERJOB — asked SEPARATELY from `canAdjust`, even though the
+   * two role lists are identical today. They mirror two different `@Roles()`
+   * declarations on two different controllers ("who may move a due date" and
+   * "who may hand work to a technician"), and a future narrowing of one must
+   * not silently narrow the other. See `lib/permissions.ts`.
+   */
+  const canAssign = rolesCanAssignJob(user?.roles);
 
   /**
    * The floor the year stepper cannot go below — see the control's own note.
@@ -546,16 +556,77 @@ export function Planner() {
                   </div>
                 )}
 
+                {/*
+                 * Slice 32-PLANNERJOB made this banner ANSWERABLE. It used to
+                 * assert flatly that a past-due visit "has already raised one
+                 * job" — a claim the screen had no way to check, and which is
+                 * simply false where the document carries no current revision
+                 * or no items in the rule's scope (`generateForRule` returns
+                 * `'skipped'`), or where no sweep has run. `nextDueJob` now
+                 * says which it is, so the consequence of saving a new date —
+                 * the whole point of the warning — is stated from what is
+                 * actually there rather than from an assumption.
+                 */}
                 {late && (
                   <p className="banner" data-tone="bad" role="alert">
-                    <span aria-hidden="true">⚠</span> This due date has already passed. It has
-                    already raised one job — job generation is keyed per due date, so leaving it
-                    will not raise a second. But saving a NEW date does not remove that job: it
-                    stays open at this old date, and the next sweep raises a SECOND job at the new
-                    date once it falls due. This app has no control yet to void the first one, so
-                    flag it before it is worked as real PM.
+                    <span aria-hidden="true">⚠</span> This due date has already passed.{' '}
+                    {visit.rule.nextDueJob ? (
+                      <>
+                        Job {visit.rule.nextDueJob.jobNumber} is already open at this date — job
+                        generation is keyed per due date, so leaving it will not raise a second. But
+                        saving a NEW date does not remove that job: it stays open at this old date,
+                        and the next sweep raises a SECOND job at the new date once it falls due.
+                        This app has no control yet to void the first one, so flag it before it is
+                        worked as real PM.
+                      </>
+                    ) : (
+                      <>
+                        No job has been raised for it — see below for why that may be. Nothing is
+                        left behind at this date, so saving a new one moves the whole rule cleanly.
+                      </>
+                    )}
                   </p>
                 )}
+
+                {/*
+                 * THE BRIDGE TO THE WORK — slice 32-PLANNERJOB. Shared with
+                 * whatever screen needs it next rather than written inline
+                 * here, for the same reason `ScheduleAdjustForm` is: the plan
+                 * and the work list must not grow two different accounts of
+                 * whether a visit has a job. It also owns the refusal to offer
+                 * an ad-hoc raise, which is the mistake this whole link
+                 * exists to make unnecessary.
+                 */}
+                <VisitJobLink
+                  job={visit.rule.nextDueJob}
+                  isNextDue={visit.isNextDue}
+                  jobGenerationOpensOn={visit.rule.jobGenerationOpensOn}
+                  today={today}
+                  label={label}
+                />
+
+                {/*
+                 * WHO DOES IT — slice 32-PLANNERJOB, and deliberately BELOW
+                 * the job link rather than folded into it. Reaching the work
+                 * and staffing it are different questions, and the second one
+                 * has two levels (the plan, and this occurrence) that a
+                 * planner must be able to tell apart at a glance. That
+                 * distinction is the whole reason it is its own component —
+                 * see its module note.
+                 */}
+                <VisitAssignment
+                  scheduleRuleId={visit.rule.id}
+                  defaultAssignee={visit.rule.defaultAssignee}
+                  job={visit.rule.nextDueJob}
+                  isNextDue={visit.isNextDue}
+                  canAssign={canAssign}
+                  label={label}
+                  onSaved={async (message) => {
+                    setSelectedCell(null);
+                    setSavedMessage(message);
+                    await load();
+                  }}
+                />
 
                 {/*
                  * THE HONEST LIMIT OF THIS SCREEN. Only the rule's real

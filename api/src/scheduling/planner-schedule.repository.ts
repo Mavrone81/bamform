@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { JobStatusT, type FrequencyT, type Prisma } from '@prisma/client';
 import { applyAreaScope } from '../common/area-scope';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -29,7 +29,21 @@ export interface PlannerScheduleFilters {
 const PLANNER_INCLUDE = {
   assetDocument: {
     include: {
-      asset: { select: { id: true, code: true, description: true, areaId: true } },
+      asset: {
+        select: {
+          id: true,
+          code: true,
+          description: true,
+          areaId: true,
+          // Slice 32-PLANNERJOB. The machine family's lead time is what
+          // decides when the sweep will raise this rule's job
+          // (`job-generation.service.ts` reads exactly this, falling back to
+          // the deployment default), and the grid has to say so. Reached
+          // through the SAME nested include as everything else on the row —
+          // one extra column on a join that already happens, not a new query.
+          assetType: { select: { leadTimeDays: true } },
+        },
+      },
       formTemplate: { select: { documentNumber: true, title: true } },
       scheduleRules: {
         where: { active: true },
@@ -124,4 +138,126 @@ export class PlannerScheduleRepository {
       take: filters.take,
     });
   }
+
+  /**
+   * ONE rule, with the machine it hangs off — for the two single-entity
+   * operations `/schedule/{scheduleRuleId}/…` serves (slice 32-PLANNERJOB).
+   *
+   * NOT area-scoped here, deliberately, and this is the opposite of a lapse.
+   * `findMany` above is a COLLECTION read where an out-of-scope machine must
+   * simply be ABSENT; these are single-entity operations on a NAMED rule,
+   * where absence would be a 404 that tells the caller the rule does not
+   * exist. `AssetScheduleService` already settled that distinction for
+   * `GET /assets/{assetId}/schedule` — a named thing outside your scope is a
+   * 403 `out-of-scope`, not a lie. The service applies that check to
+   * `asset.areaId`, which is why this returns it.
+   */
+  findRuleForMutation(scheduleRuleId: string) {
+    return this.prisma.scheduleRule.findUnique({
+      where: { id: scheduleRuleId },
+      include: {
+        assetDocument: {
+          include: { asset: { select: { id: true, code: true, areaId: true } } },
+        },
+      },
+    });
+  }
+
+  /**
+   * Slice 32-PLANNERJOB — the jobs the scheduler has already raised for the
+   * visits on this page, so a planner looking at a due visit can reach the
+   * form a technician actually fills.
+   *
+   * WHY THIS IS MATCHED THE WAY IT IS. The database's own idempotency key is
+   * `(asset_document_id, frequency_scope, due_on) WHERE status <> 'voided' AND
+   * is_adhoc = false`, and matching a job by anything looser — "the nearest
+   * job on this machine", "a job within a few days" — is how a planner ends up
+   * opening the wrong record on a machine carrying two documents.
+   *
+   * `frequency_scope` is NOT reproducible from a `schedule_rule`, though:
+   * `JobGenerationService#generateForRule` computes it from the CURRENT
+   * template revision's active items and any `standing_content.cascade_override`
+   * (`frequency-cascade.ts`), not from the rules on the document, so a revision
+   * published after the job was raised would make the two disagree. What IS
+   * exact is the rest of what generation writes — `assetDocumentId`,
+   * `frequency` and `dueOn`, all copied verbatim off the rule — and
+   * `schedule_rule` is `@@unique([asset_document_id, frequency])`, so that
+   * tuple names at most one rule and therefore at most one live job for a
+   * given due date. It is the same key, reached through the column the
+   * schedule can actually vouch for.
+   *
+   * The two exclusions are the index's own predicate, and both matter here:
+   *  - VOIDED (SYS-19): a voided job releases its period so the scheduler
+   *    raises a replacement. Linking it would send a planner to dead work and
+   *    hide the fact that the live job is still to come.
+   *  - AD-HOC (UR-028): created with an EMPTY `frequency_scope`, structurally
+   *    incapable of advancing `schedule_rule.next_due_on`. An off-plan
+   *    call-out raised on a machine on its PM date must never be presented as
+   *    that PM visit's job — the plan would read as covered while the schedule
+   *    stayed exactly where it was.
+   *
+   * AREA SCOPE is applied here too, through `job.asset.areaId` — the same
+   * relation `jobs.repository.ts` scopes `GET /jobs` by. Strictly it is
+   * redundant (the document ids come from rows this repository has already
+   * scoped), but "the caller already filtered" is precisely the assumption
+   * ADR-005 exists to stop anyone making: this file is the area-scope seam for
+   * `GET /schedule`, and every read in it applies the scope itself.
+   */
+  findScheduledJobsForVisits(
+    visits: readonly VisitKey[],
+    allowedAreaIds: string[] | null,
+  ): Promise<ScheduledVisitJobRow[]> {
+    if (visits.length === 0) {
+      return Promise.resolve([]);
+    }
+
+    return this.prisma.job.findMany({
+      where: {
+        isAdhoc: false,
+        status: { not: JobStatusT.voided },
+        asset: applyAreaScope<Prisma.AssetWhereInput>({}, allowedAreaIds),
+        OR: visits.map((visit) => ({
+          assetDocumentId: visit.assetDocumentId,
+          frequency: visit.frequency,
+          dueOn: visit.dueOn,
+        })),
+      },
+      select: JOB_VISIT_SELECT,
+      // Deterministic: if a schema change ever allowed two live jobs on one
+      // key, the grid must pick the same one on every read rather than
+      // whichever the planner happened to return.
+      orderBy: { generatedAt: 'asc' },
+    });
+  }
 }
+
+/** The tuple that names one visit's job — see `findScheduledJobsForVisits`. */
+export interface VisitKey {
+  assetDocumentId: string;
+  frequency: FrequencyT;
+  dueOn: Date;
+}
+
+/**
+ * Everything the planner grid needs about a visit's job: the handle
+ * (id/number/status), the key it was matched on, and WHO is responsible.
+ *
+ * `assignee` is the encrypted-name columns only. `app_user.full_name` is
+ * application-layer encrypted (DBD §6.2) and the planner service decrypts it
+ * through the same `decodeIdentityField` helper `users.mapper.ts` uses —
+ * NOTHING else about the user is selected, so this read cannot become a side
+ * door onto the directory `GET /users` gates to ADMIN.
+ */
+const JOB_VISIT_SELECT = {
+  id: true,
+  jobNumber: true,
+  status: true,
+  assetDocumentId: true,
+  frequency: true,
+  dueOn: true,
+  generatedAt: true,
+  assignedTo: true,
+  assignee: { select: { id: true, fullNameCt: true, dekVersion: true } },
+} as const;
+
+export type ScheduledVisitJobRow = Prisma.JobGetPayload<{ select: typeof JOB_VISIT_SELECT }>;

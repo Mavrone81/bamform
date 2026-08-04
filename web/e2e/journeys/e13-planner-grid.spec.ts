@@ -350,6 +350,143 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
   });
 
   /**
+   * E-18 (slice 32-PLANNERJOB) — THE PLAN REACHES THE WORK.
+   *
+   * Until this, the planner could see a visit was due and had no way to open
+   * it: the job list is ordered by machine and date and a planner had to hunt
+   * for the right record by eye. This walks the join end to end — select the
+   * due cell, open the job the server named, land on the capture screen.
+   */
+  test('a planner opens the job the scheduler already raised for a due visit', async ({
+    page,
+    server,
+  }) => {
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+      machineNumber: '13',
+    });
+    // A sweep has already raised the job for the STORED next-due date. Keyed
+    // `(document, frequency, dueOn)` — the same key the real repository
+    // matches, so a looser match in the app would fail here rather than pass.
+    const job = server.seedGeneratedJob({
+      assetDocumentId: doc.id,
+      frequency: 'M1',
+      dueOn: `${YEAR}-09-17`,
+      assetCode: 'AW01',
+      status: 'SCHEDULED',
+    });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+
+    // 17 September is work week 38.
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+    const detail = page.getByTestId('planner-detail');
+    await expect(detail).toBeVisible();
+
+    // The job is NAMED and its state said in words — never a bare coloured
+    // dot (A-05).
+    await expect(detail).toContainText(job.jobNumber);
+    await expect(detail).toContainText('SCHEDULED');
+
+    await detail.getByRole('button', { name: new RegExp(`Open job ${job.jobNumber}`) }).click();
+
+    // ...and it really opens. The destination is a live capture screen, not a
+    // link into a 404 — which is the half a unit test cannot prove.
+    await expect(page.getByRole('heading', { name: job.jobNumber })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${job.id}$`));
+  });
+
+  /**
+   * The other half, and the one that keeps a planner out of trouble: a visit
+   * with no job says WHEN it will appear, using the server's own boundary, and
+   * never offers to raise it. `POST /jobs/adhoc` creates a job with an EMPTY
+   * `frequencyScope`, structurally incapable of advancing
+   * `schedule_rule.next_due_on` — raising planned work that way records it
+   * off-plan AND leaves the schedule overdue for ever.
+   */
+  test('a visit with no job says when one will appear, and offers no way to raise it', async ({
+    page,
+    server,
+  }) => {
+    // A machine family with a 45-day lead time, deliberately not the default
+    // 30: the screen must print the SERVER's boundary, not one of its own.
+    const family = server.seedAssetType({ code: 'LT', name: 'Long Lead Bonder', leadTimeDays: 45 });
+    const machine = server.seedAsset({
+      code: 'AW05',
+      assetTypeId: family.id,
+      scheduleAnchorDate: `${YEAR}-12-19`,
+    });
+    server.seedAssetDocument({ assetId: machine.id, formTemplateId: E2E_TEMPLATES.wireBond });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+
+    // 19 December is work week 51.
+    await page.getByRole('button', { name: /AW05.*WW51/ }).click();
+    const detail = page.getByTestId('planner-detail');
+
+    const pending = detail.getByTestId('visit-job-pending');
+    await expect(pending).toBeVisible();
+    // 19 December less 45 days. A screen doing this arithmetic itself would
+    // have said 19 November.
+    await expect(pending).toContainText(`4 Nov ${YEAR}`);
+    await expect(pending).toContainText('nothing to open until then');
+
+    // Nothing to open, and nothing to raise — the trap this slice avoids.
+    await expect(detail.getByRole('button', { name: /Open job/ })).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: /Raise/i })).toHaveCount(0);
+    await expect(pending).toContainText('off-plan call-out');
+  });
+
+  /**
+   * The consistency the grid already keeps about its adjust form, applied to
+   * the job: only `next_due_on` is stored, so only that visit can have a job.
+   * The rule below HAS one — for its stored date — and the later cell on the
+   * same line must not borrow it.
+   */
+  test('a projected visit does not borrow the stored visit’s job', async ({ page, server }) => {
+    const machine = server.seedAsset({
+      code: 'EP07',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.epoxy,
+    });
+    const job = server.seedGeneratedJob({
+      assetDocumentId: doc.id,
+      frequency: 'M3',
+      dueOn: `${YEAR}-09-17`,
+      assetCode: 'EP07',
+    });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+
+    // The stored visit (WW38) carries the job...
+    await page.getByRole('button', { name: /EP07.*WW38/ }).click();
+    await expect(
+      page.getByTestId('planner-detail').getByRole('button', { name: /Open job/ }),
+    ).toBeVisible();
+
+    // ...and the quarterly projection three months on (17 December, WW51)
+    // does not, and says so rather than going quiet.
+    await page.getByRole('button', { name: /EP07.*WW51/ }).click();
+    const detail = page.getByTestId('planner-detail');
+    await expect(detail.getByRole('button', { name: /Open job/ })).toHaveCount(0);
+    await expect(detail.getByTestId('visit-job-projected')).toContainText('none possible yet');
+    await expect(detail).not.toContainText(job.jobNumber);
+  });
+
+  /**
    * Review I-2. A rule whose stored date fell in an earlier year still
    * projects visits into this one, so its row looks ordinary — it must not be
    * the only silent line on the plan, and the alert must be reachable.
@@ -387,5 +524,148 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
 
     await banner.getByRole('button', { name: 'Machine schedules' }).click();
     await expect(page.getByRole('heading', { name: 'Machine schedules' })).toBeVisible();
+  });
+
+  /**
+   * E-19 (slice 32-PLANNERJOB) — WHO DOES THE WORK, at both levels.
+   *
+   * The owner's ask ("allow the assigning or change assigning later") is
+   * really two things, and this walks both from one panel: set who NORMALLY
+   * does a machine's PM, then cover a single occurrence for somebody who is
+   * away — and prove that neither wrote the other's column.
+   */
+  test('a planner sets who normally does the PM, then covers one visit without changing the plan', async ({
+    page,
+    server,
+  }) => {
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+    });
+    const job = server.seedGeneratedJob({
+      assetDocumentId: doc.id,
+      frequency: 'M1',
+      dueOn: `${YEAR}-09-17`,
+      assetCode: 'AW01',
+    });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+    const detail = page.getByTestId('planner-detail');
+    // Two named levels, so a planner can see which one they are about to touch.
+    await expect(detail.getByRole('heading', { name: 'Who normally does this' })).toBeVisible();
+    await expect(detail.getByRole('heading', { name: 'Who is doing this one' })).toBeVisible();
+
+    // ---- level 1: THE PLAN. Nobody today — the state all 220 rules are in.
+    await expect(detail.getByTestId('default-assignee-none')).toContainText(
+      'invisible to the technician who should do it',
+    );
+    await detail.getByRole('button', { name: /Set who normally does/ }).click();
+
+    const planForm = page.getByRole('form', { name: /Set who normally does/ });
+    await expect(planForm).toContainText('This is the PLAN');
+    await expect(planForm).toContainText('does NOT change any job already raised');
+    // The picker offers only people the server would accept — the technician
+    // (MAINTAINER) is there; the auditor and doc controller are not.
+    await expect(planForm.getByRole('option')).toContainText([
+      'Nobody — jobs will generate unassigned',
+      'Test Technician (MAINTAINER)',
+    ]);
+    await planForm.getByLabel('Technician').selectOption({ value: E2E_USERS.technician.id });
+    await planForm.getByRole('button', { name: 'Save who normally does this' }).click();
+
+    await expect(page.getByText(/now normally does/)).toBeVisible();
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+    await expect(detail.getByTestId('default-assignee-name')).toContainText('Test Technician');
+
+    // The plan changed; the job that already exists did NOT move.
+    await expect(detail.getByTestId('job-assignee-none')).toBeVisible();
+
+    // ---- level 2: THIS OCCURRENCE. Somebody else covers it.
+    await detail.getByRole('button', { name: new RegExp(`Assign job ${job.jobNumber}`) }).click();
+    const jobForm = page.getByRole('form', { name: new RegExp(`Assign job ${job.jobNumber}`) });
+    await expect(jobForm).toContainText('THIS JOB ONLY');
+    await expect(jobForm).toContainText('does NOT change who normally does this maintenance');
+    await jobForm.getByLabel('Technician').selectOption({ value: E2E_USERS.teamLeader.id });
+    await jobForm.getByRole('button', { name: 'Assign this job' }).click();
+
+    await expect(page.getByText(`Job ${job.jobNumber} assigned.`)).toBeVisible();
+
+    // THE WHOLE POINT: two different answers, both true, neither overwritten.
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+    await expect(detail.getByTestId('default-assignee-name')).toContainText('Test Technician');
+    await expect(detail.getByTestId('job-assignee-name')).toContainText('Test Team Leader');
+  });
+
+  /**
+   * The lapse. A standing assignee set while they were eligible, who then
+   * loses it — the next sweep raises the job UNASSIGNED rather than refusing,
+   * so the planner has to be told BEFORE that happens.
+   */
+  test('warns when the standing assignee can no longer be assigned to that machine', async ({
+    page,
+    server,
+  }) => {
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+    });
+    const rule = server.scheduleRuleFor(doc.id, 'M1');
+    server.setRuleDefaultAssignee(rule.id, E2E_USERS.technician.id);
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+    // While still eligible, nothing is claimed.
+    await expect(page.getByTestId('default-assignee-lapsed')).toHaveCount(0);
+
+    // The technician leaves the company.
+    server.deactivateUser(E2E_USERS.technician.id);
+    await page.reload();
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+    const warning = page.getByTestId('default-assignee-lapsed');
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText('Test Technician');
+    await expect(warning).toContainText('will arrive UNASSIGNED');
+  });
+
+  test('a maintainer sees who holds the work but is offered no way to change it', async ({
+    page,
+    server,
+  }) => {
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+    });
+    const rule = server.scheduleRuleFor(doc.id, 'M1');
+    server.setRuleDefaultAssignee(rule.id, E2E_USERS.technician.id);
+
+    await signInAs(page, E2E_USERS.technician.email);
+    await page.goto('/planner');
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+    const detail = page.getByTestId('planner-detail');
+    await expect(detail.getByTestId('default-assignee-name')).toContainText('Test Technician');
+    // Reading the plan is not planning it.
+    await expect(detail.getByRole('button', { name: /who normally does/ })).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: /Assign job/ })).toHaveCount(0);
   });
 });

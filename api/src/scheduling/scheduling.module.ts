@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AssignableUserModule } from '../jobs/assignable-user.module';
 import { AssetScheduleController } from './asset-schedule.controller';
 import { AssetScheduleService } from './asset-schedule.service';
 import { CompletionCascadeService } from './completion-cascade.service';
@@ -22,6 +23,13 @@ import { VoidScheduleRecomputeService } from './void-schedule-recompute.service'
  * `CommonModule`/`AuditModule` (see `app.module.ts`) — not re-declared here.
  */
 @Module({
+  // `AssignableUserModule`: slice 32-PLANNERJOB. A `schedule_rule` can now
+  // carry a STANDING assignee, which the planner sets and
+  // `JobGenerationService` applies at generation time — both against the same
+  // rule `POST /jobs/{jobId}/assign` enforces. It is its own module precisely
+  // so this can reach it: `JobsModule` imports THIS module (slice 15-SYSWIRE),
+  // so importing `JobsModule` back would be a cycle.
+  imports: [AssignableUserModule],
   controllers: [AssetScheduleController, PlannerScheduleController],
   providers: [
     AssetScheduleService,

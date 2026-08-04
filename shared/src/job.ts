@@ -387,6 +387,39 @@ export const assignJobRequestSchema = z.object({
 });
 export type AssignJobRequest = z.infer<typeof assignJobRequestSchema>;
 
+/**
+ * `GET /jobs/{jobId}/assignable-users` — slice 32-PLANNERJOB.
+ *
+ * WHY THIS ENDPOINT EXISTS. `POST /jobs/{jobId}/assign` is open to
+ * PLANNER/TEAM_LEADER/ENGINEER/ADMIN, but `GET /users` is `@Roles('ADMIN')`,
+ * so three of the four roles that may assign had no way to find out WHO they
+ * could assign to. A picker built on a list those callers cannot read is not a
+ * picker; a picker built on a list that is not filtered the server's way is
+ * worse — it offers people the server will refuse with a 422 the planner can
+ * do nothing about.
+ *
+ * So this returns exactly the users `AssignmentService#assertAssignableUser`
+ * would accept FOR THIS JOB: active, holding a result-recording role
+ * (MAINTAINER/TEAM_LEADER/ENGINEER — API_SPECIFICATION.md §4.1), and area-
+ * scoped to reach the job's own area. The same service owns both the list and
+ * the check, so they cannot drift.
+ *
+ * DELIBERATELY NARROWER THAN `User`. Name and roles are what a planner needs
+ * to choose; email and employee id are personal data this caller has no reason
+ * to receive, and `GET /users` stays the ADMIN-only place they live.
+ */
+export const assignableUserSchema = z.object({
+  id: z.string().uuid(),
+  fullName: z.string(),
+  /**
+   * The result-recording roles this user holds — the reason they are on the
+   * list. Sent so the picker can say WHY someone is offered, rather than
+   * presenting a bare list of names a planner has to know by heart.
+   */
+  roles: z.array(z.string()),
+});
+export type AssignableUser = z.infer<typeof assignableUserSchema>;
+
 /** `POST /jobs/{id}/return` request body — PR-074/INV-13, reason mandatory, >= 10 chars. */
 export const returnJobRequestSchema = z.object({
   reason: z.string().trim().min(10, 'reason must be at least 10 characters (INV-13, PR-074).'),

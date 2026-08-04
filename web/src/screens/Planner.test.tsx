@@ -23,12 +23,19 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 const listAssetTypes = vi.fn();
 const listAllPlannerSchedule = vi.fn();
 const adjustAssetSchedule = vi.fn();
+// Slice 32-PLANNERJOB — the assignment surface.
+const listAssignableUsers = vi.fn();
+const setScheduleDefaultAssignee = vi.fn();
+const assignJob = vi.fn();
 const navigate = vi.fn();
 
 vi.mock('../api/admin-client', () => ({
   listAssetTypes: (...args: unknown[]) => listAssetTypes(...args),
   listAllPlannerSchedule: (...args: unknown[]) => listAllPlannerSchedule(...args),
   adjustAssetSchedule: (...args: unknown[]) => adjustAssetSchedule(...args),
+  listAssignableUsers: (...args: unknown[]) => listAssignableUsers(...args),
+  setScheduleDefaultAssignee: (...args: unknown[]) => setScheduleDefaultAssignee(...args),
+  assignJob: (...args: unknown[]) => assignJob(...args),
 }));
 vi.mock('../router', () => ({ useRouter: () => ({ navigate, path: '/planner' }) }));
 
@@ -72,8 +79,35 @@ function rule(overrides: Partial<PlannerScheduleRow> = {}): PlannerScheduleRow {
     active: true,
     plannedDates: [`${YEAR}-03-19`, `${YEAR}-06-19`, `${YEAR}-09-19`, `${YEAR}-12-19`],
     cascadeFrequencies: ['M1', 'M3'],
+    // Slice 32-PLANNERJOB. The DEFAULT fixture has no job: the pinned clock is
+    // 3 August and the next due date is 19 March, which the server would only
+    // ever report a job for if one had actually been raised. Every existing
+    // assertion in this file therefore keeps meeting the "no job" branch,
+    // which is the honest default for a rule that has not reached its
+    // generation window.
+    nextDueJob: null,
+    // Slice 32-PLANNERJOB — no standing assignee, which is the state every one
+    // of the plant's 220 rules is in today: jobs generate unassigned.
+    defaultAssignee: null,
+    // 30 days before 19 March — the default lead time, as the server computes
+    // it. Never re-derived here; the client cannot know the lead time.
+    jobGenerationOpensOn: `${YEAR}-02-17`,
     ...overrides,
   };
+}
+
+/** A rule whose stored next-due visit HAS a generated job. */
+function ruleWithJob(overrides: Partial<PlannerScheduleRow> = {}): PlannerScheduleRow {
+  return rule({
+    nextDueJob: {
+      id: 'job-1',
+      jobNumber: 'PM-2026-000123',
+      status: 'SCHEDULED',
+      assignedTo: null,
+      assignedToName: null,
+    },
+    ...overrides,
+  });
 }
 
 function seed(rows: PlannerScheduleRow[] = [rule()], roles = ['PLANNER']) {
@@ -85,6 +119,20 @@ function seed(rows: PlannerScheduleRow[] = [rule()], roles = ['PLANNER']) {
   listAllPlannerSchedule.mockResolvedValue({ ok: true, status: 200, value: rows });
   getCurrentUser.mockReturnValue({ id: 'u-1', fullName: 'Pat Planner', roles });
   onCurrentUserChange.mockReturnValue(() => {});
+  // The candidate list the SERVER filters — never filtered again here. It is
+  // the same list for both assignment levels, because the server judges both
+  // against the same machine's area.
+  listAssignableUsers.mockResolvedValue({
+    ok: true,
+    status: 200,
+    value: {
+      data: [
+        { id: 'tech-1', fullName: 'Sam Maintainer', roles: ['MAINTAINER'] },
+        { id: 'tech-2', fullName: 'Bo Engineer', roles: ['ENGINEER'] },
+      ],
+      page: { hasMore: false, nextCursor: null, limit: 100 },
+    },
+  });
 }
 
 beforeEach(() => {
@@ -518,6 +566,235 @@ describe('Planner — selecting a cell, and the one editable date', () => {
   });
 });
 
+/**
+ * Slice 32-PLANNERJOB — the planner reaches the work.
+ *
+ * The point of these is NOT that a link renders. It is that the link points at
+ * the job the server named for THIS visit, that a visit with no job says so
+ * instead of offering a dead control, and that no path here ever offers to
+ * raise the work by hand — an ad-hoc job carries an empty `frequencyScope`
+ * and cannot advance `schedule_rule.next_due_on`, so a planned visit raised
+ * that way is recorded off-plan AND leaves the schedule permanently overdue.
+ */
+describe('Planner — reaching the job for a visit', () => {
+  async function openNextDue(rows: PlannerScheduleRow[]) {
+    seed(rows);
+    await renderGrid();
+    fireEvent.click(screen.getByRole('button', { name: /WW12/ }));
+    return screen.findByTestId('planner-detail');
+  }
+
+  it('offers the job the server named for this visit, and opens THAT job', async () => {
+    const detail = await openNextDue([ruleWithJob()]);
+
+    const open = within(detail).getByRole('button', { name: /Open job PM-2026-000123/ });
+    // Named in the visible label too, not only in the accessible name — a
+    // planner about to leave the plan should see which record they are opening.
+    expect(open).toHaveTextContent('PM-2026-000123');
+
+    fireEvent.click(open);
+    // The id the server sent, not one re-derived from the machine or the date.
+    expect(navigate).toHaveBeenCalledWith('/jobs/job-1');
+  });
+
+  it('opens the right job when two documents on one machine are both due that week', async () => {
+    // The exact case a "nearest job on this machine" match would get wrong:
+    // one machine, two documents, two rules, two jobs, same due date.
+    const wireBond = ruleWithJob({
+      id: 'rule-wb',
+      assetDocumentId: 'doc-wb',
+      documentNumber: 'CE 95 020 00 03',
+      frequency: 'M3',
+      nextDueJob: {
+        id: 'job-wb',
+        jobNumber: 'PM-2026-000111',
+        status: 'SCHEDULED',
+        assignedTo: null,
+        assignedToName: null,
+      },
+    });
+    const phMeter = ruleWithJob({
+      id: 'rule-ph',
+      assetDocumentId: 'doc-ph',
+      documentNumber: 'CE 95 012 00 01',
+      documentTitle: 'pH Meter Check',
+      frequency: 'M1',
+      nextDueJob: {
+        id: 'job-ph',
+        jobNumber: 'PM-2026-000222',
+        status: 'ASSIGNED',
+        assignedTo: null,
+        assignedToName: null,
+      },
+    });
+    seed([wireBond, phMeter]);
+    await renderGrid();
+
+    // Two lines under one machine code, so each cell is unambiguous.
+    fireEvent.click(screen.getByRole('button', { name: /CE 95 012 00 01.*WW12/ }));
+    const detail = await screen.findByTestId('planner-detail');
+    fireEvent.click(within(detail).getByRole('button', { name: /Open job PM-2026-000222/ }));
+    expect(navigate).toHaveBeenCalledWith('/jobs/job-ph');
+    expect(navigate).not.toHaveBeenCalledWith('/jobs/job-wb');
+  });
+
+  it('states the job’s status in words, never as a colour (A-05)', async () => {
+    const detail = await openNextDue([
+      ruleWithJob({
+        nextDueJob: {
+          id: 'job-1',
+          jobNumber: 'PM-2026-000123',
+          status: 'IN_PROGRESS',
+          assignedTo: null,
+          assignedToName: null,
+        },
+      }),
+    ]);
+    // The server's own vocabulary, verbatim — this is a controlled-document
+    // system and the screen must agree with the audit trail word for word.
+    expect(within(detail).getByText('IN_PROGRESS')).toBeInTheDocument();
+  });
+
+  it('names the date the scheduler will raise it — the server’s, not one it worked out', async () => {
+    seed([
+      rule({
+        nextDueOn: `${YEAR}-12-19`,
+        plannedDates: [`${YEAR}-12-19`],
+        // 45 days before the due date, DELIBERATELY not the 30 a client might
+        // be tempted to assume: the lead time is per machine type over a
+        // server-configured default, so a screen that computed this itself
+        // would be wrong for exactly the families that are not the default.
+        jobGenerationOpensOn: `${YEAR}-11-04`,
+      }),
+    ]);
+    await renderGrid();
+    fireEvent.click(screen.getByRole('button', { name: /WW51/ }));
+
+    const pending = await screen.findByTestId('visit-job-pending');
+    expect(pending).toHaveTextContent(`4 Nov ${YEAR}`);
+    expect(pending).toHaveTextContent(/nothing to open until then/);
+    // No number of days is asserted anywhere in the copy.
+    expect(pending.textContent).not.toMatch(/\d+ days/);
+  });
+
+  it('does not claim a job is coming when the window has already passed and none was raised', async () => {
+    const detail = await openNextDue([
+      // Due 19 March, generation opened 17 February — both behind the pinned
+      // 3 August. A sweep has had every chance; something is wrong, and
+      // "it will appear" would leave a planner watching a cell that never fills.
+      rule({ plannedDates: [`${YEAR}-03-19`] }),
+    ]);
+
+    const stalled = within(detail).getByTestId('visit-job-overdue-generation');
+    expect(stalled).toHaveTextContent(`17 Feb ${YEAR}`);
+    expect(stalled).toHaveTextContent(/no current revision, or no active items/);
+    expect(within(detail).queryByTestId('visit-job-pending')).toBeNull();
+  });
+
+  /**
+   * THE TRAP THIS SLICE EXISTS TO AVOID. `POST /jobs/adhoc` creates a job with
+   * an EMPTY `frequencyScope`, which is what makes it structurally incapable
+   * of advancing `schedule_rule.next_due_on`. Using it for a planned visit
+   * would record the work off-plan AND leave this rule overdue for ever.
+   */
+  it('never offers to raise a planned visit by hand, and says why', async () => {
+    const detail = await openNextDue([
+      rule({
+        nextDueOn: `${YEAR}-12-19`,
+        plannedDates: [`${YEAR}-12-19`, `${YEAR}-03-19`],
+        jobGenerationOpensOn: `${YEAR}-11-19`,
+      }),
+    ]);
+    expect(within(detail).queryByRole('button', { name: /Raise/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /WW51/ }));
+    const pending = await screen.findByTestId('visit-job-pending');
+    expect(pending).toHaveTextContent(/would not advance the next due date/);
+    expect(pending).toHaveTextContent(/off-plan call-out/);
+  });
+
+  /**
+   * The consistency the brief asks for: the grid already refuses the adjust
+   * form on a projected cell because only `nextDueOn` is stored. The same fact
+   * decides the job — generation reads `next_due_on` and nothing else.
+   */
+  it('says a projected visit has no job and cannot have one, alongside the same refusal to move it', async () => {
+    seed([ruleWithJob()]);
+    await renderGrid();
+    fireEvent.click(screen.getByRole('button', { name: /WW38/ }));
+
+    const detail = await screen.findByTestId('planner-detail');
+    // The rule DOES carry a job — for its stored March date. The September
+    // projection must not borrow it.
+    expect(within(detail).queryByRole('button', { name: /Open job/ })).toBeNull();
+    expect(within(detail).getByTestId('visit-job-projected')).toBeInTheDocument();
+    // ...and the existing "cannot be moved on its own" refusal is still there,
+    // so the two limits are stated from the same fact rather than disagreeing.
+    expect(detail).toHaveTextContent(/Projected, not stored/);
+  });
+
+  it('offers the job to a role that cannot adjust the schedule — reading work is not planning it', async () => {
+    seed([ruleWithJob()], ['MAINTAINER']);
+    await renderGrid();
+    fireEvent.click(screen.getByRole('button', { name: /WW12/ }));
+
+    const detail = await screen.findByTestId('planner-detail');
+    expect(within(detail).getByRole('button', { name: /Open job PM-2026-000123/ })).toBeVisible();
+    expect(within(detail).queryByRole('button', { name: /Move next due date/ })).toBeNull();
+  });
+
+  /**
+   * The past-due banner used to assert flatly that the visit "has already
+   * raised one job". With `nextDueJob` the screen can check, and the whole
+   * warning — what saving a new date leaves behind — turns on which it is.
+   */
+  describe('the past-due warning no longer asserts a job it cannot see', () => {
+    const overdue = (overrides: Partial<PlannerScheduleRow> = {}) =>
+      rule({
+        nextDueOn: `${YEAR}-01-05`,
+        plannedDates: [`${YEAR}-01-05`],
+        jobGenerationOpensOn: `${YEAR - 1}-12-06`,
+        ...overrides,
+      });
+
+    it('names the job that is really open, when there is one', async () => {
+      seed([
+        overdue({
+          nextDueJob: {
+            id: 'job-1',
+            jobNumber: 'PM-2026-000123',
+            status: 'SCHEDULED',
+            assignedTo: null,
+            assignedToName: null,
+          },
+        }),
+      ]);
+      await renderGrid();
+      fireEvent.click(screen.getByRole('button', { name: /WW01/ }));
+
+      const detail = await screen.findByTestId('planner-detail');
+      const banner = within(detail).getByRole('alert');
+      expect(banner).toHaveTextContent('Job PM-2026-000123 is already open at this date');
+      expect(banner).toHaveTextContent(/raises a SECOND job at the new date/);
+    });
+
+    it('does not invent one when the scheduler raised nothing', async () => {
+      seed([overdue()]);
+      await renderGrid();
+      fireEvent.click(screen.getByRole('button', { name: /WW01/ }));
+
+      const detail = await screen.findByTestId('planner-detail');
+      const banner = within(detail).getByRole('alert');
+      expect(banner).toHaveTextContent('No job has been raised for it');
+      // The old, unconditional claim must not come back: it was false for a
+      // document with no current revision and for a plant whose sweep is down.
+      expect(banner.textContent).not.toMatch(/has already raised one job/);
+      // And the consequence stated matches: nothing is stranded at the old date.
+      expect(banner).toHaveTextContent(/moves the whole rule cleanly/);
+    });
+  });
+});
+
 describe('Planner — the write goes through the shared editor, not a second copy', () => {
   async function openEditor() {
     await renderGrid();
@@ -725,6 +1002,430 @@ describe('Planner — the year', () => {
           `No maintenance is planned in ${YEAR} for this machine type`,
         ),
       );
+    });
+  });
+});
+
+/**
+ * Slice 32-PLANNERJOB — WHO DOES THE WORK, at two levels.
+ *
+ * The owner asked for one thing ("allow the assigning or change assigning
+ * later") that is really two, and conflating them is the defect these pin:
+ *
+ *   THE PLAN — `schedule_rule.default_assignee_id`. Who future generated jobs
+ *   go to. Must not touch work already raised.
+ *   THIS OCCURRENCE — `job.assigned_to`. Who is doing the job that exists.
+ *   Must not write back to the plan.
+ *
+ * A planner covering one visit because somebody is on leave must not silently
+ * rewrite who normally does that machine's maintenance — and vice versa. The
+ * independence is structural (two endpoints, two columns), so what is worth
+ * testing here is that the SCREEN keeps them apart and says which is which.
+ */
+describe('Planner — assigning the work', () => {
+  const withJob = (overrides: Partial<PlannerScheduleRow> = {}) =>
+    rule({
+      nextDueJob: {
+        id: 'job-1',
+        jobNumber: 'PM-2026-000123',
+        status: 'SCHEDULED',
+        assignedTo: null,
+        assignedToName: null,
+      },
+      ...overrides,
+    });
+
+  async function openVisit(rows: PlannerScheduleRow[], roles = ['PLANNER']) {
+    seed(rows, roles);
+    await renderGrid();
+    fireEvent.click(screen.getByRole('button', { name: /WW12/ }));
+    return screen.findByTestId('planner-detail');
+  }
+
+  describe('the two levels are told apart', () => {
+    it('shows both, each under its own heading', async () => {
+      const detail = await openVisit([
+        withJob({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+          nextDueJob: {
+            id: 'job-1',
+            jobNumber: 'PM-2026-000123',
+            status: 'ASSIGNED',
+            assignedTo: 'tech-2',
+            assignedToName: 'Bo Engineer',
+          },
+        }),
+      ]);
+
+      expect(within(detail).getByRole('heading', { name: 'Who normally does this' })).toBeVisible();
+      expect(within(detail).getByRole('heading', { name: 'Who is doing this one' })).toBeVisible();
+      // The plan says Sam; this occurrence says Bo. Two answers, both true.
+      expect(within(detail).getByTestId('default-assignee-name')).toHaveTextContent(
+        'Sam Maintainer',
+      );
+      expect(within(detail).getByTestId('job-assignee-name')).toHaveTextContent('Bo Engineer');
+    });
+
+    it('each control says what it affects BEFORE a name is chosen', async () => {
+      const detail = await openVisit([
+        withJob({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
+      ]);
+
+      fireEvent.click(within(detail).getByRole('button', { name: /Change who normally does/ }));
+      const planForm = await screen.findByRole('form', { name: /Set who normally does/ });
+      expect(planForm).toHaveTextContent(/This is the PLAN/);
+      expect(planForm).toHaveTextContent(/does NOT change any job already raised/);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      fireEvent.click(within(detail).getByRole('button', { name: /Assign job PM-2026-000123/ }));
+      const jobForm = await screen.findByRole('form', { name: /Assign job PM-2026-000123/ });
+      expect(jobForm).toHaveTextContent(/THIS JOB ONLY/);
+      expect(jobForm).toHaveTextContent(/does NOT change who normally does this maintenance/);
+    });
+  });
+
+  describe('changing the plan', () => {
+    it('writes the schedule rule and nothing else', async () => {
+      setScheduleDefaultAssignee.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: {
+          scheduleRuleId: 'rule-1',
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        },
+      });
+      const detail = await openVisit([withJob()]);
+
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+      fireEvent.change(screen.getByLabelText('Technician'), { target: { value: 'tech-1' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save who normally does this' }));
+
+      await waitFor(() =>
+        expect(setScheduleDefaultAssignee).toHaveBeenCalledWith('rule-1', 'tech-1'),
+      );
+      // THE POINT: staffing the plan must not touch the job that already
+      // exists — that job may be started, and moving it would be a different
+      // and much worse feature.
+      expect(assignJob).not.toHaveBeenCalled();
+    });
+
+    it('can return the plan to nobody, and says what that means', async () => {
+      setScheduleDefaultAssignee.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: { scheduleRuleId: 'rule-1', defaultAssignee: null },
+      });
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
+      ]);
+
+      fireEvent.click(within(detail).getByRole('button', { name: /Change who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+      fireEvent.change(screen.getByLabelText('Technician'), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save who normally does this' }));
+
+      await waitFor(() => expect(setScheduleDefaultAssignee).toHaveBeenCalledWith('rule-1', null));
+      expect(await screen.findByText(/will generate unassigned/)).toBeInTheDocument();
+    });
+
+    it('says plainly when nobody is named, and what that costs', async () => {
+      const detail = await openVisit([rule()]);
+      expect(within(detail).getByTestId('default-assignee-none')).toHaveTextContent(
+        /invisible to the technician who should do it/,
+      );
+    });
+
+    /**
+     * THE WARNING THIS SLICE MOST NEEDED. Eligibility lapses silently — a
+     * technician leaves, a role is revoked, an area scope is narrowed — and
+     * the next sweep then raises the job UNASSIGNED without refusing. Unseen,
+     * that is work nobody is holding and nobody can see.
+     */
+    it('warns when the standing assignee can no longer be assigned here', async () => {
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: {
+            id: 'tech-1',
+            fullName: 'Sam Maintainer',
+            eligibility: 'not-assignable',
+          },
+        }),
+      ]);
+
+      const warning = within(detail).getByTestId('default-assignee-lapsed');
+      expect(warning).toHaveTextContent('Sam Maintainer');
+      expect(warning).toHaveTextContent(/will arrive UNASSIGNED/);
+      // An alert, because it is a state nobody asked to be in and nothing else
+      // on the screen would reveal.
+      expect(warning).toHaveAttribute('role', 'alert');
+    });
+
+    /**
+     * REVIEW FINDING — "could not check" must not wear the accusation. The
+     * lapsed message names a person and says they lost their role; showing it
+     * because a lookup failed would send a planner to replace somebody who
+     * never did anything wrong.
+     */
+    it('says the check did not complete, WITHOUT accusing anyone, when eligibility is unknown', async () => {
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'unknown' },
+        }),
+      ]);
+
+      const unknown = within(detail).getByTestId('default-assignee-unknown');
+      expect(unknown).toHaveTextContent(/Could not check/);
+      expect(unknown).toHaveTextContent(/not a finding about them/);
+      expect(unknown).toHaveTextContent(/standing assignment is intact/);
+      // The accusing banner must NOT be shown, and its wording must not leak
+      // into this one.
+      expect(within(detail).queryByTestId('default-assignee-lapsed')).toBeNull();
+      expect(unknown.textContent).not.toMatch(/can no longer be assigned/);
+      expect(unknown.textContent).not.toMatch(/lost its maintainer/);
+      // `status`, not `alert`: nothing has gone wrong with the PLAN, so it must
+      // not interrupt the way a real lapse does.
+      expect(unknown).toHaveAttribute('role', 'status');
+    });
+
+    it('still names the person, so a planner knows which assignment was unverified', async () => {
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'unknown' },
+        }),
+      ]);
+      expect(within(detail).getByTestId('default-assignee-name')).toHaveTextContent(
+        'Sam Maintainer',
+      );
+      expect(within(detail).getByTestId('default-assignee-unknown')).toHaveTextContent(
+        'Sam Maintainer',
+      );
+    });
+
+    it('says nothing of the sort while the assignee is still eligible', async () => {
+      const detail = await openVisit([
+        rule({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
+      ]);
+      expect(within(detail).queryByTestId('default-assignee-lapsed')).toBeNull();
+    });
+  });
+
+  describe('assigning this occurrence', () => {
+    it('writes the job and nothing else', async () => {
+      assignJob.mockResolvedValue({ ok: true, status: 200, value: {} });
+      const detail = await openVisit([
+        withJob({
+          defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+        }),
+      ]);
+
+      fireEvent.click(within(detail).getByRole('button', { name: /Assign job PM-2026-000123/ }));
+      await screen.findByRole('form', { name: /Assign job PM-2026-000123/ });
+      fireEvent.change(screen.getByLabelText('Technician'), { target: { value: 'tech-2' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Assign this job' }));
+
+      await waitFor(() => expect(assignJob).toHaveBeenCalledWith('job-1', 'tech-2'));
+      // THE POINT, mirrored: covering one visit must not rewrite the plan.
+      expect(setScheduleDefaultAssignee).not.toHaveBeenCalled();
+    });
+
+    it('says when a job exists but nobody holds it', async () => {
+      const detail = await openVisit([withJob()]);
+      expect(within(detail).getByTestId('job-assignee-none')).toHaveTextContent(
+        /nobody can see this work at all/,
+      );
+    });
+
+    it('offers no "nobody" option — a job cannot be un-assigned', async () => {
+      const detail = await openVisit([withJob()]);
+      fireEvent.click(within(detail).getByRole('button', { name: /Assign job/ }));
+      await screen.findByRole('form', { name: /Assign job/ });
+
+      const options = within(screen.getByLabelText('Technician')).getAllByRole('option');
+      expect(options[0]).toHaveTextContent('Choose a technician…');
+      expect(options.map((o) => o.textContent)).not.toContain(
+        expect.stringContaining('generate unassigned'),
+      );
+      // ...and Save stays shut until a real person is chosen, so the 422 on a
+      // missing `assigneeId` is unreachable.
+      expect(screen.getByRole('button', { name: 'Assign this job' })).toBeDisabled();
+    });
+
+    /**
+     * `job-state-machine.ts` allows ASSIGN only from SCHEDULED/ASSIGNED/
+     * IN_PROGRESS. A control on a SUBMITTED job would collect a 409
+     * `invalid-transition` the planner can do nothing about.
+     */
+    it.each(['SUBMITTED', 'ARCHIVED', 'VOIDED'])(
+      'offers no reassign control on a %s job, and says why',
+      async (status) => {
+        const detail = await openVisit([
+          withJob({
+            nextDueJob: {
+              id: 'job-1',
+              jobNumber: 'PM-2026-000123',
+              status: status as PlannerScheduleRow['nextDueJob'] extends null ? never : 'SUBMITTED',
+              assignedTo: 'tech-2',
+              assignedToName: 'Bo Engineer',
+            },
+          }),
+        ]);
+
+        expect(within(detail).queryByRole('button', { name: /Reassign this job/ })).toBeNull();
+        expect(within(detail).getByTestId('job-assignee-locked')).toHaveTextContent(status);
+      },
+    );
+
+    it('does offer it on an IN_PROGRESS job — that is the deactivated-assignee recovery path', async () => {
+      const detail = await openVisit([
+        withJob({
+          nextDueJob: {
+            id: 'job-1',
+            jobNumber: 'PM-2026-000123',
+            status: 'IN_PROGRESS',
+            assignedTo: 'tech-2',
+            assignedToName: 'Bo Engineer',
+          },
+        }),
+      ]);
+      expect(within(detail).getByRole('button', { name: /Reassign job/ })).toBeVisible();
+    });
+  });
+
+  describe('the picker only ever offers what the server will accept', () => {
+    it('asks the server per RULE, and never filters the answer itself', async () => {
+      const detail = await openVisit([withJob()]);
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+
+      // Keyed by the rule, because the rule exists before the job does — a
+      // visit still awaiting generation needs a picker too.
+      expect(listAssignableUsers).toHaveBeenCalledWith('rule-1');
+      // Every row the server returned is offered, with the roles that put them
+      // there. Nothing is dropped locally: the rule spans three tables and a
+      // client-side guess would go stale.
+      const options = within(screen.getByLabelText('Technician')).getAllByRole('option');
+      expect(options.map((o) => o.textContent)).toEqual([
+        'Nobody — jobs will generate unassigned',
+        'Sam Maintainer (MAINTAINER)',
+        'Bo Engineer (ENGINEER)',
+      ]);
+    });
+
+    it('uses ONE list for both levels — they cannot disagree about who is eligible', async () => {
+      const detail = await openVisit([withJob()]);
+
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+      const planNames = within(screen.getByLabelText('Technician'))
+        .getAllByRole('option')
+        .map((o) => o.textContent)
+        .slice(1);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      fireEvent.click(within(detail).getByRole('button', { name: /Assign job/ }));
+      await screen.findByRole('form', { name: /Assign job/ });
+      const jobNames = within(screen.getByLabelText('Technician'))
+        .getAllByRole('option')
+        .map((o) => o.textContent)
+        .slice(1);
+
+      expect(jobNames).toEqual(planNames);
+      // The same endpoint answered both — one source, so no drift is possible.
+      expect(listAssignableUsers.mock.calls.every(([id]) => id === 'rule-1')).toBe(true);
+    });
+
+    it('says so when nobody at all can be assigned, naming the three conditions', async () => {
+      const detail = await openVisit([withJob()]);
+      // Overridden AFTER `openVisit` — `seed()` installs the default roster.
+      listAssignableUsers.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: { data: [], page: { hasMore: false, nextCursor: null, limit: 100 } },
+      });
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+
+      const empty = await screen.findByTestId('assignee-none');
+      expect(empty).toHaveTextContent(/active user/);
+      expect(empty).toHaveTextContent(/maintainer, team leader or engineer/);
+      expect(empty).toHaveTextContent(/area scope reaches this machine/);
+    });
+
+    it('admits when the roster is longer than one page rather than offering a silent subset', async () => {
+      const detail = await openVisit([withJob()]);
+      listAssignableUsers.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: {
+          data: [{ id: 'tech-1', fullName: 'Sam Maintainer', roles: ['MAINTAINER'] }],
+          page: { hasMore: true, nextCursor: 'c', limit: 100 },
+        },
+      });
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+      expect(await screen.findByTestId('assignee-truncated')).toHaveTextContent(/more than this/);
+    });
+
+    it('surfaces a server refusal verbatim and keeps the form open', async () => {
+      setScheduleDefaultAssignee.mockResolvedValue({
+        ok: false,
+        status: 422,
+        problem: { title: 'Validation failed', detail: 'The assignee holds no role.' },
+      });
+      const detail = await openVisit([withJob()]);
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+      const form = await screen.findByRole('form', { name: /Set who normally does/ });
+      fireEvent.change(screen.getByLabelText('Technician'), { target: { value: 'tech-1' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save who normally does this' }));
+
+      expect(await within(form).findByRole('alert')).toHaveTextContent(
+        'The assignee holds no role.',
+      );
+      expect(screen.getByRole('form', { name: /Set who normally does/ })).toBeInTheDocument();
+    });
+  });
+
+  describe('a role that may not assign', () => {
+    it('is offered no control at either level — not a disabled one', async () => {
+      const detail = await openVisit(
+        [
+          withJob({
+            defaultAssignee: {
+              id: 'tech-1',
+              fullName: 'Sam Maintainer',
+              eligibility: 'assignable',
+            },
+          }),
+        ],
+        ['MAINTAINER'],
+      );
+      expect(within(detail).queryByRole('button', { name: /who normally does/ })).toBeNull();
+      expect(within(detail).queryByRole('button', { name: /Assign job/ })).toBeNull();
+      // ...but still SEES who holds the work. Reading the plan is not planning.
+      expect(within(detail).getByTestId('default-assignee-name')).toHaveTextContent(
+        'Sam Maintainer',
+      );
+    });
+  });
+
+  describe('a projected visit', () => {
+    it('shows no assignment panel at all', async () => {
+      seed([
+        withJob({ defaultAssignee: { id: 'tech-1', fullName: 'Sam', eligibility: 'assignable' } }),
+      ]);
+      await renderGrid();
+      fireEvent.click(screen.getByRole('button', { name: /WW38/ }));
+
+      const detail = await screen.findByTestId('planner-detail');
+      // The schedule holds one default per RULE, not one per visit; offering
+      // it on a projected cell would invite "set it for December", which the
+      // data cannot express.
+      expect(within(detail).queryByTestId('visit-assignment')).toBeNull();
     });
   });
 });

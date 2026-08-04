@@ -63,6 +63,29 @@ export const EXPECTED_ROUTE_ROLES: Readonly<Record<string, readonly string[]>> =
   // that could reach these before is still listed.
   'POST /api/v1/jobs/adhoc': ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'],
   'POST /api/v1/jobs/{jobId}/assign': ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'],
+  // Slice 32-PLANNERJOB — the two assignment routes on the SCHEDULE surface.
+  // Deliberately the SAME set as `assign` above and as
+  // `PUT /assets/{assetId}/schedule`: deciding when controlled work happens,
+  // deciding who normally does it, and handing one occurrence to someone are
+  // the same planning job. Each is declared in full here rather than sharing a
+  // constant, so a future narrowing of one cannot silently narrow the others.
+  //
+  // Note these are the ONLY role-gated handlers on `/schedule`: the grid read
+  // itself carries no gate (a schedule is not confidential), but a list of the
+  // plant's technicians is not something an AUDITOR or DOC_CONTROLLER has any
+  // reason to receive.
+  'GET /api/v1/schedule/{scheduleRuleId}/assignable-users': [
+    'PLANNER',
+    'TEAM_LEADER',
+    'ENGINEER',
+    'ADMIN',
+  ],
+  'PUT /api/v1/schedule/{scheduleRuleId}/default-assignee': [
+    'PLANNER',
+    'TEAM_LEADER',
+    'ENGINEER',
+    'ADMIN',
+  ],
   'PUT /api/v1/assets/{assetId}/schedule': ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'],
 
   // ---- document tagging (slice 27-ASSETDOC). Deliberately the SAME gate as

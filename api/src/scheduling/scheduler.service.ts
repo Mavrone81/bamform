@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import type { GenerateDueJobsResult } from './job-generation.service';
-import { JobGenerationService } from './job-generation.service';
+import { JobGenerationService, resolveDefaultLeadTimeDays } from './job-generation.service';
 import { ScheduleRuleBootstrapService } from './schedule-rule-bootstrap.service';
 import { SchedulerLockService } from './scheduler-lock.service';
 
@@ -42,11 +42,23 @@ export class SchedulerService {
 
     try {
       await this.bootstrap.ensureForAllActiveAssets();
-      const leadTimeDays = Number(this.config.get('DEFAULT_LEAD_TIME_DAYS') ?? 30);
+      const leadTimeDays = resolveDefaultLeadTimeDays(this.config.get('DEFAULT_LEAD_TIME_DAYS'));
       const result = await this.jobGeneration.generateDueJobs(new Date(), leadTimeDays);
       await this.redis.set(SCHEDULER_LAST_RUN_KEY, new Date().toISOString());
       this.logger.log(
-        `run complete: evaluated=${result.evaluated} generated=${result.generated} alreadyExists=${result.alreadyExists} skippedNoItems=${result.skippedNoItems}`,
+        // Slice 32-PLANNERJOB adds the assignment counters. Both non-zero
+        // cases mean PM went out with NOBODY on it — and an unassigned job is
+        // invisible to every MAINTAINER (`job-access.ts`) — but they call for
+        // DIFFERENT responses, which is why they are counted apart:
+        //   `unavailable`    — the plan is wrong. Name a new assignee.
+        //   `indeterminate`  — the CHECK failed, not the person. Look at the
+        //                      database; the standing assignee is probably
+        //                      still fine and has not been changed.
+        `run complete: evaluated=${result.evaluated} generated=${result.generated} ` +
+          `alreadyExists=${result.alreadyExists} skippedNoItems=${result.skippedNoItems} ` +
+          `assignedFromDefault=${result.assignedFromDefault} ` +
+          `defaultAssigneeUnavailable=${result.defaultAssigneeUnavailable} ` +
+          `defaultAssigneeIndeterminate=${result.defaultAssigneeIndeterminate}`,
       );
       return { ran: true, ...result };
     } finally {

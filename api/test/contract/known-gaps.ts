@@ -218,4 +218,11 @@ export const COLLECTION_ENDPOINTS: readonly CollectionEndpointClassification[] =
       'Slice 31-PLANNER — the cross-machine planner grid. schedule_rule (DBD §6.14) has no areaId column of its own, but schedule_rule.assetDocument.asset.areaId does, so PR-API-10 filtering runs through that relation — the same shape GET /jobs already scopes through job.asset.areaId. This one matters more than most: it is the ONLY endpoint that returns rows for every machine in the plant in one response, so a missing filter here would hand a scoped planner the whole site rather than one extra row.',
     sourceFile: 'src/scheduling/planner-schedule.repository.ts',
   },
+  {
+    method: 'GET',
+    path: '/api/v1/schedule/{scheduleRuleId}/assignable-users',
+    areaScoped: false,
+    reason:
+      "Slice 32-PLANNERJOB — who a machine's PM may be given to. app_user (DBD §6.2/6.3) has no areaId column, exactly as GET /users is classified above; user_area_scope is the REVERSE relation. This read IS area-filtered, but by the MACHINE's area against each candidate's own scope (assignable-user.service.ts#list, the SQL form of assertAssignable's rule) — the opposite direction to PR-API-10's applyAreaScope, which filters rows BY the caller's scope, and not expressible by it. The caller's own confidentiality boundary is the SCHEDULE RULE, not the user list: PlannerScheduleService#loadRuleInScope runs first and answers 404 for an unknown rule and 403 out-of-scope for a machine the caller cannot see, so this can only ever be read for a machine they already hold.",
+  },
 ];
