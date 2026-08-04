@@ -77,6 +77,21 @@ export const ORG_REPORTING_ROLES = [
 ];
 export const JOB_RECORD_ROLES = ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'];
 
+/**
+ * Slice 32-PLANNERJOB — the roles that may DECIDE who does maintenance:
+ * `POST /jobs/{jobId}/assign`, `PUT /schedule/{scheduleRuleId}/default-assignee`
+ * and the picker that feeds them.
+ *
+ * NOT a route-annotation list — each of those routes writes its own `@Roles()`
+ * literally, and `route-roles.spec.ts` pins them independently, so a future
+ * narrowing of one cannot silently narrow the others (the same discipline the
+ * banner on `JOB_VIEW_ALL_ROLES` above exists to enforce).
+ *
+ * It is used for ONE decision: whether `GET /schedule` includes decrypted
+ * technician NAMES. See `planner-schedule.service.ts#list`.
+ */
+export const JOB_ASSIGNMENT_ROLES = ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'];
+
 export interface JobAccessContext {
   userId: string;
   roles: string[];

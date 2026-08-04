@@ -60,11 +60,24 @@
 --     ISO problem, not a staffing one. Silence would be worse still, which is
 --     why the trace is in the audit chain and in the sweep's own counters.
 --
--- ON DELETE is deliberately absent (RESTRICT, the default): `app_user` has no
--- delete path anywhere in this system (INV-16 / `grants.sql` revokes DELETE
--- on every table), so a dangling default is unreachable. Deactivation is the
--- removal mechanism, and a deactivated user simply fails the eligibility
--- check above.
+-- ON DELETE / ON UPDATE are deliberately absent, which in Postgres means
+-- NO ACTION on both — NOT `RESTRICT`, which an earlier draft of this comment
+-- claimed. The two differ: RESTRICT refuses immediately, NO ACTION defers to
+-- the end of the statement and so permits a delete-and-reinsert inside one
+-- statement. Neither is reachable here: `app_user` has no delete path
+-- anywhere in this system (INV-16 / `grants.sql` revokes DELETE on every
+-- table), so a dangling default cannot arise. Deactivation is the removal
+-- mechanism, and a deactivated user simply fails the eligibility check above.
+--
+-- KNOWN, ACCEPTED DRIFT from `schema.prisma`: the relation there is declared
+-- without an explicit `onDelete`, and Prisma's default for an OPTIONAL
+-- relation is `SetNull` (`onUpdate: Cascade`), so `prisma migrate diff` will
+-- report this constraint as differing from the schema. Left as-is
+-- deliberately rather than "fixed" in either direction: changing the FK on a
+-- live table is a lock this feature does not need, and `SetNull` would
+-- silently erase a standing assignment on a delete that cannot happen. If the
+-- drift is ever resolved, resolve it by pinning the schema to the database
+-- (`onDelete: NoAction, onUpdate: NoAction`), not the reverse.
 
 ALTER TABLE "schedule_rule"
   ADD COLUMN "default_assignee_id" uuid;

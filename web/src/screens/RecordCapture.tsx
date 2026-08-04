@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { getServices, getSyncUserId } from '../state/services';
 import {
+  bootstrap,
   getCachedJob,
   jobSyncState,
   submitJob,
@@ -472,6 +473,38 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     setDeviceReadFailed(false);
   }, [jobId]);
 
+  /**
+   * Whether this screen currently has NO cached job — the "not cached on this
+   * device" dead end. A ref because the `onSynced` listener below is
+   * subscribed once and would otherwise close over the first render's value.
+   */
+  const jobMissingRef = useRef(false);
+  jobMissingRef.current = cached === undefined;
+
+  /**
+   * FETCHING A JOB THIS DEVICE HAS NEVER SEEN — review finding, and the second
+   * half of the same defect.
+   *
+   * Until slice 32-PLANNERJOB this screen was reachable only from the job
+   * list, which is the ONLY screen that bootstraps. "Not cached on this
+   * device" therefore meant "you have not synced", and telling the reader to
+   * go to the job list was sound advice.
+   *
+   * The planner's "Open job" link broke that assumption: `/planner` never
+   * bootstraps, so a planner who lands there directly — a bookmark, a reload,
+   * a shared link — has an empty cache, and every job they open dead-ends on a
+   * banner telling them to go somewhere else. Worse, it is a RACE for anyone
+   * who signs in and navigates promptly, which is why the E-18 journey was
+   * flaky locally and consistently red on CI's slower machines.
+   *
+   * So the screen now does what the banner was asking the reader to do: if the
+   * job is not here and we are online, bootstrap once and look again. Once per
+   * job id (`recoveryAttemptedFor`), so a job that genuinely is not the
+   * caller's cannot loop.
+   */
+  const [fetchingMissingJob, setFetchingMissingJob] = useState(false);
+  const missingJobFetchAttemptedFor = useRef<string | null>(null);
+
   useEffect(() => {
     void loadCached();
     void refreshState();
@@ -481,13 +514,66 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     window.addEventListener('offline', onOffline);
     // Reflects a drain that completes while this screen is open, even
     // though the drain itself is triggered app-wide in App.tsx, not here.
-    const unsubscribe = onSynced(() => void refreshState());
+    const unsubscribe = onSynced(() => {
+      void refreshState();
+      /*
+       * ...AND re-read the job itself, but ONLY when there isn't one.
+       *
+       * Until slice 32-PLANNERJOB this screen was reachable only from the job
+       * list, which lists jobs that are already cached — so "not cached on
+       * this device" was effectively unreachable and, once shown, harmless to
+       * leave. The planner's new "Open job" link changed that: it navigates
+       * straight to `/jobs/{id}` from a screen that never needed the offline
+       * cache, so a planner who follows it while the first bootstrap is still
+       * in flight arrives before the job does. `refreshState()` alone does not
+       * set `cached`, so the screen stayed on a terminal banner telling them
+       * to "reconnect and sync" while the sync that would fix it had just
+       * finished. Caught by e13's "opens the job" journey, which was flaky
+       * locally and consistently red on CI's slower machines.
+       *
+       * GUARDED ON `cached === undefined`, deliberately. `loadCached` also
+       * rehydrates `itemResults`, `readings` and the title field from the
+       * cached snapshot, so calling it after EVERY sync would overwrite what a
+       * technician has typed with whatever the last bootstrap wrote — the
+       * exact clobbering O-10 exists to prevent. When there is no job on
+       * screen there is nothing to clobber, which is what makes this safe.
+       */
+      if (jobMissingRef.current) void loadCached();
+    });
     return () => {
       unsubscribe();
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
   }, [loadCached, refreshState]);
+
+  useEffect(() => {
+    if (cached !== undefined) return;
+    if (missingJobFetchAttemptedFor.current === jobId) return;
+    missingJobFetchAttemptedFor.current = jobId;
+    // Offline: the banner is the truth, and there is nothing to try.
+    if (!navigator.onLine) return;
+
+    let cancelled = false;
+    setFetchingMissingJob(true);
+    const { db, transport } = getServices();
+    void bootstrap(db, transport)
+      .then(async () => {
+        if (!cancelled) await loadCached();
+      })
+      .catch(() => {
+        // Swallowed deliberately: a failed recovery leaves exactly the state
+        // we were already in, and the banner already says what to do. Telling
+        // the reader that an attempt they never asked for has failed would add
+        // noise, not information.
+      })
+      .finally(() => {
+        if (!cancelled) setFetchingMissingJob(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cached, jobId, loadCached]);
 
   // Slice 31-TITLEBLANK. Same ref-in-cleanup shape as the object-URL effect
   // below, and for the same reason: an unmount-only effect would close over
@@ -1022,6 +1108,20 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       </main>
     );
   }
+  if (cached === undefined && fetchingMissingJob) {
+    // Mid-recovery: do NOT flash "not cached on this device" at somebody while
+    // we are in the middle of fetching it. That banner is an instruction to go
+    // elsewhere, and it would be wrong for as long as this is running.
+    return (
+      <main className="app-shell">
+        <p className="loading-state">
+          <span className="loading-spinner" aria-hidden="true" />
+          Fetching this job…
+        </p>
+      </main>
+    );
+  }
+
   if (cached === undefined) {
     return (
       <main className="app-shell">

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import {
   DEFAULT_LEAD_TIME_DAYS,
   JobGenerationService,
@@ -564,6 +565,69 @@ describe('when the eligibility check cannot be completed', () => {
     expect(result.evaluated).toBe(2);
     expect(result.generated).toBe(2);
     expect(result.defaultAssigneeIndeterminate).toBe(1);
+  });
+
+  /**
+   * REVIEW FINDING — the alarm must not cry wolf.
+   *
+   * The decision runs BEFORE the insert, and the insert is a P2002 no-op on
+   * every sweep for the whole lead-time window (I-INV-14). Counting at
+   * decision time meant one lapsed assignee produced one ERROR line and one
+   * counter increment EVERY sweep — ~700 for a 30-day lead time — and a run
+   * log reading `generated=0 … defaultAssigneeUnavailable=1`, which is
+   * self-contradictory. An alarm that never clears is the same as no alarm,
+   * and the whole "never silently" defence rests on it.
+   */
+  it('announces a lapse ONCE, on the sweep that generated the job — not on every repeat', async () => {
+    const conflict = Object.assign(
+      new Prisma.PrismaClientKnownRequestError('duplicate', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+    const prisma = fakePrisma({
+      rules: [makeRule({ defaultAssigneeId: 'tech-gone' })],
+      activeItems: [{ frequency: 'M6' }],
+      jobCreate: (async () => {
+        throw conflict;
+      }) as never,
+    });
+    const result = await makeService(
+      prisma,
+      fakeAudit(),
+      fakeAssignableUsers('not-assignable'),
+    ).generateDueJobs(new Date('2026-07-24'), 30);
+
+    // The job already existed, so nothing was generated — and therefore
+    // nothing is announced. The counters describe JOBS, not candidate rules.
+    expect(result.alreadyExists).toBe(1);
+    expect(result.generated).toBe(0);
+    expect(result.defaultAssigneeUnavailable).toBe(0);
+    expect(result.assignedFromDefault).toBe(0);
+    expect(result.defaultAssigneeIndeterminate).toBe(0);
+  });
+
+  it('does not count an assigned-from-default job that turned out to already exist', async () => {
+    const conflict = new Prisma.PrismaClientKnownRequestError('duplicate', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    const prisma = fakePrisma({
+      rules: [makeRule({ defaultAssigneeId: 'tech-1' })],
+      activeItems: [{ frequency: 'M6' }],
+      jobCreate: (async () => {
+        throw conflict;
+      }) as never,
+    });
+    const result = await makeService(
+      prisma,
+      fakeAudit(),
+      fakeAssignableUsers('assignable'),
+    ).generateDueJobs(new Date('2026-07-24'), 30);
+
+    // `generated=0 … assignedFromDefault=1` was the self-contradiction on call.
+    expect(result.alreadyExists).toBe(1);
+    expect(result.assignedFromDefault).toBe(0);
   });
 
   /**

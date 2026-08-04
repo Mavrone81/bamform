@@ -13,6 +13,13 @@ export interface AssigneePickerProps {
   /** Pre-selects the person already holding it, so "no change" is visible. */
   currentAssigneeId: string | null;
   /**
+   * The current holder's name, where the caller knows it. Needed because a
+   * LAPSED assignee is NOT in the candidate list — that is what lapsed means —
+   * so without it the select would render blank and " — current" would never
+   * appear, in exactly the recovery case this panel exists to warn about.
+   */
+  currentAssigneeName?: string | null;
+  /**
    * Whether "nobody" is a legal choice. TRUE for the rule's standing assignee
    * (`defaultAssigneeId: null` clears it); FALSE for a job, whose
    * `assignJobRequestSchema` requires a uuid — a job is unassigned by never
@@ -62,6 +69,7 @@ export interface AssigneePickerProps {
 export function AssigneePicker({
   scheduleRuleId,
   currentAssigneeId,
+  currentAssigneeName,
   allowClear,
   label,
   affects,
@@ -98,6 +106,16 @@ export function AssigneePicker({
 
   const fieldId = `assignee-${scheduleRuleId}-${allowClear ? 'default' : 'job'}`;
   const unchanged = (choice || null) === currentAssigneeId;
+  /**
+   * The current holder is missing from the candidates exactly when they can no
+   * longer be assigned here. Shown as a DISABLED option rather than silently
+   * dropped: a planner opening this picker after the lapse warning must see
+   * who is being replaced, and must not be able to re-pick them.
+   */
+  const currentIsLapsed =
+    currentAssigneeId !== null &&
+    candidates !== null &&
+    !candidates.some((user) => user.id === currentAssigneeId);
 
   async function save() {
     setBusy(true);
@@ -122,8 +140,13 @@ export function AssigneePicker({
     >
       {/* Stated ABOVE the control, not below it: the planner has to know which
           of the two levels they are about to change before they choose a name,
-          not after. */}
-      <p className="field-hint">{affects}</p>
+          not after. Referenced by the select's `aria-describedby` so a screen
+          reader hears it as part of the control rather than as loose prose it
+          may never reach — review finding; axe cannot flag a missing
+          association, which is why the a11y suite passed without it. */}
+      <p className="field-hint" id={`${fieldId}-affects`}>
+        {affects}
+      </p>
 
       <div className="field">
         <label htmlFor={fieldId}>Technician</label>
@@ -132,6 +155,16 @@ export function AssigneePicker({
           value={choice}
           onChange={(e) => setChoice(e.target.value)}
           disabled={candidates === null || busy}
+          aria-describedby={
+            [
+              `${fieldId}-affects`,
+              currentIsLapsed ? `${fieldId}-lapsed` : null,
+              candidates !== null && candidates.length === 0 ? `${fieldId}-none` : null,
+              truncated ? `${fieldId}-truncated` : null,
+            ]
+              .filter(Boolean)
+              .join(' ') || undefined
+          }
         >
           {/*
            * The empty option means two different things and must not pretend
@@ -142,6 +175,13 @@ export function AssigneePicker({
           <option value="">
             {allowClear ? 'Nobody — jobs will generate unassigned' : 'Choose a technician…'}
           </option>
+          {/* The lapsed holder, kept visible and unselectable — see
+              `currentIsLapsed`. */}
+          {currentIsLapsed && (
+            <option value={currentAssigneeId} disabled>
+              {currentAssigneeName ?? currentAssigneeId} — current, no longer assignable
+            </option>
+          )}
           {(candidates ?? []).map((user) => (
             <option key={user.id} value={user.id}>
               {user.fullName} ({user.roles.join(', ')})
@@ -155,15 +195,22 @@ export function AssigneePicker({
             Loading who can be assigned…
           </p>
         )}
+        {currentIsLapsed && (
+          <p className="field-hint" id={`${fieldId}-lapsed`} data-testid="assignee-lapsed-current">
+            <span aria-hidden="true">⚠</span> {currentAssigneeName ?? currentAssigneeId} currently
+            holds this but can no longer be assigned to this machine, so they cannot be chosen
+            again. Pick somebody else.
+          </p>
+        )}
         {candidates !== null && candidates.length === 0 && !error && (
-          <p className="field-hint" data-testid="assignee-none">
+          <p className="field-hint" id={`${fieldId}-none`} data-testid="assignee-none">
             <span aria-hidden="true">⚠</span> Nobody can be assigned to this machine. An assignee
             must be an active user holding a maintainer, team leader or engineer role whose area
             scope reaches this machine — check those three before assuming this is a fault.
           </p>
         )}
         {truncated && (
-          <p className="field-hint" data-testid="assignee-truncated">
+          <p className="field-hint" id={`${fieldId}-truncated`} data-testid="assignee-truncated">
             Showing the first {candidates?.length ?? 0} technicians only — there are more than this
             list can hold.
           </p>

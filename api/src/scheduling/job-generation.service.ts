@@ -65,6 +65,8 @@ interface DefaultAssigneeOutcome {
   unavailableId: string | null;
   /** Set when the check could not run — a finding about the system. */
   indeterminateId: string | null;
+  /** Why, for the log. `null` when there was nothing to decide. */
+  detail?: string | null;
 }
 
 type RuleWithDocument = ScheduleRule & {
@@ -214,12 +216,24 @@ export class JobGenerationService {
    *     `defaultAssigneeUnavailable: true` and the id — permanent, in the
    *     hash chain, and the only one of the three that survives log rotation.
    * And the planner grid says it BEFORE the sweep does: `GET /schedule`
-   * reports `defaultAssignee.eligible = false` on the row.
+   * reports `defaultAssignee.eligibility = 'not-assignable'` on the row.
+   *
+   * THIS FUNCTION ONLY DECIDES. It counts nothing and logs nothing — review
+   * finding. It runs BEFORE the insert, and the insert may be a P2002 no-op
+   * (`I-INV-14`: the job for this period already exists), which happens on
+   * every sweep for the whole lead-time window. Counting here made one lapsed
+   * assignee emit one ERROR line and one counter increment EVERY HOUR for
+   * thirty days — roughly 700 alarms for one fact — and produced run logs
+   * reading `generated=0 … assignedFromDefault=1`, which is self-contradictory
+   * to whoever is on call. The whole defence of "generate unassigned but never
+   * silently" rests on that signal, and an alarm that never clears is the same
+   * as no alarm. `recordDefaultAssigneeOutcome` below is called from the
+   * SUCCESS path only, so each lapse is announced exactly once: when the job
+   * it affected was actually created.
    */
   private async resolveDefaultAssignee(
     rule: RuleWithDocument,
     asset: Asset,
-    result: GenerateDueJobsResult,
   ): Promise<DefaultAssigneeOutcome> {
     // The overwhelmingly common path, and every pre-slice-32 row: no standing
     // assignee, so the job is born SCHEDULED and unassigned exactly as before.
@@ -230,7 +244,6 @@ export class JobGenerationService {
     const check = await this.assignableUsers.checkAssignable(rule.defaultAssigneeId, asset.areaId);
 
     if (check.verdict === 'assignable') {
-      result.assignedFromDefault += 1;
       return { assigneeId: rule.defaultAssigneeId, unavailableId: null, indeterminateId: null };
     }
 
@@ -252,27 +265,57 @@ export class JobGenerationService {
      * CHECK, never as a finding about the person.
      */
     if (check.verdict === 'unknown') {
-      result.defaultAssigneeIndeterminate += 1;
-      this.logger.error(
-        `schedule_rule ${rule.id}: could NOT determine whether default assignee ` +
-          `${rule.defaultAssigneeId} may be assigned to asset ${asset.id} (${check.detail}). ` +
-          'Generating this job UNASSIGNED as the safe default. This is NOT a finding about that ' +
-          'user and their standing assignment is unchanged — investigate the database, not the plan.',
-      );
       return {
         assigneeId: null,
         unavailableId: null,
         indeterminateId: rule.defaultAssigneeId,
+        detail: check.detail,
       };
     }
 
-    result.defaultAssigneeUnavailable += 1;
-    this.logger.error(
-      `schedule_rule ${rule.id} names default assignee ${rule.defaultAssigneeId}, who is no longer ` +
-        `assignable for asset ${asset.id} (${check.detail}) — ` +
-        'generating this job UNASSIGNED. Set a new default assignee on the plan.',
-    );
-    return { assigneeId: null, unavailableId: rule.defaultAssigneeId, indeterminateId: null };
+    return {
+      assigneeId: null,
+      unavailableId: rule.defaultAssigneeId,
+      indeterminateId: null,
+      detail: check.detail,
+    };
+  }
+
+  /**
+   * Counts and announces ONE outcome, called only once a job has actually been
+   * created from it — review finding. See `resolveDefaultAssignee`'s note for
+   * why this is not done at decision time.
+   */
+  private recordDefaultAssigneeOutcome(
+    outcome: DefaultAssigneeOutcome,
+    rule: RuleWithDocument,
+    asset: Asset,
+    jobId: string,
+    result: GenerateDueJobsResult,
+  ): void {
+    if (outcome.assigneeId) {
+      result.assignedFromDefault += 1;
+      return;
+    }
+    if (outcome.indeterminateId) {
+      result.defaultAssigneeIndeterminate += 1;
+      this.logger.error(
+        `schedule_rule ${rule.id}: could NOT determine whether default assignee ` +
+          `${outcome.indeterminateId} may be assigned to asset ${asset.id} (${outcome.detail}). ` +
+          `Generated job ${jobId} UNASSIGNED as the safe default. This is NOT a finding about ` +
+          'that user and their standing assignment is unchanged — investigate the database, not ' +
+          'the plan.',
+      );
+      return;
+    }
+    if (outcome.unavailableId) {
+      result.defaultAssigneeUnavailable += 1;
+      this.logger.error(
+        `schedule_rule ${rule.id} names default assignee ${outcome.unavailableId}, who is no ` +
+          `longer assignable for asset ${asset.id} (${outcome.detail}) — generated job ${jobId} ` +
+          'UNASSIGNED. Set a new default assignee on the plan.',
+      );
+    }
   }
 
   private async generateForRule(
@@ -315,11 +358,8 @@ export class JobGenerationService {
     // against `app_user`/`user_role`/`user_area_scope` and holding the job
     // insert's transaction open across it would widen the window on the very
     // table the idempotency index protects.
-    const { assigneeId, unavailableId, indeterminateId } = await this.resolveDefaultAssignee(
-      rule,
-      asset,
-      result,
-    );
+    const outcome = await this.resolveDefaultAssignee(rule, asset);
+    const { assigneeId, unavailableId, indeterminateId } = outcome;
     const now = new Date();
 
     try {
@@ -391,6 +431,11 @@ export class JobGenerationService {
         });
         return job;
       });
+
+      // Counted and announced HERE, not at decision time: only now is it true
+      // that a job was generated from this outcome. The P2002 path below
+      // reaches neither.
+      this.recordDefaultAssigneeOutcome(outcome, rule, asset, createdJob.id, result);
 
       // UR-061 — the assignee has to LEARN they have work, exactly as a manual
       // assignment tells them (`AssignmentService`). Best-effort and

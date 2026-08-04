@@ -404,6 +404,74 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
   });
 
   /**
+   * THE DEEP LINK ON A DEVICE THAT HAS NEVER SYNCED THIS JOB — the defect
+   * behind CI's red E-18, made deterministic.
+   *
+   * The capture screen reads from the offline cache, and the JOB LIST is the
+   * only screen that fills it. `/planner` never bootstraps, so a planner who
+   * arrives there directly — a bookmark, a reload, a shared link — has an
+   * empty cache and every "Open job" used to dead-end on "not cached on this
+   * device… sync from the job list first", advice that is both wrong and
+   * unactionable when the job list is not where they were going.
+   *
+   * The cache is emptied EXPLICITLY here rather than relying on losing a race
+   * (which is what made the sibling test below flaky locally and consistently
+   * red on CI). Nothing repopulates it between the clear and the click, so
+   * this heading can only appear if the screen fetches the job itself.
+   */
+  test('opens a job on a device whose cache has never seen it', async ({ page, server }) => {
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+    });
+    const job = server.seedGeneratedJob({
+      assetDocumentId: doc.id,
+      frequency: 'M1',
+      dueOn: `${YEAR}-09-17`,
+      assetCode: 'AW01',
+    });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+    await expect(page.getByRole('table')).toBeVisible();
+
+    // Empty the device's job cache, exactly as a planner who never opened the
+    // job list would have it.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const req = indexedDB.open('bamform-offline');
+          req.onsuccess = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains('jobs2')) return resolve();
+            const tx = db.transaction('jobs2', 'readwrite');
+            tx.objectStore('jobs2').clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+          };
+          req.onerror = () => resolve();
+        }),
+    );
+
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+    await page
+      .getByTestId('planner-detail')
+      .getByRole('button', { name: new RegExp(`Open job ${job.jobNumber}`) })
+      .click();
+
+    // The screen fetches what it does not have instead of sending the planner
+    // away — and lands on the RIGHT job.
+    await expect(page.getByRole('heading', { name: job.jobNumber })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/jobs/${job.id}$`));
+    await expect(page.getByText('not cached on this device')).toHaveCount(0);
+  });
+
+  /**
    * The other half, and the one that keeps a planner out of trouble: a visit
    * with no job says WHEN it will appear, using the server's own boundary, and
    * never offers to raise it. `POST /jobs/adhoc` creates a job with an EMPTY
@@ -640,6 +708,62 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
     await expect(warning).toBeVisible();
     await expect(warning).toContainText('Test Technician');
     await expect(warning).toContainText('will arrive UNASSIGNED');
+  });
+
+  /**
+   * The picker's promise is that it never offers somebody the server would
+   * refuse — so the server has to actually refuse. Review finding: the fake's
+   * job-level assign accepted anyone who merely existed, so a regression that
+   * widened the picker would have passed green. Driven through the real UI:
+   * an AUDITOR must not be offered, and must be refused if one is sent anyway.
+   */
+  test('the job-level picker offers only people the server will accept', async ({
+    page,
+    server,
+  }) => {
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+    });
+    const job = server.seedGeneratedJob({
+      assetDocumentId: doc.id,
+      frequency: 'M1',
+      dueOn: `${YEAR}-09-17`,
+      assetCode: 'AW01',
+    });
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+    await page
+      .getByTestId('planner-detail')
+      .getByRole('button', { name: new RegExp(`Assign job ${job.jobNumber}`) })
+      .click();
+
+    const form = page.getByRole('form', { name: new RegExp(`Assign job ${job.jobNumber}`) });
+    // Result-recording roles only. The ADMIN is the pointed exclusion: they
+    // may DECIDE who does the work (`@Roles()` on assign) but hold no role
+    // that can RECORD it, so assigning to them would be a dead end — and they
+    // are the one canned user who tests that distinction.
+    await expect(form.getByRole('option')).toContainText(['Test Technician (MAINTAINER)']);
+    await expect(form.getByRole('option', { name: /Administrator/ })).toHaveCount(0);
+
+    // ...and the server would refuse one anyway, which is what makes the
+    // picker's promise worth anything rather than a client-side courtesy.
+    const refusal = await page.evaluate(async (jobId) => {
+      const res = await fetch(`/api/v1/jobs/${jobId}/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer e2e-token-user-2' },
+        body: JSON.stringify({ assigneeId: 'user-5' }),
+      });
+      return res.status;
+    }, job.id);
+    expect(refusal).toBe(422);
   });
 
   test('a maintainer sees who holds the work but is offered no way to change it', async ({

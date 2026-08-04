@@ -35,8 +35,9 @@ export function rolesCanAdjustSchedule(roles: readonly string[] | undefined): bo
 }
 
 /**
- * `POST /jobs/{jobId}/assign` and its picker `GET /jobs/{jobId}/assignable-users`
- * — `jobs.controller.ts#assign`/`#listAssignableUsers`.
+ * `POST /jobs/{jobId}/assign` (`jobs.controller.ts#assign`) and its picker
+ * `GET /schedule/{scheduleRuleId}/assignable-users`
+ * (`planner-schedule.controller.ts#listAssignableUsers`).
  *
  * ITS OWN CONSTANT, even though the membership is character-for-character
  * `ADJUST_SCHEDULE_ROLES` today. It mirrors a DIFFERENT `@Roles()` declaration

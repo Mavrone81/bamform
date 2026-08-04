@@ -92,7 +92,11 @@ export function VisitAssignment({
         {defaultAssignee ? (
           <div className="kv-row">
             <span className="kv-value" data-testid="default-assignee-name">
-              {defaultAssignee.fullName}
+              {/* `fullName` is null when the server WITHHELD it — the caller
+                  holds no role that may decide assignment — or when the row
+                  could not be decrypted. The id names nobody but is true, and
+                  is what an admin can look up. */}
+              {defaultAssignee.fullName ?? defaultAssignee.id}
             </span>
           </div>
         ) : (
@@ -114,10 +118,11 @@ export function VisitAssignment({
          */}
         {defaultAssignee?.eligibility === 'not-assignable' && (
           <p className="banner" data-tone="bad" role="alert" data-testid="default-assignee-lapsed">
-            <span aria-hidden="true">⚠</span> {defaultAssignee.fullName} can no longer be assigned
-            to this machine — the account is inactive, has lost its maintainer/team-leader/engineer
-            role, or its area scope no longer reaches here. The next scheduler sweep will still
-            raise this job, but it will arrive UNASSIGNED. Pick somebody else.
+            <span aria-hidden="true">⚠</span> {defaultAssignee.fullName ?? defaultAssignee.id} can
+            no longer be assigned to this machine — the account is inactive, has lost its
+            maintainer/team-leader/engineer role, or its area scope no longer reaches here. The next
+            scheduler sweep will still raise this job, but it will arrive UNASSIGNED. Pick somebody
+            else.
           </p>
         )}
 
@@ -136,11 +141,12 @@ export function VisitAssignment({
             role="status"
             data-testid="default-assignee-unknown"
           >
-            <span aria-hidden="true">?</span> Could not check whether {defaultAssignee.fullName} can
-            still be assigned to this machine — the lookup did not complete. This is not a finding
-            about them and nothing has changed: their standing assignment is intact. If the next
-            sweep cannot check either, it will raise the job unassigned as a precaution. Try again
-            shortly, and tell an administrator if it persists.
+            <span aria-hidden="true">?</span> Could not check whether{' '}
+            {defaultAssignee.fullName ?? defaultAssignee.id} can still be assigned to this machine —
+            the lookup did not complete. This is not a finding about them and nothing has changed:
+            their standing assignment is intact. If the next sweep cannot check either, it will
+            raise the job unassigned as a precaution. Try again shortly, and tell an administrator
+            if it persists.
           </p>
         )}
 
@@ -149,6 +155,7 @@ export function VisitAssignment({
             <AssigneePicker
               scheduleRuleId={scheduleRuleId}
               currentAssigneeId={defaultAssignee?.id ?? null}
+              currentAssigneeName={defaultAssignee?.fullName ?? null}
               // The plan CAN have nobody — that is the state every rule is in
               // today, and returning to it is a legitimate decision.
               allowClear
@@ -228,6 +235,7 @@ export function VisitAssignment({
               <AssigneePicker
                 scheduleRuleId={scheduleRuleId}
                 currentAssigneeId={job.assignedTo}
+                currentAssigneeName={job.assignedToName}
                 // A job cannot be UN-assigned: `assignJobRequestSchema`
                 // requires a uuid and there is no endpoint that clears it.
                 // Offering "nobody" here would be a control that always fails.

@@ -85,8 +85,8 @@ export interface AssigneeEligibility {
  *
  * `list` and `assert` are the SAME predicate expressed twice — once as SQL,
  * once as a check — which is exactly the kind of duplication that rots. It is
- * held together by `assignable-users.spec.ts`, which feeds the list's own
- * output back through `POST /assign` and requires every row to be accepted
+ * held together by `test/integration/schedule-assignment.spec.ts`, which feeds
+ * the list's own output back through `POST /jobs/{jobId}/assign` and requires every row to be accepted
  * and a deliberately-excluded user to be refused.
  */
 @Injectable()
@@ -316,14 +316,38 @@ export class AssignableUserService {
    * through the SAME helper `users.mapper.ts#toUser` uses — never a second
    * codec, and never into an audit payload (PR-SEC-02: those carry a
    * ciphertext digest, see `toUserAuditView`).
+   *
+   * PER-ROW RESCUE — review finding. A decrypt failure (a DEK rotated without
+   * re-wrapping, a hand-written row) used to propagate out of the map and
+   * return 500 for the WHOLE call: on `GET /schedule` that is the entire
+   * year's plan, every machine, for every planner, because of one bad
+   * `app_user` row. The plan itself is perfectly readable and has nothing to
+   * do with that row.
+   *
+   * So the row degrades to its ID rather than taking the response with it —
+   * an id names nobody, but it is TRUE, it is actionable (an admin can look it
+   * up), and it is visibly not a name. The failure is logged at ERROR because
+   * an undecryptable identity column is a genuine crypto incident.
+   *
+   * Deliberately NOT applied to `assertAssignable`: that is a gate a human is
+   * waiting on, and a decrypt failure there is not something to paper over —
+   * it propagates and `checkAssignable` reports it as `'unknown'`.
    */
   private nameOf(userId: string, fullNameCt: Uint8Array, dekVersion: number): string {
-    return decodeIdentityField(
-      fullNameCt,
-      dekVersion,
-      { column: 'full_name_ct', rowId: userId },
-      this.fieldEncryption,
-    );
+    try {
+      return decodeIdentityField(
+        fullNameCt,
+        dekVersion,
+        { column: 'full_name_ct', rowId: userId },
+        this.fieldEncryption,
+      );
+    } catch (error) {
+      this.logger.error(
+        `could not decrypt app_user.full_name for ${userId}: ${describeThrown(error)}. ` +
+          'Reporting the id in its place rather than failing the whole read.',
+      );
+      return userId;
+    }
   }
 }
 

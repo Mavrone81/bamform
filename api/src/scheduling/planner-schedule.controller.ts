@@ -49,6 +49,19 @@ export class PlannerScheduleController {
    * real confidentiality boundary here, is enforced in the repository and
    * applies identically either way.
    *
+   * WHY THIS IS OPEN WHILE THE PICKER BELOW IS NOT (slice 32-PLANNERJOB).
+   * The two are twenty lines apart and refuse different callers on purpose.
+   * This one returns the PLAN, which every authenticated user could already
+   * read a machine at a time; gating it would REMOVE a read, against slice
+   * 18's "ADD, never remove". The picker returns a roster of the plant's
+   * technicians, which nobody outside the assignment roles has a reason to
+   * receive. The one genuinely new personal field here — the assignee's
+   * NAME — follows the picker's rule rather than this one: it is withheld
+   * from callers who cannot act on assignment (`planner-schedule.service.ts`
+   * `maySeeNames`), exactly as `jobs/mappers.ts` omits `assignedToName` from
+   * every job read. The ids stay, so nothing the plan already told you is
+   * taken away.
+   *
    * The WRITE side is unchanged and unaffected: adjusting a date still goes
    * through `PUT /assets/{assetId}/schedule`, still
    * `@Roles('PLANNER','TEAM_LEADER','ENGINEER','ADMIN')`. The planner grid
@@ -59,7 +72,7 @@ export class PlannerScheduleController {
     @Query(new ZodValidationPipe(plannerScheduleQuerySchema)) query: PlannerScheduleQuery,
     @CurrentUser() user: AccessTokenClaims,
   ) {
-    return this.service.list(user.sub, query);
+    return this.service.list(user.sub, user.roles, query);
   }
 
   /**
