@@ -403,7 +403,17 @@ export function watchOnlineAndDrain(
   const handler = () => {
     const userId = getUserId();
     if (!userId) return;
-    void drainAll(db, transport, userId).then((summaries) => onDrain?.(summaries));
+    void drainAll(db, transport, userId)
+      .then((summaries) => onDrain?.(summaries))
+      .catch(() => {
+        // Same rule as `triggerDrainIfOnline` twenty lines above, which had
+        // this and this one did not. `drainAll` never clears a row it did not
+        // see acked, so a failure here loses nothing — it just means this
+        // reconnect did not manage to send, and the next one retries. The
+        // `.catch` is what stops it being an unhandled rejection instead: this
+        // runs from a `window` 'online' listener, so there is no caller to
+        // reject to.
+      });
   };
   window.addEventListener('online', handler);
   return () => window.removeEventListener('online', handler);

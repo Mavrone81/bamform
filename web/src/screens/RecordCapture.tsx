@@ -304,6 +304,37 @@ export function RecordCapture({ jobId }: { jobId: string }) {
    * full when it is not sends them to free up space that was never the
    * problem. */
   const [titleSaveFailed, setTitleSaveFailed] = useState(false);
+  /**
+   * An entry could NOT be written to this device's outbox for a reason that is
+   * NOT "storage full" — the general case of what `titleSaveFailed` says about
+   * one field. `appendJobMutation` -> `outbox.append()` returns a result for a
+   * quota refusal but RE-THROWS anything else (a closed or faulted IndexedDB:
+   * another tab upgrading the schema fires `versionchange` and Dexie closes
+   * this connection underneath us; storage can also be evicted or corrupt).
+   *
+   * Every mutation on this screen is invoked from a `void`ed handler, so before
+   * this existed an uncaught throw was an unhandled rejection and NOTHING ELSE:
+   * no banner, no error, the entry simply never appeared. A part that does not
+   * show up after "Add part" reads as a mis-tap, not as a fault — which is
+   * precisely the silent loss non-negotiable #1 exists to forbid. Kept separate
+   * from `quotaBanner` because telling a technician their storage is full when
+   * it is not sends them to free up space that was never the problem.
+   */
+  const [deviceWriteFailed, setDeviceWriteFailed] = useState(false);
+  /**
+   * This device's own copy of the record could not be READ (`loadCached` /
+   * `refreshState`). Both are fire-and-forget by design — they run from an
+   * effect and after every mutation — so their rejections previously went
+   * nowhere at all, and the screen simply showed the pre-failure picture as
+   * though it were current.
+   *
+   * That is not cosmetic on this screen. `refreshState` is the ONLY writer of
+   * `parts`, so a failed read leaves the Parts used section showing the empty
+   * (or stale) list: the record would state that no parts were used when the
+   * truth is that nobody could find out. `loadCached` failing leaves `cached`
+   * at `null`, i.e. "Loading…" forever with no explanation.
+   */
+  const [deviceReadFailed, setDeviceReadFailed] = useState(false);
 
   /**
    * Slice 22-SELFUPDATE: hold the self-update's reload while this screen is
@@ -335,7 +366,18 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     const { db } = getServices();
     const userId = getSyncUserId();
     if (!userId) return;
-    const job = await getCachedJob(db, userId, jobId);
+    let job: CachedJob | undefined;
+    try {
+      job = await getCachedJob(db, userId, jobId);
+    } catch {
+      // This effect is `void`ed, so this rejection used to go nowhere and
+      // leave `cached` at `null` — an eternal "Loading…". `undefined` is NOT
+      // the honest fallback here: that renders "this job is not cached on
+      // this device", which asserts something we did not manage to find out.
+      setDeviceReadFailed(true);
+      return;
+    }
+    setDeviceReadFailed(false);
     setCached(job ?? undefined);
     if (job) {
       const results: Record<string, ItemStatus> = {};
@@ -388,18 +430,46 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     const { db } = getServices();
     const userId = getSyncUserId();
     if (!userId) return;
-    setSyncState(await jobSyncState(db, userId, jobId));
-    setCounts(await jobOutboxCounts(db, userId, jobId));
-    // D-2a: which items have local (not-yet-acknowledged) edits — the
-    // outbox is the source of truth for "changed on this device".
-    const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
+    // Read EVERYTHING first, then apply it in one go. Previously each value
+    // was `setX(await ...)` in turn, which had two consequences worth naming:
+    // a read that faulted midway left the screen half-refreshed (new counts
+    // beside a stale parts list, with no way to tell), and — because this
+    // function is `void`ed at every one of its call sites — the rejection
+    // escaped as an unhandled promise rejection instead of being surfaced to
+    // anyone. All-or-nothing means a failure leaves a coherent (if stale)
+    // picture, and the banner says it may be stale.
+    let next: {
+      syncState: JobSyncState;
+      counts: JobOutboxCounts;
+      rows: OutboxEntry[];
+      parts: PartRow[];
+    };
+    try {
+      const syncStateValue = await jobSyncState(db, userId, jobId);
+      const countsValue = await jobOutboxCounts(db, userId, jobId);
+      // D-2a: which items have local (not-yet-acknowledged) edits — the
+      // outbox is the source of truth for "changed on this device".
+      const rows = await db.outbox.where('[userId+jobId]').equals([userId, jobId]).toArray();
+      next = {
+        syncState: syncStateValue,
+        counts: countsValue,
+        rows,
+        parts: await mergedParts(db, userId, jobId, rows),
+      };
+    } catch {
+      setDeviceReadFailed(true);
+      return;
+    }
     const edited: Record<string, boolean> = {};
-    for (const row of rows) {
+    for (const row of next.rows) {
       const match = row.path.match(/\/items\/([^/]+)$/);
       if (match) edited[match[1]] = true;
     }
+    setSyncState(next.syncState);
+    setCounts(next.counts);
     setLocallyEdited(edited);
-    setParts(await mergedParts(db, userId, jobId, rows));
+    setParts(next.parts);
+    setDeviceReadFailed(false);
   }, [jobId]);
 
   useEffect(() => {
@@ -439,11 +509,50 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     [],
   );
 
+  /**
+   * Queue one mutation and, if it did not land, SAY SO. Returns true only when
+   * the entry is genuinely durable in the outbox — `false` means it was not
+   * held and the reason is already on screen, so the caller must not go on to
+   * render it as recorded.
+   *
+   * The two ways a write fails are not the same failure and must not share a
+   * message. `outbox.append()` RETURNS `quota-exceeded` (O-11: the device is
+   * full — the technician can act on that) and RE-THROWS everything else (a
+   * closed or faulted IndexedDB, which they cannot). Both were handled at each
+   * call site before this existed — except the throw, which was handled at
+   * NONE of them: every caller here runs from a `void`ed event handler or a
+   * `void`ed timer, so the throw became an unhandled rejection and the
+   * technician was shown nothing whatsoever. Review M-1 fixed exactly this for
+   * the title's form-number field and recorded that the same shape was still
+   * live on the other capture paths; this is that gap closed.
+   */
+  async function appendOrReport(
+    db: BamFormDB,
+    input: Parameters<typeof appendJobMutation>[1],
+  ): Promise<boolean> {
+    let result: Awaited<ReturnType<typeof appendJobMutation>>;
+    try {
+      result = await appendJobMutation(db, input);
+    } catch {
+      setDeviceWriteFailed(true);
+      return false;
+    }
+    if (!result.ok) {
+      // O-11: device storage is full. Do NOT show this as recorded — that
+      // would be exactly the silent loss the offline suite forbids.
+      setQuotaBanner(true);
+      return false;
+    }
+    setQuotaBanner(false);
+    setDeviceWriteFailed(false);
+    return true;
+  }
+
   async function recordItemStatus(templateItemId: string, status: ItemStatus) {
     const { db, transport } = getServices();
     const userId = getSyncUserId();
     if (!userId) return;
-    const result = await appendJobMutation(db, {
+    const held = await appendOrReport(db, {
       userId,
       jobId,
       method: 'PUT',
@@ -451,13 +560,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       body: { status, clientRecordedAt: new Date().toISOString() },
       clientRecordedAt: new Date().toISOString(),
     });
-    if (!result.ok) {
-      // O-11: device storage is full. Do NOT show this as recorded — that
-      // would be exactly the silent loss the offline suite forbids.
-      setQuotaBanner(true);
-      return;
-    }
-    setQuotaBanner(false);
+    if (!held) return;
     setItemResults((prev) => ({ ...prev, [templateItemId]: status }));
     setEditedThisSession((prev) => ({ ...prev, [templateItemId]: true }));
     void refreshState();
@@ -475,7 +578,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       const userId = getSyncUserId();
       if (!userId) return;
       const numeric = rawValue.trim() === '' ? null : Number(rawValue);
-      const result = await appendJobMutation(db, {
+      const held = await appendOrReport(db, {
         userId,
         jobId,
         method: 'PUT',
@@ -483,11 +586,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         body: { readingNumeric: numeric, clientRecordedAt: new Date().toISOString() },
         clientRecordedAt: new Date().toISOString(),
       });
-      if (!result.ok) {
-        setQuotaBanner(true);
-        return;
-      }
-      setQuotaBanner(false);
+      if (!held) return;
       void refreshState();
       triggerDrainIfOnline(db, transport, getSyncUserId, () => notifySynced());
     }, 400);
@@ -622,7 +721,11 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     if (!userId) return;
     const description = draftPart.description.trim();
     const quantity = Number(draftPart.quantity);
-    const result = await appendJobMutation(db, {
+    // Non-negotiable #1, same as item/measurement above: if the write did NOT
+    // land in the outbox this part must not appear saved — and the technician
+    // must be told which of the two ways it failed, which is what
+    // `appendOrReport` exists to guarantee.
+    const held = await appendOrReport(db, {
       userId,
       jobId,
       method: 'PUT',
@@ -638,13 +741,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       clientRecordedAt: new Date().toISOString(),
       versioned: false,
     });
-    if (!result.ok) {
-      // Non-negotiable #1, same as item/measurement above: the write did
-      // NOT land in the outbox, so this part must not appear saved.
-      setQuotaBanner(true);
-      return;
-    }
-    setQuotaBanner(false);
+    if (!held) return;
     const saved = { ...draftPart, description, quantity: String(quantity) };
     setParts((prev) => {
       // Editing an existing row updates it in place — a filter+push here
@@ -666,7 +763,7 @@ export function RecordCapture({ jobId }: { jobId: string }) {
     const { db, transport } = getServices();
     const userId = getSyncUserId();
     if (!userId) return;
-    const result = await appendJobMutation(db, {
+    const held = await appendOrReport(db, {
       userId,
       jobId,
       method: 'PUT',
@@ -682,11 +779,10 @@ export function RecordCapture({ jobId }: { jobId: string }) {
       clientRecordedAt: new Date().toISOString(),
       versioned: false,
     });
-    if (!result.ok) {
-      setQuotaBanner(true);
-      return;
-    }
-    setQuotaBanner(false);
+    // The removal is only shown once it is genuinely queued — a row that
+    // vanished from the list without a queued `active: false` would read as
+    // removed on this device and stay present on the record for ever.
+    if (!held) return;
     setParts((prev) => prev.filter((p) => p.id !== row.id));
     // A remove mid-edit must not leave a dangling form for a row that is
     // no longer there to save changes to.
@@ -900,6 +996,23 @@ export function RecordCapture({ jobId }: { jobId: string }) {
   }
 
   if (cached === null) {
+    // `deviceReadFailed` while there is still nothing to show means
+    // `loadCached` never got an answer. Continuing to spin would be a lie
+    // about work still being in progress — nothing is retrying.
+    if (deviceReadFailed) {
+      return (
+        <main className="app-shell">
+          <p className="banner" data-tone="bad" role="alert">
+            <span aria-hidden="true">⚠</span> This device’s storage could not be read, so this
+            record cannot be opened. Nothing has been lost — close the app and open it again. If it
+            keeps happening, tell your supervisor before starting the job on paper.
+          </p>
+          <button type="button" className="back-link btn-quiet" onClick={() => navigate('/jobs')}>
+            <span aria-hidden="true">‹</span> Back to your jobs
+          </button>
+        </main>
+      );
+    }
     return (
       <main className="app-shell">
         <p className="loading-state">
@@ -1056,6 +1169,20 @@ export function RecordCapture({ jobId }: { jobId: string }) {
         <p className="banner" data-tone="bad" role="alert">
           <span aria-hidden="true">⚠</span> Device storage is full. This entry was NOT saved — free
           up space (Settings → Storage) and try again before continuing.
+        </p>
+      )}
+      {deviceWriteFailed && (
+        <p className="banner" data-tone="bad" role="alert">
+          <span aria-hidden="true">⚠</span> Your last entry could NOT be held on this device and was
+          NOT saved. This is not full storage — close the app, open it again, and re-enter it, then
+          check it stays. Everything already held on this device is unaffected.
+        </p>
+      )}
+      {deviceReadFailed && (
+        <p className="banner" data-tone="bad" role="alert">
+          <span aria-hidden="true">⚠</span> This device’s held entries could not be read, so what is
+          shown below — including parts used and the sync status — may be incomplete or out of date.
+          Nothing has been deleted. Close the app and open it again before entering anything else.
         </p>
       )}
       {cached.serverRemoved && (

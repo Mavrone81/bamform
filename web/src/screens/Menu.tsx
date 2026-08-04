@@ -40,8 +40,19 @@ export function Menu() {
 
   async function onSignOutTapped() {
     const userId = getSyncUserId();
-    const count = userId ? await pendingCountForUser(getServices().db, userId) : 0;
-    if (count > 0) {
+    let count: number;
+    try {
+      count = userId ? await pendingCountForUser(getServices().db, userId) : 0;
+    } catch {
+      // This runs from a `void`ed click handler, so a faulted IndexedDB used
+      // to reject into nothing — the Sign out button simply did nothing, with
+      // no way to tell that from a missed tap. SYS-6 says they must be TOLD
+      // when unsent work would be stranded; if the count cannot be read we do
+      // not know whether any is, so we show the warning rather than signing
+      // out silently. `-1` marks "unknown" for the dialog's copy.
+      count = -1;
+    }
+    if (count !== 0) {
       // SYS-6: they must be TOLD their work has not been transmitted yet.
       setPendingCount(count);
       warnDialogRef.current?.showModal();
@@ -127,13 +138,22 @@ export function Menu() {
 
       <dialog ref={warnDialogRef} className="dialog" aria-labelledby="signout-warn-heading">
         <h2 id="signout-warn-heading">
-          <span aria-hidden="true">⚠</span> {pendingCount} unsent entr
-          {pendingCount === 1 ? 'y' : 'ies'} on this device
+          <span aria-hidden="true">⚠</span>{' '}
+          {pendingCount < 0 ? (
+            <>Unsent entries on this device could not be counted</>
+          ) : (
+            <>
+              {pendingCount} unsent entr{pendingCount === 1 ? 'y' : 'ies'} on this device
+            </>
+          )}
         </h2>
         <p>
-          Work you recorded has not reached the server yet. Signing out keeps it safely stored on
-          this device under your account — nobody else can see or send it — but it will NOT be
-          transmitted until you sign back in on this device with a connection.
+          {pendingCount < 0
+            ? 'This device’s storage could not be read, so we cannot tell whether any of your work is still waiting to send.'
+            : 'Work you recorded has not reached the server yet.'}{' '}
+          Signing out keeps anything held safely stored on this device under your account — nobody
+          else can see or send it — but it will NOT be transmitted until you sign back in on this
+          device with a connection.
         </p>
         <div className="dialog-actions">
           <button

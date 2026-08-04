@@ -94,3 +94,36 @@ describe('JobList — first-session drain of claimed legacy work (H-2)', () => {
     expect(await db.outbox.get('legacy-row-1')).toBeUndefined(); // acked + cleared
   });
 });
+
+/**
+ * Every Dexie read on this screen is fire-and-forget (`void refresh()` from
+ * the effect and from `onSynced`; three `void x.then(...)` reads on mount), so
+ * a rejection used to go nowhere at all. Two consequences, one visible in CI
+ * and one only on a real device:
+ *
+ * - vitest 4 FAILS the run on an unhandled rejection while still reporting
+ *   every test as passed, which is how `main` shipped red with green counts.
+ * - a technician saw "Loading…" for ever, with no warning about unsent work,
+ *   and nothing retrying behind it.
+ */
+describe('a faulted IndexedDB is stated, not spun on for ever', () => {
+  it('says the device could not be read instead of showing an endless spinner', async () => {
+    // A closed/faulted database — what `versionchange` from a second tab, or
+    // an evicted origin, actually looks like to this screen.
+    const closed = () => {
+      throw new Error('DatabaseClosedError: Database has been closed');
+    };
+    db.jobs.where = closed as typeof db.jobs.where;
+    db.outbox.where = closed as typeof db.outbox.where;
+    db.meta.get = closed as typeof db.meta.get;
+
+    const view = render(
+      <RouterProvider>
+        <JobList />
+      </RouterProvider>,
+    );
+
+    await waitFor(() => expect(view.getByText(/storage could not be read/i)).toBeInTheDocument());
+    expect(view.queryByText(/Loading/)).not.toBeInTheDocument();
+  });
+});
