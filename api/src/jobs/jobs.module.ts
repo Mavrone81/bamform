@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { QueueModule } from '../queue/queue.module';
 import { SchedulingModule } from '../scheduling/scheduling.module';
 import { AdhocJobService } from './adhoc-job.service';
+import { AssignableUserModule } from './assignable-user.module';
 import { ApprovalController } from './approval.controller';
 import { ApprovalRepository } from './approval.repository';
 import { ApprovalTransitionsService } from './approval-transitions.service';
@@ -45,7 +46,12 @@ import { VerificationService } from './verification.service';
   // final-stage transaction calls `CompletionCascadeService.apply` (the seam
   // slice 5 built for exactly this). No cycle: SchedulingModule imports no
   // job-side module.
-  imports: [QueueModule, SchedulingModule],
+  // `AssignableUserModule`: slice 32-PLANNERJOB — the "who may be given this
+  // work" rule, shared with `SchedulingModule` (which sets a schedule's
+  // standing assignee and honours it at generation time) and therefore
+  // declared outside both. See that module's own note for why it cannot live
+  // here.
+  imports: [QueueModule, SchedulingModule, AssignableUserModule],
   controllers: [JobsController, AttachmentsController, ApprovalController],
   providers: [
     JobAccessService,

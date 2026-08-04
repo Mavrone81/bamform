@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import type { GenerateDueJobsResult } from './job-generation.service';
-import { JobGenerationService } from './job-generation.service';
+import { JobGenerationService, resolveDefaultLeadTimeDays } from './job-generation.service';
 import { ScheduleRuleBootstrapService } from './schedule-rule-bootstrap.service';
 import { SchedulerLockService } from './scheduler-lock.service';
 
@@ -42,11 +42,18 @@ export class SchedulerService {
 
     try {
       await this.bootstrap.ensureForAllActiveAssets();
-      const leadTimeDays = Number(this.config.get('DEFAULT_LEAD_TIME_DAYS') ?? 30);
+      const leadTimeDays = resolveDefaultLeadTimeDays(this.config.get('DEFAULT_LEAD_TIME_DAYS'));
       const result = await this.jobGeneration.generateDueJobs(new Date(), leadTimeDays);
       await this.redis.set(SCHEDULER_LAST_RUN_KEY, new Date().toISOString());
       this.logger.log(
-        `run complete: evaluated=${result.evaluated} generated=${result.generated} alreadyExists=${result.alreadyExists} skippedNoItems=${result.skippedNoItems}`,
+        // Slice 32-PLANNERJOB adds the two assignment counters. `unavailable`
+        // is the one to watch: it means a schedule named a standing assignee
+        // who is no longer eligible, so PM went out with NOBODY on it — and an
+        // unassigned job is invisible to every MAINTAINER (`job-access.ts`).
+        `run complete: evaluated=${result.evaluated} generated=${result.generated} ` +
+          `alreadyExists=${result.alreadyExists} skippedNoItems=${result.skippedNoItems} ` +
+          `assignedFromDefault=${result.assignedFromDefault} ` +
+          `defaultAssigneeUnavailable=${result.defaultAssigneeUnavailable}`,
       );
       return { ran: true, ...result };
     } finally {

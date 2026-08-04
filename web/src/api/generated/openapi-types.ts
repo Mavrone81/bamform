@@ -707,6 +707,107 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/schedule/{scheduleRuleId}/assignable-users': {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+      };
+      header?: never;
+      path: {
+        /** @description A `schedule_rule` id, as `GET /schedule` returns on every row. */
+        scheduleRuleId: components['parameters']['ScheduleRuleId'];
+      };
+      cookie?: never;
+    };
+    /**
+     * Who this machine's PM may be given to
+     * @description Slice 32-PLANNERJOB. PLANNER/TEAM_LEADER/ENGINEER/ADMIN — the SAME
+     *     role set as `PUT /schedule/{scheduleRuleId}/default-assignee` and
+     *     `POST /jobs/{jobId}/assign`: the right to see the candidates and the
+     *     right to choose one are the same right.
+     *
+     *     ONE PICKER FOR BOTH ASSIGNMENT LEVELS. The standing assignee on the
+     *     rule and the assignee on a job generated from it are judged against
+     *     the SAME machine's area, so the candidate sets are identical by
+     *     construction; two endpoints would be two lists that could disagree.
+     *     Keyed by the RULE rather than a job because the rule exists first — a
+     *     visit whose job has not been generated yet still needs a picker.
+     *
+     *     Returns exactly the users `POST /jobs/{jobId}/assign` would ACCEPT:
+     *     active, holding a result-recording role
+     *     (MAINTAINER/TEAM_LEADER/ENGINEER, §4.1), and area-scoped to reach the
+     *     machine (a machine with no area is assignable only to users with no
+     *     area restriction). Computed by the same service that enforces the
+     *     check, so a picker built on it cannot offer someone the server will
+     *     refuse.
+     *
+     *     It exists because `GET /users` is ADMIN-only, leaving three of the
+     *     four roles that may assign with no readable source for the list.
+     *     Deliberately NARROWER than `User`: a name and the roles that put the
+     *     person on the list, never email or employee id.
+     *
+     *     404 for an unknown rule; 403 `/errors/out-of-scope` when the rule's
+     *     machine is outside the caller's area scope — so this cannot enumerate
+     *     technicians against a machine the caller cannot see.
+     */
+    get: operations['listAssignableUsers'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/schedule/{scheduleRuleId}/default-assignee': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A `schedule_rule` id, as `GET /schedule` returns on every row. */
+        scheduleRuleId: components['parameters']['ScheduleRuleId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set who normally does this machine's PM
+     * @description Slice 32-PLANNERJOB. PLANNER/TEAM_LEADER/ENGINEER/ADMIN — the same set
+     *     as `PUT /assets/{assetId}/schedule`: deciding when controlled work
+     *     happens and deciding who does it are the same planning job.
+     *
+     *     Writes `schedule_rule.default_assignee_id` and NOTHING ELSE.
+     *     `JobGenerationService` reads it when it CREATES a job, so this affects
+     *     work not yet generated: a job already raised keeps whoever it has, and
+     *     reassigning a generated job (`POST /jobs/{jobId}/assign`) never writes
+     *     back here. The two levels are independent by construction.
+     *
+     *     `defaultAssigneeId: null` clears the standing assignee, returning the
+     *     rule to generating unassigned jobs.
+     *
+     *     Validated with the same rule as `POST /jobs/{jobId}/assign`, against
+     *     this machine's area — and validated AGAIN at generation time, because
+     *     eligibility lapses in between (someone leaves, a role is revoked, an
+     *     area scope is narrowed). An ineligible default at generation time
+     *     produces an UNASSIGNED job plus an audit record naming the id that
+     *     failed; it never refuses to generate, because the job is the
+     *     controlled record.
+     *
+     *     No reason field, unlike `PUT /assets/{assetId}/schedule`: rostering
+     *     changes every time someone takes leave, and a mandatory reason there
+     *     would be typed through rather than thought about. The change is still
+     *     audited with before/after ids.
+     */
+    put: operations['setScheduleDefaultAssignee'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/approval-routes': {
     parameters: {
       query?: never;
@@ -2412,6 +2513,119 @@ export interface components {
        *     from divisibility alone (U-CAS-05).
        */
       cascadeFrequencies: components['schemas']['Frequency'][];
+      /**
+       * @description WHO NORMALLY DOES THIS PM — `schedule_rule.default_assignee_id`,
+       *     or `null` where nobody is named and every generated job therefore
+       *     arrives unassigned. Set with
+       *     `PUT /schedule/{scheduleRuleId}/default-assignee`.
+       *
+       *     Distinct from `nextDueJob.assignedTo`: this is the PLAN (affects
+       *     jobs not yet generated), that is ONE OCCURRENCE (affects that job).
+       *     Neither write touches the other.
+       */
+      defaultAssignee: components['schemas']['PlannerDefaultAssignee'] | null;
+      /**
+       * @description Slice 32-PLANNERJOB — the job the scheduler has already raised for
+       *     this rule's STORED `nextDueOn`, or `null` when it has not raised
+       *     one yet. This is how a planner reaches the form a technician
+       *     actually fills.
+       *
+       *     Belongs to `nextDueOn` only. Every other date in `plannedDates` is
+       *     a projection of it; job generation reads `schedule_rule.next_due_on`
+       *     and nothing else, so a projected visit has no job and cannot have
+       *     one until it becomes the stored date.
+       *
+       *     Identified by the tuple `(assetDocumentId, frequency, dueOn)` —
+       *     the same key as `job`'s partial unique index
+       *     `(asset_document_id, frequency_scope, due_on) WHERE status <>
+       *     'voided' AND is_adhoc = false`, reached through the columns a
+       *     schedule row can vouch for (`schedule_rule` is unique on
+       *     `(asset_document_id, frequency)`). A VOIDED job is never returned
+       *     (it releases its period, so a replacement is still to come) and
+       *     neither is an AD-HOC one (UR-028 — empty `frequency_scope`,
+       *     structurally unable to advance `next_due_on`).
+       */
+      nextDueJob: components['schemas']['PlannerVisitJob'] | null;
+      /**
+       * Format: date
+       * @description The earliest date on which a scheduler sweep will raise the job for
+       *     `nextDueOn`: `nextDueOn` minus this machine's effective lead time
+       *     (`asset_type.leadTimeDays`, falling back to the deployment's
+       *     `DEFAULT_LEAD_TIME_DAYS`).
+       *
+       *     Sent because a client cannot know it — the lead time is per asset
+       *     type over a server-configured default. It is a BOUNDARY, not an
+       *     appointment: the sweep runs on its own cron, so the job appears on
+       *     the first sweep on or after this date. It also promises nothing
+       *     about whether a job will be raised at all — a document with no
+       *     current revision, or no active items in scope, is skipped.
+       */
+      jobGenerationOpensOn: string;
+    };
+    /**
+     * @description Slice 32-PLANNERJOB — the technician `JobGenerationService` hands each
+     *     job generated from this schedule rule to.
+     */
+    PlannerDefaultAssignee: {
+      /** Format: uuid */
+      id: string;
+      /** @description Decrypted at read time — `app_user.full_name` is application-layer encrypted (DBD §6.2). */
+      fullName: string;
+      /**
+       * @description Whether this person would STILL be accepted for this machine
+       *     today: active, holding a result-recording role, and area-scoped to
+       *     reach it.
+       *
+       *     Sent rather than left for the sweep to discover, because
+       *     eligibility lapses silently and usually will. When `false` the
+       *     next sweep generates an UNASSIGNED job (it does not refuse — the
+       *     job is the controlled record), so a planner needs to see it before
+       *     the work goes out with nobody on it.
+       */
+      eligible: boolean;
+    };
+    SetDefaultAssigneeRequest: {
+      /**
+       * Format: uuid
+       * @description The standing assignee, or `null` to clear it. Explicitly nullable
+       *     rather than optional: "leave it alone" and "there is nobody" are
+       *     different intentions and an optional field cannot express the
+       *     second.
+       */
+      defaultAssigneeId: string | null;
+    };
+    SetDefaultAssigneeResult: {
+      /** Format: uuid */
+      scheduleRuleId: string;
+      defaultAssignee: components['schemas']['PlannerDefaultAssignee'] | null;
+    };
+    /**
+     * @description Slice 32-PLANNERJOB — a HANDLE on the job raised for a planned visit:
+     *     enough to name it, say what state it is in, and open it. Deliberately
+     *     not a `JobSummary`: duplicating one into the planner grid would make
+     *     the plan a second, staler view of the work list.
+     */
+    PlannerVisitJob: {
+      /** Format: uuid */
+      id: string;
+      /** @example PM-2026-000123 */
+      jobNumber: string;
+      status: components['schemas']['JobStatus'];
+      /**
+       * Format: uuid
+       * @description Who is responsible for doing it, or `null` while nobody is. A
+       *     scheduler-generated job is born unassigned and is invisible to the
+       *     MAINTAINER who should do it (a MAINTAINER sees only jobs assigned
+       *     to them), so "due, and nobody has it" is the state a planner is
+       *     scanning for.
+       */
+      assignedTo: string | null;
+      /**
+       * @description The assignee's name, decrypted at read time — an id names nobody.
+       *     `null` exactly when `assignedTo` is. The only personal field on
+       *     this row.
+       */
+      assignedToName: string | null;
     };
     ScheduleAdjust: {
       /**
@@ -2838,6 +3052,22 @@ export interface components {
       actedAt: string;
       signingKeyId?: string;
     };
+    /**
+     * @description Slice 32-PLANNERJOB — one candidate for `POST /jobs/{jobId}/assign`,
+     *     as `GET /jobs/{jobId}/assignable-users` returns them.
+     *
+     *     Deliberately narrower than `User`: enough to choose a person, and no
+     *     personal data beyond the name. `roles` carries only the
+     *     result-recording roles that put them on the list — the reason they are
+     *     offered, not their full role set.
+     */
+    AssignableUser: {
+      /** Format: uuid */
+      id: string;
+      /** @description Decrypted at read time — `app_user.full_name` is application-layer encrypted (DBD §6.2). */
+      fullName: string;
+      roles: string[];
+    };
     AssignJobRequest: {
       /**
        * Format: uuid
@@ -3182,6 +3412,8 @@ export interface components {
     /** @description Opaque. Clients must not construct or parse it. */
     Cursor: string;
     AssetId: string;
+    /** @description A `schedule_rule` id, as `GET /schedule` returns on every row. */
+    ScheduleRuleId: string;
     JobId: string;
     RevisionId: string;
     DelegationId: string;
@@ -4171,6 +4403,85 @@ export interface operations {
       401: components['responses']['Problem'];
       403: components['responses']['Problem'];
       422: components['responses']['Problem'];
+    };
+  };
+  listAssignableUsers: {
+    parameters: {
+      query?: {
+        limit?: components['parameters']['Limit'];
+        /** @description Opaque. Clients must not construct or parse it. */
+        cursor?: components['parameters']['Cursor'];
+      };
+      header?: never;
+      path: {
+        /** @description A `schedule_rule` id, as `GET /schedule` returns on every row. */
+        scheduleRuleId: components['parameters']['ScheduleRuleId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The users this machine's maintenance may be assigned to */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page'] & {
+            data?: components['schemas']['AssignableUser'][];
+          };
+        };
+      };
+      401: components['responses']['Problem'];
+      403: components['responses']['Problem'];
+      404: components['responses']['Problem'];
+    };
+  };
+  setScheduleDefaultAssignee: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A `schedule_rule` id, as `GET /schedule` returns on every row. */
+        scheduleRuleId: components['parameters']['ScheduleRuleId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SetDefaultAssigneeRequest'];
+      };
+    };
+    responses: {
+      /** @description The rule's standing assignee after the change */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SetDefaultAssigneeResult'];
+        };
+      };
+      401: components['responses']['Problem'];
+      /** @description `/errors/out-of-scope` - the rule's machine is outside the caller's area scope */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      404: components['responses']['Problem'];
+      /** @description `/errors/validation-failed` - the assignee is unknown, inactive, holds no result-recording role, or cannot reach the machine's area */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
     };
   };
   listApprovalRoutes: {

@@ -33,3 +33,25 @@ export function rolesCanAdjustSchedule(roles: readonly string[] | undefined): bo
     roles?.some((role) => (ADJUST_SCHEDULE_ROLES as readonly string[]).includes(role)) ?? false
   );
 }
+
+/**
+ * `POST /jobs/{jobId}/assign` and its picker `GET /jobs/{jobId}/assignable-users`
+ * — `jobs.controller.ts#assign`/`#listAssignableUsers`.
+ *
+ * ITS OWN CONSTANT, even though the membership is character-for-character
+ * `ADJUST_SCHEDULE_ROLES` today. It mirrors a DIFFERENT `@Roles()` declaration
+ * on a different controller, and the two answer different questions: "who may
+ * move a due date" and "who may hand work to a technician". `RAISE_JOB_ROLES`
+ * above already sets this precedent — it too has the same four members and is
+ * deliberately not shared. Collapsing them would mean a future narrowing of
+ * one silently narrowing the others, in a file whose whole purpose is to
+ * mirror the server rather than to model permissions itself.
+ *
+ * Presentation only (non-negotiable #6): both routes stay reachable and the
+ * server's own 403 is what actually refuses.
+ */
+export const ASSIGN_JOB_ROLES = ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'] as const;
+
+export function rolesCanAssignJob(roles: readonly string[] | undefined): boolean {
+  return roles?.some((role) => (ASSIGN_JOB_ROLES as readonly string[]).includes(role)) ?? false;
+}

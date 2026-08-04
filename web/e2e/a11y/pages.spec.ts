@@ -618,6 +618,70 @@ test('A-01/A-05: the planner grid (year, selected visit, adjust form) has zero a
   await expectNoViolations(page);
 });
 
+/**
+ * Slice 32-PLANNERJOB — the assignment panel is the densest interactive
+ * surface on this screen: two headed sections, a select that loads
+ * asynchronously, and a lapsed-assignee alert. It is also where A-05 is
+ * easiest to get wrong, because "unassigned" and "no longer eligible" are
+ * exactly the states a designer reaches for a colour to express.
+ */
+test('A-01/A-05: the planner assignment panel (both levels, picker open, lapsed warning) has zero axe violations', async ({
+  page,
+  server,
+}) => {
+  await page.clock.setFixedTime(new Date('2026-08-03T12:00:00.000Z'));
+  const machine = server.seedAsset({
+    code: 'AW01',
+    assetTypeId: 'at-1',
+    scheduleAnchorDate: '2026-09-17',
+  });
+  const doc = server.seedAssetDocument({
+    assetId: machine.id,
+    formTemplateId: E2E_TEMPLATES.wireBond,
+  });
+  const job = server.seedGeneratedJob({
+    assetDocumentId: doc.id,
+    frequency: 'M1',
+    dueOn: '2026-09-17',
+    assetCode: 'AW01',
+  });
+
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.goto('/planner');
+  await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+  // Both levels visible, both unassigned — the state the whole plant is in.
+  const detail = page.getByTestId('planner-detail');
+  await expect(detail.getByTestId('default-assignee-none')).toBeVisible();
+  await expect(detail.getByTestId('job-assignee-none')).toBeVisible();
+  await expectNoViolations(page);
+
+  // The picker, with its async-loaded options and its "what this affects" note.
+  await detail.getByRole('button', { name: /Set who normally does/ }).click();
+  await expect(page.getByLabel('Technician')).toBeEnabled();
+  await expectNoViolations(page);
+
+  // A-05: the lapsed-assignee state is an icon and a sentence, never a tint.
+  const rule = server.scheduleRuleFor(doc.id, 'M1');
+  server.setRuleDefaultAssignee(rule.id, E2E_USERS.technician.id);
+  server.deactivateUser(E2E_USERS.technician.id);
+  await page.reload();
+  await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+  const lapsed = page.getByTestId('default-assignee-lapsed');
+  await expect(lapsed).toBeVisible();
+  await expect(lapsed).toContainText('UNASSIGNED');
+  const lapsedIcon = await lapsed.locator('[aria-hidden="true"]').first().textContent();
+  expect(lapsedIcon?.trim().length).toBeGreaterThan(0);
+  await expectNoViolations(page);
+
+  // The job level too, whose control names the job it will act on.
+  await expect(
+    page.getByRole('button', { name: new RegExp(`Assign job ${job.jobNumber}`) }),
+  ).toBeVisible();
+  await expectNoViolations(page);
+});
+
 test('A-01: the ad-hoc document picker has zero axe violations', async ({ page, server }) => {
   const machine = server.seedAsset({ code: 'AW10', assetTypeId: 'at-1' });
   server.seedAssetDocument({

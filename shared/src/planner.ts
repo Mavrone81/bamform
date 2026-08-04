@@ -1,5 +1,103 @@
 import { z } from 'zod';
 import { frequencySchema } from './frequency';
+import { jobStatusSchema } from './job';
+
+/**
+ * Slice 32-PLANNERJOB — THE JOB THE SCHEDULER ALREADY RAISED for a visit.
+ *
+ * Deliberately a HANDLE, not a summary: id (to open it), number (to name it)
+ * and status (to say what state it is in). Everything else about the job is a
+ * `GET /jobs/{jobId}` away, and duplicating a job summary into the planner
+ * grid would make the plan a second, staler view of the work list.
+ */
+export const plannerVisitJobSchema = z.object({
+  id: z.string().uuid(),
+  jobNumber: z.string(),
+  status: jobStatusSchema,
+  /**
+   * Who is responsible for doing it, or `null` while nobody is — the owner's
+   * ask ("select which technician is responsible for the job so it can appear
+   * as a job for him"), and the thing a planner scanning the plan is actually
+   * looking for. A scheduler-generated job is born unassigned and is invisible
+   * to the MAINTAINER who should do it (`job-access.ts` restricts them to
+   * `assigned_to = me`), so "due, and nobody has it" is the state that matters
+   * most on this screen.
+   */
+  assignedTo: z.string().uuid().nullable(),
+  /**
+   * The assignee's name, decrypted at read time (`app_user.full_name` is
+   * application-layer encrypted, DBD §6.2). Sent because an id names nobody:
+   * the planner has to see a person. `null` exactly when `assignedTo` is.
+   *
+   * This is a NARROW, deliberate use of the decryption path `GET /users`
+   * already uses — one name for a job that exists, not a bulk export of the
+   * directory. It is the only personal field on this row.
+   */
+  assignedToName: z.string().nullable(),
+});
+export type PlannerVisitJob = z.infer<typeof plannerVisitJobSchema>;
+
+/**
+ * Slice 32-PLANNERJOB — WHO NORMALLY DOES THIS PM.
+ *
+ * `schedule_rule.default_assignee_id`: the technician `JobGenerationService`
+ * hands each generated job to. The second of two levels, and deliberately not
+ * the same thing as `PlannerVisitJob.assignedTo`:
+ *
+ *   THIS is the plan — "AW01's quarterly PM is Bob's". It affects jobs not yet
+ *   generated and nothing else.
+ *   `nextDueJob.assignedTo` is one occurrence — "Bob is on leave, Sam does
+ *   this one". It affects that job and nothing else.
+ *
+ * Changing either never writes the other. That independence is structural
+ * (two endpoints, two columns, no write-back either way) and the planner is
+ * told so in as many words, because a control that silently rewrote the plan
+ * when someone covered a single visit would corrupt the schedule quietly.
+ */
+export const plannerDefaultAssigneeSchema = z.object({
+  id: z.string().uuid(),
+  /** Decrypted at read time — `app_user.full_name` is encrypted (DBD §6.2). */
+  fullName: z.string(),
+  /**
+   * Whether this person would STILL be accepted for this machine today:
+   * active, holding a result-recording role, and area-scoped to reach it.
+   *
+   * Sent, rather than left for the sweep to discover, because eligibility
+   * lapses silently and usually will — someone leaves, a role is revoked, an
+   * area scope is narrowed. When this is `false` the next sweep generates an
+   * UNASSIGNED job (it does not refuse — the job is the controlled record),
+   * so a planner needs to see it BEFORE the work goes out with nobody on it.
+   */
+  eligible: z.boolean(),
+});
+export type PlannerDefaultAssignee = z.infer<typeof plannerDefaultAssigneeSchema>;
+
+/**
+ * `PUT /schedule/{scheduleRuleId}/default-assignee` request.
+ *
+ * `null` CLEARS the standing assignee, returning the rule to generating
+ * unassigned jobs. Explicitly nullable rather than optional: "leave it alone"
+ * and "there is nobody" are different intentions, and an optional field
+ * cannot express the second.
+ *
+ * NO REASON FIELD, deliberately — unlike `scheduleAdjustRequestSchema`, which
+ * demands ten characters. Moving a due date changes WHEN controlled work
+ * happens and is a compliance fact; deciding who does it is ordinary
+ * day-to-day rostering that will change every time someone takes leave. A
+ * mandatory reason there would be typed through, not thought about, and would
+ * devalue the one on the date. The change is still audited with before/after.
+ */
+export const setDefaultAssigneeRequestSchema = z.object({
+  defaultAssigneeId: z.string().uuid().nullable(),
+});
+export type SetDefaultAssigneeRequest = z.infer<typeof setDefaultAssigneeRequestSchema>;
+
+/** `PUT /schedule/{scheduleRuleId}/default-assignee` response. */
+export const setDefaultAssigneeResultSchema = z.object({
+  scheduleRuleId: z.string().uuid(),
+  defaultAssignee: plannerDefaultAssigneeSchema.nullable(),
+});
+export type SetDefaultAssigneeResult = z.infer<typeof setDefaultAssigneeResultSchema>;
 
 /**
  * `GET /schedule` — the CROSS-MACHINE schedule read (slice 31-PLANNER).
@@ -84,6 +182,66 @@ export const plannerScheduleRowSchema = z.object({
    * 1M rule scopes to {M3} — there is nothing to do monthly there).
    */
   cascadeFrequencies: z.array(frequencySchema),
+
+  /**
+   * Slice 32-PLANNERJOB — the job `JobGenerationService` raised for THIS
+   * rule's stored `nextDueOn`, or `null` when the sweep has not raised it yet.
+   *
+   * SCOPED TO `nextDueOn` AND NOTHING ELSE, deliberately. Every other date in
+   * `plannedDates` is a projection of this one; job generation only ever reads
+   * `schedule_rule.next_due_on` and writes `job.due_on` from it, so a
+   * projected visit has no job and cannot have one until it becomes the stored
+   * date. That is the same limit the grid already applies to the adjust form —
+   * the stored date is the only one anything acts on.
+   *
+   * HOW THE JOB IS IDENTIFIED. `job` carries a partial unique index on
+   * `(asset_document_id, frequency_scope, due_on) WHERE status <> 'voided' AND
+   * is_adhoc = false`, and `JobGenerationService#generateForRule` writes
+   * `assetDocumentId`, `frequency` and `dueOn` verbatim from the rule. Since
+   * `schedule_rule` is `@@unique([asset_document_id, frequency])`, the tuple
+   * `(assetDocumentId, frequency, nextDueOn)` names at most one such rule and
+   * therefore at most one non-voided, non-ad-hoc job — see
+   * `planner-schedule.repository.ts#findScheduledJobsForVisits` for why that
+   * is matched rather than `frequency_scope`, which a schedule row alone
+   * cannot reproduce.
+   *
+   * A VOIDED OR AD-HOC JOB IS NEVER THIS. A voided job releases its schedule
+   * period (SYS-19) so the scheduler can raise a replacement; an ad-hoc job
+   * (UR-028) carries an EMPTY `frequency_scope` and satisfies no period at
+   * all. Linking either would point a planner at work that does not advance
+   * this rule.
+   */
+  nextDueJob: plannerVisitJobSchema.nullable(),
+
+  /**
+   * The earliest date on which a scheduler sweep will raise the job for
+   * `nextDueOn` — `nextDueOn` minus this machine's effective lead time
+   * (`asset_type.lead_time_days`, falling back to the deployment's
+   * `DEFAULT_LEAD_TIME_DAYS`). `YYYY-MM-DD`.
+   *
+   * Sent because the client CANNOT know it: the lead time is per asset type
+   * with a server-configured default, so a screen printing "within 30 days"
+   * would be asserting a number it has no way to verify, on the one screen
+   * whose job is telling a planner when work appears. Computed by
+   * `jobGenerationOpensOn()` — the same function
+   * `JobGenerationService#generateDueJobs` uses for its own candidate test, so
+   * the two cannot drift.
+   *
+   * It is a BOUNDARY, not an appointment: the sweep runs on its own cron, so
+   * the job appears on the first sweep on or after this date, not at midnight
+   * on it. It also promises nothing about whether a job will be raised at
+   * all — a document with no current revision, or no active items in scope, is
+   * skipped (`generateForRule` returns `'skipped'`).
+   */
+  jobGenerationOpensOn: z.string(),
+
+  /**
+   * WHO NORMALLY DOES THIS PM — `schedule_rule.default_assignee_id`, or
+   * `null` where nobody is named and every generated job therefore arrives
+   * unassigned. See `plannerDefaultAssigneeSchema` for how this differs from
+   * `nextDueJob.assignedTo`, which is one occurrence rather than the plan.
+   */
+  defaultAssignee: plannerDefaultAssigneeSchema.nullable(),
 });
 export type PlannerScheduleRow = z.infer<typeof plannerScheduleRowSchema>;
 

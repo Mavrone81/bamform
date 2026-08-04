@@ -40,6 +40,10 @@ export type AssetDocumentUpdate = components['schemas']['AssetDocumentUpdate'];
 export type ScheduleRule = components['schemas']['ScheduleRule'];
 export type ScheduleAdjust = components['schemas']['ScheduleAdjust'];
 export type PlannerScheduleRow = components['schemas']['PlannerScheduleRow'];
+export type PlannerVisitJob = components['schemas']['PlannerVisitJob'];
+export type PlannerDefaultAssignee = components['schemas']['PlannerDefaultAssignee'];
+export type AssignableUser = components['schemas']['AssignableUser'];
+export type Job = components['schemas']['Job'];
 
 export interface AdminPage<T> {
   data: T[];
@@ -356,4 +360,78 @@ export async function listAllPlannerSchedule(params: {
         'Narrow it with the machine-type filter, or look at one year at a time.',
     },
   };
+}
+
+// ------------------------------------------- assignment (slice 32-PLANNERJOB)
+
+/**
+ * `GET /schedule/{scheduleRuleId}/assignable-users` — WHO this machine's PM
+ * may be given to.
+ *
+ * ONE list for BOTH assignment levels, because the server judges both against
+ * the same machine's area: the STANDING assignee on the rule (who normally
+ * does this PM) and the assignee on ONE generated job (who does this
+ * occurrence). Two client-side lists would eventually disagree about who is
+ * eligible, and the planner would have no way to tell which one was right.
+ *
+ * The list cannot lie: `assignable-user.service.ts` computes it with the same
+ * predicate `POST /jobs/{jobId}/assign` enforces, so nobody offered here can
+ * come back as a 422. That is why this endpoint exists at all — `GET /users`
+ * is ADMIN-only, so a PLANNER had no readable source, and filtering the
+ * directory client-side would have been a guess at a three-table rule.
+ *
+ * ONE PAGE ONLY, at the 100-row clamp. The plant's technician roster is a
+ * couple of dozen people; `hasMore` is surfaced to the caller so a site that
+ * outgrows one page says so rather than silently offering a truncated list.
+ */
+export function listAssignableUsers(
+  scheduleRuleId: string,
+): Promise<AdminResult<AdminPage<AssignableUser>>> {
+  return call(`/schedule/${encodeURIComponent(scheduleRuleId)}/assignable-users${pageQuery()}`);
+}
+
+/**
+ * `PUT /schedule/{scheduleRuleId}/default-assignee` — set (or clear, with
+ * `null`) WHO NORMALLY DOES THIS PM.
+ *
+ * Writes `schedule_rule.default_assignee_id` and touches no job: it changes
+ * who FUTURE generated jobs go to, and leaves every job already raised exactly
+ * as it is. The screen says so — a control that silently moved work already in
+ * progress would be a different and much worse feature.
+ */
+export function setScheduleDefaultAssignee(
+  scheduleRuleId: string,
+  defaultAssigneeId: string | null,
+): Promise<AdminResult<components['schemas']['SetDefaultAssigneeResult']>> {
+  return call(`/schedule/${encodeURIComponent(scheduleRuleId)}/default-assignee`, {
+    method: 'PUT',
+    headers: jsonHeaders,
+    body: JSON.stringify({ defaultAssigneeId }),
+  });
+}
+
+/**
+ * `POST /jobs/{jobId}/assign` — assign or reassign ONE occurrence.
+ *
+ * Built and tested server-side since slice 15-SYSWIRE and called by NOTHING in
+ * this app until now, which is why every generated job has sat unassigned.
+ *
+ * NO `Idempotency-Key`, deliberately. The header is honoured but not required,
+ * and the operation is naturally idempotent in the only way that matters: it
+ * SETS `assigned_to` to a named user rather than appending anything, so a
+ * retried request lands the same job on the same person. A key would only
+ * change behaviour in the case where a planner has since chosen somebody ELSE
+ * — and there the replay-cached response would hide that from them, which is
+ * worse than simply repeating the write. (Contrast the offline outbox, where
+ * a key is essential because the client cannot see the outcome at all.)
+ *
+ * Writes `job.assigned_to` and never `schedule_rule.default_assignee_id`:
+ * covering one visit must not rewrite the plan.
+ */
+export function assignJob(jobId: string, assigneeId: string): Promise<AdminResult<Job>> {
+  return call(`/jobs/${encodeURIComponent(jobId)}/assign`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ assigneeId }),
+  });
 }

@@ -1,17 +1,37 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { AuditActionT } from '@prisma/client';
 import {
   resolveTemplateTitle,
+  type PlannerDefaultAssignee,
   type PlannerScheduleQuery,
   type PlannerScheduleRow,
+  type PlannerVisitJob,
+  type SetDefaultAssigneeRequest,
+  type SetDefaultAssigneeResult,
 } from '@bamform/shared';
+import { AuditEventService } from '../audit/audit-event.service';
+import { decodeIdentityField } from '../auth/crypto/identity-codec';
+import type { ActorMeta } from '../common/actor-meta';
 import { AreaScopeService } from '../common/area-scope';
-import { validationFailedProblem } from '../common/domain-problems';
+import {
+  notFoundProblem,
+  outOfScopeProblem,
+  validationFailedProblem,
+} from '../common/domain-problems';
+import { FIELD_ENCRYPTION_SERVICE } from '../crypto/crypto.tokens';
+import type { FieldEncryptionService } from '../crypto/field-encryption';
+import { AssignableUserService, eligibilityKey } from '../jobs/assignable-user.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { decodeCursor, normaliseLimit, paginate, type Page } from '../common/pagination';
+import { JOB_STATUS_FROM_DB } from '../jobs/job-enums';
 import { resolveCascadeFrequencyScope } from './frequency-cascade';
+import { jobGenerationOpensOn, resolveDefaultLeadTimeDays } from './job-generation.service';
 import { parseIsoDateOnly, projectVisitDates, toIsoDateOnly } from './planner-projection';
 import {
   PlannerScheduleRepository,
   type PlannerScheduleRuleRow,
+  type ScheduledVisitJobRow,
 } from './planner-schedule.repository';
 
 /**
@@ -61,6 +81,25 @@ export class PlannerScheduleService {
   constructor(
     private readonly repo: PlannerScheduleRepository,
     private readonly areaScope: AreaScopeService,
+    private readonly config: ConfigService,
+    /**
+     * Slice 32-PLANNERJOB. Used for ONE field: the assignee's name on a visit
+     * that actually has a job (`app_user.full_name` is application-layer
+     * encrypted, DBD §6.2). An id names nobody, and "due, and nobody has it"
+     * is the state this screen exists to surface — but the decryption is kept
+     * to the single column, on the small subset of rows whose job has been
+     * raised, and never becomes a directory read.
+     */
+    @Inject(FIELD_ENCRYPTION_SERVICE) private readonly fieldEncryption: FieldEncryptionService,
+    /**
+     * Slice 32-PLANNERJOB. The SAME rule `POST /jobs/{jobId}/assign` enforces
+     * — shared rather than restated, because a planner told "yes" when
+     * setting a standing assignee and "no" when the job appears would have no
+     * way to reconcile the two.
+     */
+    private readonly assignableUsers: AssignableUserService,
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditEventService,
   ) {}
 
   async list(userId: string, query: PlannerScheduleQuery): Promise<Page<PlannerScheduleRow>> {
@@ -80,8 +119,213 @@ export class PlannerScheduleService {
     );
 
     const page = paginate(rows, limit);
-    return { data: page.data.map((row) => toPlannerRow(row, from, to)), page: page.page };
+
+    // Slice 32-PLANNERJOB. ONE additional query for the whole page, issued
+    // after `paginate` has dropped the look-ahead row so it never asks about a
+    // visit the caller will not be shown. Resolving the job per row would be
+    // the "call `GET /jobs` 230 times" shape this endpoint exists to avoid.
+    const defaultLeadTimeDays = resolveDefaultLeadTimeDays(
+      this.config.get('DEFAULT_LEAD_TIME_DAYS'),
+    );
+    const jobs = await this.repo.findScheduledJobsForVisits(
+      page.data.map((row) => ({
+        assetDocumentId: row.assetDocumentId,
+        frequency: row.frequency,
+        dueOn: row.nextDueOn,
+      })),
+      allowedAreaIds,
+    );
+    const jobByVisit = indexJobsByVisit(jobs);
+
+    // Slice 32-PLANNERJOB — the STANDING assignee, and whether they would
+    // still be accepted for that machine today. One batched query for the
+    // whole page (`resolveEligibility`), never one per row: the grid draws 230
+    // rules and the answer must not cost 230 round trips.
+    const eligibility = await this.assignableUsers.resolveEligibility(
+      page.data
+        .filter((row) => row.defaultAssigneeId !== null)
+        .map((row) => ({
+          userId: row.defaultAssigneeId as string,
+          areaId: row.assetDocument.asset.areaId,
+        })),
+    );
+
+    return {
+      data: page.data.map((row) =>
+        toPlannerRow(
+          row,
+          from,
+          to,
+          defaultLeadTimeDays,
+          jobByVisit.get(visitKeyOf(row)) ?? null,
+          (job) => this.assigneeName(job),
+          row.defaultAssigneeId
+            ? (eligibility.get(
+                eligibilityKey(row.defaultAssigneeId, row.assetDocument.asset.areaId),
+              ) ?? null)
+            : null,
+        ),
+      ),
+      page: page.page,
+    };
   }
+
+  /**
+   * `GET /schedule/{scheduleRuleId}/assignable-users` — slice 32-PLANNERJOB.
+   *
+   * ONE PICKER FOR BOTH LEVELS, and that is the point rather than a
+   * convenience. The standing assignee on a rule and the assignee on a job
+   * generated from it are judged against the SAME machine's area, so the
+   * candidate sets are identical by construction. Two endpoints would have
+   * been two lists that could disagree, and a planner switching between "who
+   * normally does this" and "who does this one" would have had no way to tell
+   * which list they were looking at.
+   *
+   * KEYED BY THE RULE, not the job, for the same reason: the rule exists
+   * before the job does. A visit whose job has not been generated yet still
+   * needs a picker, and the planner is the screen where both are set.
+   *
+   * WHY IT EXISTS AT ALL: `GET /users` is `@Roles('ADMIN')`, so PLANNER,
+   * TEAM_LEADER and ENGINEER — three of the four roles that MAY assign — had
+   * no readable source for the list. Widening `/users` would have handed them
+   * the whole directory including email and employee id; this hands them a
+   * name and the roles that put the person on the list, for one machine they
+   * can already see.
+   */
+  async listAssignableUsers(
+    userId: string,
+    scheduleRuleId: string,
+    query: { limit?: unknown; cursor?: string },
+  ): Promise<Page<import('@bamform/shared').AssignableUser>> {
+    const rule = await this.loadRuleInScope(userId, scheduleRuleId);
+    return this.assignableUsers.list(rule.assetDocument.asset.areaId, query);
+  }
+
+  /**
+   * `PUT /schedule/{scheduleRuleId}/default-assignee` — slice 32-PLANNERJOB.
+   * Sets (or clears, with `null`) WHO NORMALLY DOES THIS PM.
+   *
+   * IT WRITES ONE COLUMN AND TOUCHES NO JOB. That is the whole contract:
+   * `schedule_rule.default_assignee_id` is read by `JobGenerationService` when
+   * it CREATES a job, so this affects work not yet generated and nothing else.
+   * A job already raised keeps whoever it has — including one raised five
+   * minutes ago — and the planner is told so, because a control that silently
+   * moved work already in progress would be a different and much worse
+   * feature.
+   *
+   * VALIDATED WITH THE SAME RULE AS `POST /jobs/{jobId}/assign`, against this
+   * machine's area. It is validated again at generation time, because
+   * eligibility lapses between the two and this endpoint cannot promise
+   * otherwise — see `JobGenerationService#resolveDefaultAssignee`.
+   */
+  async setDefaultAssignee(
+    actor: ActorMeta,
+    scheduleRuleId: string,
+    dto: SetDefaultAssigneeRequest,
+  ): Promise<SetDefaultAssigneeResult> {
+    const rule = await this.loadRuleInScope(actor.actorId, scheduleRuleId);
+    const areaId = rule.assetDocument.asset.areaId;
+
+    if (dto.defaultAssigneeId) {
+      // 422 naming which of the three conditions failed — the shared check,
+      // not a second copy of it.
+      await this.assignableUsers.assertAssignable(dto.defaultAssigneeId, areaId);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.scheduleRule.update({
+        where: { id: scheduleRuleId },
+        data: { defaultAssigneeId: dto.defaultAssigneeId },
+      });
+      await this.audit.record(tx, {
+        actorId: actor.actorId,
+        action: AuditActionT.update,
+        entityType: 'schedule_rule',
+        entityId: scheduleRuleId,
+        // Ids only. `app_user.full_name` is encrypted and `audit_event` is
+        // append-only with 7-year retention, so writing a decrypted name here
+        // would be a permanent plaintext copy (PR-SEC-02, and the same reason
+        // `users.mapper.ts#toUserAuditView` exists).
+        before: { defaultAssigneeId: rule.defaultAssigneeId },
+        after: { defaultAssigneeId: dto.defaultAssigneeId },
+        sourceIp: actor.sourceIp,
+        requestId: actor.requestId,
+      });
+    });
+
+    if (!dto.defaultAssigneeId) {
+      return { scheduleRuleId, defaultAssignee: null };
+    }
+    const resolved = await this.assignableUsers.resolveEligibility([
+      { userId: dto.defaultAssigneeId, areaId },
+    ]);
+    const entry = resolved.get(eligibilityKey(dto.defaultAssigneeId, areaId));
+    return {
+      scheduleRuleId,
+      defaultAssignee: entry
+        ? { id: dto.defaultAssigneeId, fullName: entry.fullName, eligible: entry.eligible }
+        : null,
+    };
+  }
+
+  /**
+   * A NAMED rule the caller may act on: 404 when it does not exist, 403
+   * `out-of-scope` when its machine is outside the caller's area scope.
+   *
+   * Deliberately NOT the collection behaviour of `list` above. There, an
+   * out-of-scope machine is simply absent — refusing a whole grid over one
+   * invisible machine would make the endpoint useless. Here the caller has
+   * NAMED a rule, and answering 404 for one that exists would be a lie;
+   * `AssetScheduleService` already settled this distinction for
+   * `GET /assets/{assetId}/schedule`.
+   */
+  private async loadRuleInScope(userId: string, scheduleRuleId: string) {
+    const rule = await this.repo.findRuleForMutation(scheduleRuleId);
+    if (!rule) {
+      throw notFoundProblem('ScheduleRule', scheduleRuleId);
+    }
+    const allowedAreaIds = await this.areaScope.getAllowedAreaIds(userId);
+    const areaId = rule.assetDocument.asset.areaId;
+    if (allowedAreaIds !== null && (!areaId || !allowedAreaIds.includes(areaId))) {
+      throw outOfScopeProblem('Asset');
+    }
+    return rule;
+  }
+
+  private assigneeName(job: ScheduledVisitJobRow): string | null {
+    if (!job.assignee) return null;
+    return decodeIdentityField(
+      job.assignee.fullNameCt,
+      job.assignee.dekVersion,
+      { column: 'full_name_ct', rowId: job.assignee.id },
+      this.fieldEncryption,
+    );
+  }
+}
+
+/**
+ * The visit key as a string, so the page's jobs can be joined to its rows in
+ * memory. `dueOn` is reduced to its calendar date on both sides — `due_on` and
+ * `next_due_on` are DATE columns, but Prisma hands them back as `Date`s whose
+ * `getTime()` would compare unequal if either ever carried a time-of-day.
+ */
+function visitKeyOf(row: { assetDocumentId: string; frequency: string; nextDueOn: Date }): string {
+  return `${row.assetDocumentId}|${row.frequency}|${toIsoDateOnly(row.nextDueOn)}`;
+}
+
+function indexJobsByVisit(
+  jobs: readonly ScheduledVisitJobRow[],
+): Map<string, ScheduledVisitJobRow> {
+  const byVisit = new Map<string, ScheduledVisitJobRow>();
+  for (const job of jobs) {
+    const key = `${job.assetDocumentId}|${job.frequency}|${toIsoDateOnly(job.dueOn)}`;
+    // FIRST wins. The repository orders by `generatedAt asc` and the partial
+    // unique index makes a second live job on one key impossible today; if a
+    // future schema change made it possible, the grid must still be stable
+    // read to read rather than silently swapping which job it links.
+    if (!byVisit.has(key)) byVisit.set(key, job);
+  }
+  return byVisit;
 }
 
 /**
@@ -123,9 +367,21 @@ function resolveWindow(query: PlannerScheduleQuery): { from: Date; to: Date } {
   return { from, to };
 }
 
-function toPlannerRow(row: PlannerScheduleRuleRow, from: Date, to: Date): PlannerScheduleRow {
+function toPlannerRow(
+  row: PlannerScheduleRuleRow,
+  from: Date,
+  to: Date,
+  defaultLeadTimeDays: number,
+  job: ScheduledVisitJobRow | null,
+  assigneeName: (job: ScheduledVisitJobRow) => string | null,
+  defaultAssignee: { fullName: string; eligible: boolean } | null,
+): PlannerScheduleRow {
   const asset = row.assetDocument.asset;
   const template = row.assetDocument.formTemplate;
+
+  // Exactly what `JobGenerationService#generateDueJobs` reads: the machine
+  // family's own lead time, or the deployment default where it sets none.
+  const leadTimeDays = asset.assetType.leadTimeDays ?? defaultLeadTimeDays;
 
   return {
     id: row.id,
@@ -161,5 +417,38 @@ function toPlannerRow(row: PlannerScheduleRuleRow, from: Date, to: Date): Planne
         intervalMonths: sibling.intervalMonths,
       })),
     ),
+
+    // Slice 32-PLANNERJOB — the job for the STORED next-due date, and the
+    // boundary at which one appears if it has not yet. Both belong to
+    // `nextDueOn` alone; every other date in `plannedDates` is a projection of
+    // it and nothing has been written against those.
+    nextDueJob: job ? toVisitJob(job, assigneeName(job)) : null,
+    jobGenerationOpensOn: toIsoDateOnly(jobGenerationOpensOn(row.nextDueOn, leadTimeDays)),
+
+    // WHO NORMALLY DOES THIS PM. Distinct from `nextDueJob.assignedTo` above:
+    // this is the plan, that is one occurrence. `eligible: false` is the
+    // warning that matters — the next sweep will generate an UNASSIGNED job.
+    defaultAssignee:
+      row.defaultAssigneeId && defaultAssignee
+        ? ({
+            id: row.defaultAssigneeId,
+            fullName: defaultAssignee.fullName,
+            eligible: defaultAssignee.eligible,
+          } satisfies PlannerDefaultAssignee)
+        : null,
+  };
+}
+
+function toVisitJob(job: ScheduledVisitJobRow, assigneeName: string | null): PlannerVisitJob {
+  return {
+    id: job.id,
+    jobNumber: job.jobNumber,
+    // The same DBD §5 -> wire mapping every other job read uses, never a
+    // second hand-written table (`jobs/job-enums.ts`).
+    status: JOB_STATUS_FROM_DB[job.status],
+    assignedTo: job.assignedTo,
+    // `null` exactly when `assignedTo` is: the name comes from the `assignee`
+    // relation, which Prisma only populates when the FK is set.
+    assignedToName: assigneeName,
   };
 }

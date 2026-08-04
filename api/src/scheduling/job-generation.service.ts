@@ -10,6 +10,8 @@ import {
 } from '@prisma/client';
 import { FREQUENCY_INTERVAL_MONTHS, type Frequency } from '@bamform/shared';
 import { AuditEventService } from '../audit/audit-event.service';
+import { AssignableUserService } from '../jobs/assignable-user.service';
+import { NotificationQueueService } from '../notifications/notification-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveCascadeFrequencyScope, resolveCascadeItems } from './frequency-cascade';
 import { nextJobNumber } from './job-number';
@@ -23,6 +25,15 @@ export interface GenerateDueJobsResult {
   alreadyExists: number;
   /** Candidates skipped because the template has no active items in scope, or no current revision. */
   skippedNoItems: number;
+  /** Slice 32-PLANNERJOB — jobs generated ASSIGNED, from the rule's standing assignee. */
+  assignedFromDefault: number;
+  /**
+   * Slice 32-PLANNERJOB — jobs generated UNASSIGNED because the rule named a
+   * standing assignee who is no longer eligible (left, role revoked, area
+   * scope narrowed). The job IS still created; this counter is what makes the
+   * silence impossible. See `resolveDefaultAssignee`.
+   */
+  defaultAssigneeUnavailable: number;
 }
 
 /**
@@ -47,6 +58,41 @@ function dateOnly(date: Date): Date {
 }
 
 /**
+ * PR-ENV: the lead time used for a machine whose asset type sets none. The
+ * deployment overrides it with `DEFAULT_LEAD_TIME_DAYS`.
+ */
+export const DEFAULT_LEAD_TIME_DAYS = 30;
+
+/**
+ * `DEFAULT_LEAD_TIME_DAYS` as an actual number of days.
+ *
+ * The old inline `Number(config.get(...) ?? 30)` turned a typo'd env value
+ * into `NaN`, and `nextDueOn > today + NaN` is FALSE for every rule — which
+ * would have made the scheduler generate the entire plant's remaining
+ * schedule on one sweep rather than fail loudly. A non-finite or non-positive
+ * value falls back to the documented default instead.
+ */
+export function resolveDefaultLeadTimeDays(raw: unknown): number {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_LEAD_TIME_DAYS;
+}
+
+/**
+ * THE GENERATION BOUNDARY, in one place — the earliest date on which a sweep
+ * will raise the job for `nextDueOn`.
+ *
+ * `generateDueJobs` skips a rule while `nextDueOn > today + leadTimeDays`,
+ * i.e. it generates once `today >= nextDueOn - leadTimeDays`. Both are whole
+ * UTC calendar days (`next_due_on` and `due_on` are DATE columns), so the two
+ * forms are the same inequality rearranged — and it is stated ONCE here
+ * because `GET /schedule` has to tell a planner the same boundary the sweep
+ * applies, and a second hand-written copy of it would eventually disagree.
+ */
+export function jobGenerationOpensOn(nextDueOn: Date, leadTimeDays: number): Date {
+  return addDays(dateOnly(nextDueOn), -leadTimeDays);
+}
+
+/**
  * PR-050/PR-052 — evaluates every active `schedule_rule` due within its
  * asset type's lead time and generates the `job` rows PR-053's cascade
  * says are missing. Idempotent: a repeated call (whether because the
@@ -68,6 +114,8 @@ export class JobGenerationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditEventService,
+    private readonly assignableUsers: AssignableUserService,
+    private readonly notificationQueue: NotificationQueueService,
   ) {}
 
   async generateDueJobs(today: Date, defaultLeadTimeDays: number): Promise<GenerateDueJobsResult> {
@@ -85,6 +133,8 @@ export class JobGenerationService {
       generated: 0,
       alreadyExists: 0,
       skippedNoItems: 0,
+      assignedFromDefault: 0,
+      defaultAssigneeUnavailable: 0,
     };
 
     for (const rule of rules) {
@@ -95,13 +145,15 @@ export class JobGenerationService {
       }
 
       const leadTimeDays = asset.assetType.leadTimeDays ?? defaultLeadTimeDays;
-      const cutoff = addDays(dateOnly(today), leadTimeDays);
-      if (dateOnly(rule.nextDueOn) > cutoff) {
+      // Stated through the shared boundary rather than inline, so `GET
+      // /schedule`'s `jobGenerationOpensOn` and this candidate test are
+      // provably the same condition (see the function's own note).
+      if (dateOnly(today) < jobGenerationOpensOn(rule.nextDueOn, leadTimeDays)) {
         continue; // not due within the lead-time window yet
       }
 
       result.evaluated += 1;
-      const outcome = await this.generateForRule(rule, asset);
+      const outcome = await this.generateForRule(rule, asset, result);
       if (outcome === 'generated') result.generated += 1;
       else if (outcome === 'exists') result.alreadyExists += 1;
       else result.skippedNoItems += 1;
@@ -110,9 +162,62 @@ export class JobGenerationService {
     return result;
   }
 
+  /**
+   * Slice 32-PLANNERJOB — WHO the generated job goes to, and what happens when
+   * that person is no longer eligible.
+   *
+   * THE DECISION, stated once so it cannot be re-litigated in a diff: an
+   * ineligible standing assignee produces an UNASSIGNED JOB, NOT A REFUSAL.
+   *
+   * Refusing to generate was the other candidate and it is wrong. The job IS
+   * the controlled maintenance record — the artefact the ISO audit asks for —
+   * and a plant that silently stops raising PM records because a technician
+   * left the company has an audit finding, not a staffing problem. The
+   * schedule would also stall: `next_due_on` only advances on completion, so
+   * a refused generation leaves the rule overdue for ever with nothing to
+   * complete.
+   *
+   * But it must never be QUIET, which was the real hazard: a job that arrives
+   * unassigned is invisible to every MAINTAINER (`job-access.ts` shows them
+   * only their own), so "the work stopped being assigned" would look exactly
+   * like "there was no work". So one lapse leaves three traces:
+   *   * the sweep's own `defaultAssigneeUnavailable` counter, logged by
+   *     `SchedulerService` on every run;
+   *   * an ERROR log naming the rule, the job and the user that failed;
+   *   * the job's `create` AUDIT EVENT, which carries
+   *     `defaultAssigneeUnavailable: true` and the id — permanent, in the
+   *     hash chain, and the only one of the three that survives log rotation.
+   * And the planner grid says it BEFORE the sweep does: `GET /schedule`
+   * reports `defaultAssignee.eligible = false` on the row.
+   */
+  private async resolveDefaultAssignee(
+    rule: RuleWithDocument,
+    asset: Asset,
+    result: GenerateDueJobsResult,
+  ): Promise<{ assigneeId: string | null; unavailableId: string | null }> {
+    // The overwhelmingly common path, and every pre-slice-32 row: no standing
+    // assignee, so the job is born SCHEDULED and unassigned exactly as before.
+    if (!rule.defaultAssigneeId) {
+      return { assigneeId: null, unavailableId: null };
+    }
+    const eligible = await this.assignableUsers.isAssignable(rule.defaultAssigneeId, asset.areaId);
+    if (eligible) {
+      result.assignedFromDefault += 1;
+      return { assigneeId: rule.defaultAssigneeId, unavailableId: null };
+    }
+    result.defaultAssigneeUnavailable += 1;
+    this.logger.error(
+      `schedule_rule ${rule.id} names default assignee ${rule.defaultAssigneeId}, who is no longer ` +
+        `assignable for asset ${asset.id} (inactive, no result-recording role, or out of area scope) — ` +
+        'generating this job UNASSIGNED. Set a new default assignee on the plan.',
+    );
+    return { assigneeId: null, unavailableId: rule.defaultAssigneeId };
+  }
+
   private async generateForRule(
     rule: RuleWithDocument,
     asset: Asset & { assetType: AssetType },
+    result: GenerateDueJobsResult,
   ): Promise<'generated' | 'exists' | 'skipped'> {
     // Slice 27: the form comes from the DOCUMENT. Two documents on one machine
     // therefore raise jobs against two DIFFERENT template revisions — which is
@@ -145,8 +250,15 @@ export class JobGenerationService {
     }
     const frequencyScope = resolveCascadeFrequencyScope(rule.intervalMonths, candidates, override);
 
+    // Slice 32-PLANNERJOB — resolved BEFORE the transaction: it is a read
+    // against `app_user`/`user_role`/`user_area_scope` and holding the job
+    // insert's transaction open across it would widen the window on the very
+    // table the idempotency index protects.
+    const { assigneeId, unavailableId } = await this.resolveDefaultAssignee(rule, asset, result);
+    const now = new Date();
+
     try {
-      await this.prisma.$transaction(async (tx) => {
+      const createdJob = await this.prisma.$transaction(async (tx) => {
         const jobNumber = await nextJobNumber(tx, rule.nextDueOn.getUTCFullYear());
         const job = await tx.job.create({
           data: {
@@ -160,8 +272,17 @@ export class JobGenerationService {
             frequency: rule.frequency,
             frequencyScope,
             dueOn: rule.nextDueOn,
-            generatedAt: new Date(),
-            status: JobStatusT.scheduled,
+            generatedAt: now,
+            // Slice 32-PLANNERJOB. A rule with an eligible standing assignee
+            // generates a job that is ALREADY ASSIGNED — which is the whole
+            // point: `job-access.ts` shows a MAINTAINER only their own jobs,
+            // so an unassigned job is invisible to the person who should do
+            // it. The status follows the same PRD §5.1 edge a manual
+            // assignment takes (SCHEDULED -> ASSIGNED); with no assignee it
+            // stays SCHEDULED, exactly as every job before this slice.
+            assignedTo: assigneeId,
+            assignedAt: assigneeId ? now : null,
+            status: assigneeId ? JobStatusT.assigned : JobStatusT.scheduled,
           },
         });
 
@@ -177,9 +298,43 @@ export class JobGenerationService {
             frequency: rule.frequency,
             frequencyScope,
             dueOn: job.dueOn,
+            status: job.status,
+            assignedTo: assigneeId,
+            // THE PERMANENT TRACE. Present only when a standing assignee was
+            // named and rejected — the audit chain is the one record of this
+            // that outlives log rotation, and without it a job that quietly
+            // arrived unassigned would be indistinguishable from a rule that
+            // never had a default at all. Ids only: `full_name` is encrypted
+            // and `audit_event` is append-only with 7-year retention
+            // (PR-SEC-02).
+            ...(unavailableId
+              ? { defaultAssigneeUnavailable: true, defaultAssigneeId: unavailableId }
+              : {}),
           },
         });
+        return job;
       });
+
+      // UR-061 — the assignee has to LEARN they have work, exactly as a manual
+      // assignment tells them (`AssignmentService`). Best-effort and
+      // post-commit, by the same rule: a notification failure must never
+      // un-generate a job that is already the controlled record.
+      if (assigneeId) {
+        try {
+          await this.notificationQueue.enqueueNotification({
+            recipientId: assigneeId,
+            templateCode: 'JOB_ASSIGNED',
+            entityType: 'job',
+            entityId: createdJob.id,
+            payload: { jobNumber: createdJob.jobNumber, assetCode: asset.code },
+          });
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `generated-job assignment notification enqueue failed for job ${createdJob.id}: ${err.message}`,
+          );
+        }
+      }
       return 'generated';
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {

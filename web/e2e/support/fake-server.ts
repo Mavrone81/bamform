@@ -404,6 +404,33 @@ function addCalendarMonthsClamped(iso: string, months: number): string {
     .slice(0, 10);
 }
 
+/**
+ * Slice 32-PLANNERJOB — the tuple that names one planned visit's job, mirroring
+ * `planner-schedule.repository.ts#findScheduledJobsForVisits`: the DOCUMENT
+ * (not the machine — one machine can carry several), the FREQUENCY (one
+ * document can carry several rules), and the STORED due date.
+ */
+/**
+ * Slice 32-PLANNERJOB — the roles that can record results, mirroring
+ * `api/src/jobs/job-access.ts#JOB_RECORD_ROLES`. An assignee must hold one, or
+ * the assignment is a dead end: result capture is `@Roles(JOB_RECORD_ROLES)`.
+ */
+const JOB_RECORD_ROLES: readonly string[] = ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'];
+
+/** The four roles that may assign — `@Roles()` on both assignment routes. */
+const ASSIGN_ROLES: string[] = ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'];
+
+function visitJobKey(assetDocumentId: string, frequency: string, dueOn: string): string {
+  return `${assetDocumentId}|${frequency}|${dueOn}`;
+}
+
+/** Whole UTC calendar days, matching the api's own `addDays` on DATE columns. */
+function addDaysIso(date: string, days: number): string {
+  const shifted = new Date(`${date}T00:00:00.000Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
 function projectVisitDates(
   nextDueOn: string,
   intervalMonths: number,
@@ -466,6 +493,31 @@ export class FakeServer {
    * and `scheduleRulesOf`). */
   private scheduleRulesById = new Map<string, FakeScheduleRule>();
   private scheduleRuleSeq = 0;
+  /**
+   * Slice 32-PLANNERJOB — the jobs the SCHEDULER has raised against planned
+   * visits, keyed the way the real system keys them:
+   * `(assetDocumentId, frequency, dueOn)`. See `seedGeneratedJob`.
+   *
+   * Kept apart from `jobs` (the `SeedJob` store the job screens read) because
+   * they answer different questions: `jobs` is "what does `GET /jobs/{id}`
+   * return", this is "is there a job for this VISIT". `seedGeneratedJob`
+   * writes both, so a spec can follow the planner's link into a real capture
+   * screen rather than a 404.
+   */
+  private generatedJobsByVisit = new Map<
+    string,
+    { id: string; jobNumber: string; status: string }
+  >();
+  private generatedJobSeq = 0;
+  /**
+   * Slice 32-PLANNERJOB — `schedule_rule.default_assignee_id`, keyed by rule.
+   * WHO NORMALLY DOES THIS PM. Kept apart from `jobAssignees` below because
+   * the two levels are independent in the real system and a fake that stored
+   * them together could never fail the test that proves it.
+   */
+  private ruleDefaultAssignee = new Map<string, string | null>();
+  /** `job.assigned_to`, keyed by job — WHO IS DOING THIS ONE. */
+  private jobAssignees = new Map<string, string | null>();
 
   constructor() {
     // A small canned asset-type catalogue (reference data the real system
@@ -527,7 +579,7 @@ export class FakeServer {
     return area;
   }
 
-  seedAssetType(input: { code: string; name: string }): FakeAssetType {
+  seedAssetType(input: { code: string; name: string; leadTimeDays?: number }): FakeAssetType {
     const id = `at-${this.assetTypesById.size + 1}`;
     const assetType: FakeAssetType = {
       id,
@@ -536,7 +588,12 @@ export class FakeServer {
       description: null,
       formTemplateId: `tpl-${id}`,
       approvalRouteId: 'route-1',
-      leadTimeDays: 30,
+      // Slice 32-PLANNERJOB made this settable. It decides
+      // `jobGenerationOpensOn` — how far before its due date the scheduler
+      // raises a machine family's work — and a spec can only prove the planner
+      // prints the SERVER's boundary rather than a hard-coded 30 by seeding a
+      // family whose lead time is not 30.
+      leadTimeDays: input.leadTimeDays ?? 30,
       active: true,
     };
     this.assetTypesById.set(id, assetType);
@@ -632,6 +689,87 @@ export class FakeServer {
       };
       this.scheduleRulesById.set(rule.id, rule);
     }
+  }
+
+  /**
+   * Slice 32-PLANNERJOB — stands in for a scheduler sweep having already
+   * raised the job for one planned visit.
+   *
+   * KEYED THE WAY THE REAL SYSTEM KEYS IT. `job` carries a partial unique
+   * index on `(asset_document_id, frequency_scope, due_on) WHERE status <>
+   * 'voided' AND is_adhoc = false`, and `planner-schedule.repository.ts`
+   * matches the equivalent `(assetDocumentId, frequency, dueOn)`. Modelling
+   * anything looser here — "the job for this machine", say — would let a
+   * broken match in the app pass CI, which is the whole reason this file
+   * mirrors the real service rather than simplifying it.
+   *
+   * It also seeds a real `SeedJob` under the same id, so following the
+   * planner's link lands on a capture screen instead of a 404 — the journey
+   * this slice exists for is only proved end to end if the destination
+   * actually opens.
+   */
+  seedGeneratedJob(input: {
+    assetDocumentId: string;
+    frequency: Frequency;
+    dueOn: string;
+    assetCode: string;
+    status?: string;
+    title?: string;
+  }): { id: string; jobNumber: string } {
+    const n = ++this.generatedJobSeq;
+    const id = `gen-job-${n}`;
+    const jobNumber = `PM-2026-${String(1000 + n).padStart(6, '0')}`;
+    this.generatedJobsByVisit.set(
+      visitJobKey(input.assetDocumentId, input.frequency, input.dueOn),
+      { id, jobNumber, status: input.status ?? 'SCHEDULED' },
+    );
+    this.seedJob({
+      id,
+      jobNumber,
+      assetCode: input.assetCode,
+      frequency: input.frequency,
+      dueOn: input.dueOn,
+      status: input.status ?? 'SCHEDULED',
+      title: input.title,
+      items: [{ id: `${id}-item-1`, itemNo: 1, instruction: 'Planned check', mandatory: true }],
+    });
+    return { id, jobNumber };
+  }
+
+  /**
+   * The rule a document's template bootstrapped at `frequency` — slice
+   * 32-PLANNERJOB. A spec needs the rule ID to set a standing assignee, and
+   * rules are created implicitly by `seedAssetDocument`, never by the spec.
+   */
+  scheduleRuleFor(assetDocumentId: string, frequency: Frequency): FakeScheduleRule {
+    const rule = Array.from(this.scheduleRulesById.values()).find(
+      (candidate) =>
+        candidate.assetDocumentId === assetDocumentId && candidate.frequency === frequency,
+    );
+    if (!rule) {
+      throw new Error(`no ${frequency} schedule rule on document ${assetDocumentId}`);
+    }
+    return rule;
+  }
+
+  /**
+   * Sets `schedule_rule.default_assignee_id` DIRECTLY, bypassing the endpoint
+   * — for a spec that needs the standing assignee as a starting CONDITION
+   * rather than as the thing under test. The journey that actually sets one
+   * does it through the UI.
+   */
+  setRuleDefaultAssignee(scheduleRuleId: string, userId: string | null): void {
+    this.ruleDefaultAssignee.set(scheduleRuleId, userId);
+  }
+
+  /**
+   * Deactivates a user, the way slice 13a's administration does (INV-16: no
+   * hard delete, ever). This is how a standing assignee LAPSES — the exact
+   * condition that makes the next sweep generate an unassigned job.
+   */
+  deactivateUser(userId: string): void {
+    const user = this.adminUsers.get(userId);
+    if (user) user.active = false;
   }
 
   /** Scopes a user directly (bypassing the PUT endpoint) so a spec can set
@@ -2823,7 +2961,240 @@ export class FakeServer {
         .filter((sibling) => rule.intervalMonths % sibling.intervalMonths === 0)
         .map((sibling) => sibling.frequency)
         .sort((a, b) => FREQUENCY_INTERVAL_MONTHS[a] - FREQUENCY_INTERVAL_MONTHS[b]),
+      // Slice 32-PLANNERJOB. The STORED next-due date only — a projected date
+      // has never had anything written against it, exactly as
+      // `planner-schedule.service.ts` resolves it. A fake that answered for
+      // every `plannedDate` would let the screen invent work.
+      nextDueJob: this.toPlannerVisitJob(rule),
+      // WHO NORMALLY DOES THIS PM, with the eligibility the server recomputes
+      // on every read — a default set while someone was eligible can lapse.
+      defaultAssignee: this.toPlannerDefaultAssignee(rule, asset),
+      // `nextDueOn` less the MACHINE TYPE's lead time, as
+      // `jobGenerationOpensOn()` computes it server-side. Read off the asset
+      // type rather than hard-coded to 30, so a spec can prove the screen
+      // prints the server's date rather than one of its own.
+      jobGenerationOpensOn: addDaysIso(
+        rule.nextDueOn,
+        -(this.assetTypesById.get(asset.assetTypeId)?.leadTimeDays ?? 30),
+      ),
     };
+  }
+
+  /**
+   * Slice 32-PLANNERJOB — the job for the STORED next-due date, with its
+   * assignee. `assignedToName` is decrypted server-side in the real system;
+   * here it is simply looked up, but the SHAPE is the same, including
+   * `assignedToName === null` exactly when `assignedTo` is.
+   */
+  private toPlannerVisitJob(rule: FakeScheduleRule) {
+    const job = this.generatedJobsByVisit.get(
+      visitJobKey(rule.assetDocumentId, rule.frequency, rule.nextDueOn),
+    );
+    if (!job) return null;
+    const assignedTo = this.jobAssignees.get(job.id) ?? null;
+    return {
+      ...job,
+      assignedTo,
+      assignedToName: assignedTo ? (this.adminUsers.get(assignedTo)?.fullName ?? null) : null,
+    };
+  }
+
+  /**
+   * WHO NORMALLY DOES THIS PM, and whether they would STILL be accepted.
+   *
+   * `eligible` is recomputed on every read rather than stored, exactly as
+   * `assignable-user.service.ts#resolveEligibility` does — the whole hazard
+   * this field exists for is a default that was valid when it was set and is
+   * not any more, so a fake that cached it could never reproduce it.
+   */
+  private toPlannerDefaultAssignee(rule: FakeScheduleRule, asset: FakeAsset) {
+    const userId = this.ruleDefaultAssignee.get(rule.id) ?? null;
+    if (!userId) return null;
+    const user = this.adminUsers.get(userId);
+    return {
+      id: userId,
+      fullName: user?.fullName ?? 'Unknown user',
+      eligible: user ? this.isAssignableTo(user, asset.areaId ?? null) : false,
+    };
+  }
+
+  /**
+   * THE ONE ASSIGNABILITY RULE, mirroring `assignable-user.service.ts`: an
+   * ACTIVE user, holding a result-recording role, whose area scope reaches the
+   * machine (no scopes at all = unrestricted; a machine with no area is
+   * reachable only by an unrestricted user).
+   *
+   * Mirrored rather than simplified on purpose — the picker's whole promise is
+   * that it never offers somebody the server would refuse, and a fake that was
+   * more permissive would let a broken picker pass CI.
+   */
+  private isAssignableTo(user: FakeAdminUser, areaId: string | null): boolean {
+    if (!user.active) return false;
+    if (!user.roles.some((role) => JOB_RECORD_ROLES.includes(role))) return false;
+    if (user.areaIds.length === 0) return true;
+    return areaId !== null && user.areaIds.includes(areaId);
+  }
+
+  /**
+   * `GET /schedule/{scheduleRuleId}/assignable-users` — slice 32-PLANNERJOB.
+   *
+   * Mirrors the real endpoint's three refusals rather than simplifying them,
+   * because the SCREEN's guarantee is that it never offers somebody the server
+   * will reject: a role gate (the four that may assign), 404 for an unknown
+   * rule, and 403 `out-of-scope` for a machine the caller cannot see — NOT the
+   * "simply absent" behaviour of the collection read, because a named rule
+   * that exists must not be answered with a lie.
+   */
+  private async handleAssignableUsers(route: Route, scheduleRuleId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ASSIGN_ROLES);
+    if (!requester) return;
+
+    const rule = this.scheduleRulesById.get(scheduleRuleId);
+    const asset = rule ? this.assetOfRule(rule) : undefined;
+    if (!rule || !asset) {
+      await this.fulfillProblem(route, 404, 'Not found', '/errors/not-found');
+      return;
+    }
+    if (!this.assetInScope(requester, asset)) {
+      await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
+      return;
+    }
+
+    const data = Array.from(this.adminUsers.values())
+      .filter((user) => this.isAssignableTo(user, asset.areaId ?? null))
+      .map((user) => ({
+        id: user.id,
+        fullName: user.fullName,
+        // Only the roles that put them on the list — never the full role set.
+        roles: user.roles.filter((role) => JOB_RECORD_ROLES.includes(role)).sort(),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.page(data)),
+    });
+  }
+
+  /**
+   * `PUT /schedule/{scheduleRuleId}/default-assignee` — slice 32-PLANNERJOB.
+   * Sets WHO NORMALLY DOES THIS PM, and touches no job.
+   *
+   * The 422 is mirrored deliberately: it is what a picker built on a
+   * client-side guess would collect, so a spec can prove the screen never
+   * provokes it.
+   */
+  private async handleSetDefaultAssignee(route: Route, scheduleRuleId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ASSIGN_ROLES);
+    if (!requester) return;
+
+    const rule = this.scheduleRulesById.get(scheduleRuleId);
+    const asset = rule ? this.assetOfRule(rule) : undefined;
+    if (!rule || !asset) {
+      await this.fulfillProblem(route, 404, 'Not found', '/errors/not-found');
+      return;
+    }
+    if (!this.assetInScope(requester, asset)) {
+      await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
+      return;
+    }
+
+    const body = route.request().postDataJSON() as { defaultAssigneeId?: string | null };
+    const assigneeId = body.defaultAssigneeId ?? null;
+    if (assigneeId) {
+      const user = this.adminUsers.get(assigneeId);
+      if (!user || !this.isAssignableTo(user, asset.areaId ?? null)) {
+        await this.fulfillProblem(
+          route,
+          422,
+          'Validation failed',
+          '/errors/validation-failed',
+          'That person cannot be assigned to this machine.',
+        );
+        return;
+      }
+    }
+
+    // ONE COLUMN. `jobAssignees` is deliberately untouched: changing the plan
+    // must not move work already raised, and a fake that did would make the
+    // spec proving it impossible to write.
+    this.ruleDefaultAssignee.set(scheduleRuleId, assigneeId);
+
+    const user = assigneeId ? this.adminUsers.get(assigneeId) : undefined;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        scheduleRuleId,
+        defaultAssignee: user
+          ? {
+              id: user.id,
+              fullName: user.fullName,
+              eligible: this.isAssignableTo(user, asset.areaId ?? null),
+            }
+          : null,
+      }),
+    });
+  }
+
+  /**
+   * `POST /jobs/{jobId}/assign` — slice 15-SYSWIRE, first called by this app
+   * in slice 32-PLANNERJOB. Assigns or reassigns ONE occurrence.
+   *
+   * Mirrors the state machine (`job-state-machine.ts`): ASSIGN is legal from
+   * SCHEDULED/ASSIGNED/IN_PROGRESS and 409 otherwise, and the first assignment
+   * moves SCHEDULED -> ASSIGNED. The screen hides the control for the illegal
+   * states, so the 409 exists here precisely so a spec can prove it does.
+   */
+  private async handleAssignJob(route: Route, jobId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ASSIGN_ROLES);
+    if (!requester) return;
+
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      await this.fulfillProblem(route, 404, 'Not found', '/errors/not-found');
+      return;
+    }
+    const status = this.jobStatus.get(jobId) ?? job.status ?? 'SCHEDULED';
+    if (!['SCHEDULED', 'ASSIGNED', 'IN_PROGRESS'].includes(status)) {
+      await this.fulfillProblem(
+        route,
+        409,
+        'Invalid transition',
+        '/errors/invalid-transition',
+        `A ${status} job cannot be reassigned.`,
+      );
+      return;
+    }
+
+    const body = route.request().postDataJSON() as { assigneeId?: string };
+    const assignee = body.assigneeId ? this.adminUsers.get(body.assigneeId) : undefined;
+    if (!assignee) {
+      await this.fulfillProblem(route, 422, 'Validation failed', '/errors/validation-failed');
+      return;
+    }
+
+    // ONE COLUMN, again. `ruleDefaultAssignee` is untouched: covering a single
+    // visit must not rewrite who normally does the machine's maintenance.
+    this.jobAssignees.set(jobId, assignee.id);
+    const generated = Array.from(this.generatedJobsByVisit.values()).find((g) => g.id === jobId);
+    if (status === 'SCHEDULED') {
+      this.jobStatus.set(jobId, 'ASSIGNED');
+      if (generated) generated.status = 'ASSIGNED';
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(this.toApiJob(job)),
+    });
+  }
+
+  /** The machine a rule hangs off, through its document. */
+  private assetOfRule(rule: FakeScheduleRule): FakeAsset | undefined {
+    const doc = this.assetDocumentsById.get(rule.assetDocumentId);
+    return doc ? this.assetsById.get(doc.assetId) : undefined;
   }
 
   private assetInScope(requester: FakeAdminUser, asset: FakeAsset): boolean {
@@ -3201,6 +3572,43 @@ export class FakeServer {
     await page.route(
       /\/api\/v1\/schedule(\?.*)?$/,
       this.guarded((route) => this.handlePlannerSchedule(route)),
+    );
+    // Slice 32-PLANNERJOB — the two assignment routes on the schedule
+    // surface. Registered AFTER the collection read above so the more
+    // specific paths win under Playwright's last-registered-first resolution
+    // (they could not collide regardless: that pattern ends at `/schedule`).
+    await page.route(
+      /\/api\/v1\/schedule\/([^/]+)\/assignable-users(\?.*)?$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/schedule\/([^/]+)\/assignable-users/);
+        return this.handleAssignableUsers(route, match ? decodeURIComponent(match[1]) : 'unknown');
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/schedule\/([^/]+)\/default-assignee$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/schedule\/([^/]+)\/default-assignee$/);
+        return this.handleSetDefaultAssignee(
+          route,
+          match ? decodeURIComponent(match[1]) : 'unknown',
+        );
+      }),
+    );
+    await page.route(
+      /\/api\/v1\/jobs\/([^/]+)\/assign$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/jobs\/([^/]+)\/assign$/);
+        return this.handleAssignJob(route, match ? decodeURIComponent(match[1]) : 'unknown');
+      }),
     );
 
     await page.route(

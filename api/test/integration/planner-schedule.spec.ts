@@ -8,7 +8,9 @@ import {
   createAssetDocument,
   createAssetType,
   createFormTemplate,
+  createJob,
   createScheduleRule,
+  createTemplateRevision,
   createUser,
   getAssetDocumentId,
   getSeededApprovalRouteId,
@@ -33,6 +35,8 @@ interface PlannerRow {
   lastCompletedOn: string | null;
   plannedDates: string[];
   cascadeFrequencies: string[];
+  nextDueJob: { id: string; jobNumber: string; status: string } | null;
+  jobGenerationOpensOn: string;
 }
 
 const YEAR = '?from=2026-01-01&to=2026-12-31&limit=100';
@@ -402,6 +406,352 @@ describe('Planner schedule — GET /schedule (cross-machine, area-scoped)', () =
 
     const res = await get(await plannerToken()).expect(200);
     expect(res.body.data).toEqual([]);
+  });
+
+  // ------------------------------------------------- the job for a visit (32)
+
+  /**
+   * Slice 32-PLANNERJOB. The planner shows when work is DUE; `/jobs/{id}` is
+   * where it is DONE. These pin the join between them.
+   *
+   * The assertions that matter are the negative ones. A link that merely
+   * renders is worthless — what a planner needs is that the link goes to the
+   * job for THIS visit and to no other. `job` is keyed
+   * `(asset_document_id, frequency_scope, due_on) WHERE status <> 'voided' AND
+   * is_adhoc = false`, and every one of those qualifiers is a way to get the
+   * wrong answer: a machine's second document, a rule at another frequency, a
+   * previous period's completed job, a voided job whose replacement is still
+   * to come, and — the one this whole slice exists to prevent — an ad-hoc
+   * job, which carries an EMPTY `frequency_scope` and cannot advance
+   * `schedule_rule.next_due_on` at all.
+   */
+  describe('nextDueJob — the job the scheduler raised for the stored due date', () => {
+    /**
+     * A machine whose document can actually carry jobs: a real `current`
+     * template revision to hang them off, and a rule at a known due date.
+     */
+    async function makeJobbableMachine(
+      opts: {
+        frequency?: 'M1' | 'M3' | 'M6' | 'Y';
+        intervalMonths?: number;
+        nextDueOn?: string;
+        leadTimeDays?: number;
+      } = {},
+    ) {
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+      const assetTypeId = await createAssetType(
+        formTemplateId,
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+        { leadTimeDays: opts.leadTimeDays },
+      );
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`, {
+        scheduleAnchorDate: '2026-01-01',
+      });
+      const assetDocumentId = await getAssetDocumentId(assetId);
+      const authorId = await createUser('template-author');
+      const templateRevisionId = await createTemplateRevision(formTemplateId, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+      });
+      const frequency = opts.frequency ?? 'M3';
+      const nextDueOn = opts.nextDueOn ?? '2026-03-19';
+      const ruleId = await createScheduleRule(assetId, {
+        frequency,
+        intervalMonths: opts.intervalMonths ?? 3,
+        anchorDate: '2026-01-01',
+        nextDueOn,
+      });
+      return {
+        assetId,
+        assetDocumentId,
+        templateRevisionId,
+        approvalRouteId,
+        formTemplateId,
+        ruleId,
+        frequency,
+        nextDueOn,
+      };
+    }
+
+    async function rowFor(token: string, ruleId: string): Promise<PlannerRow> {
+      const res = await get(token).expect(200);
+      const row = (res.body.data as PlannerRow[]).find((r) => r.id === ruleId);
+      if (!row) throw new Error(`rule ${ruleId} missing from the planner response`);
+      return row;
+    }
+
+    it('names the job raised for the stored next-due date, with its number and status', async () => {
+      const machine = await makeJobbableMachine();
+      const jobId = await createJob({
+        assetId: machine.assetId,
+        assetDocumentId: machine.assetDocumentId,
+        templateRevisionId: machine.templateRevisionId,
+        approvalRouteId: machine.approvalRouteId,
+        jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+        status: 'assigned',
+        frequency: 'M3',
+        frequencyScope: ['M3'],
+        dueOn: machine.nextDueOn,
+      });
+
+      const row = await rowFor(await plannerToken(), machine.ruleId);
+      expect(row.nextDueJob).toMatchObject({ id: jobId, status: 'ASSIGNED' });
+      expect(row.nextDueJob?.jobNumber).toMatch(/^PM-2026-/);
+    });
+
+    it('reports null when the scheduler has not raised one yet', async () => {
+      const machine = await makeJobbableMachine();
+      const row = await rowFor(await plannerToken(), machine.ruleId);
+      expect(row.nextDueJob).toBeNull();
+    });
+
+    /**
+     * THE TRAP THIS SLICE EXISTS TO AVOID. An ad-hoc job is off-plan work
+     * (UR-028): empty `frequency_scope`, excluded from the partial unique
+     * index, structurally incapable of advancing `schedule_rule.next_due_on`.
+     * One raised on the same machine on the same day is a DIFFERENT piece of
+     * work, and presenting it as this visit's job would tell a planner the
+     * plan was covered while the schedule sat exactly where it was.
+     */
+    it('never links an AD-HOC job, even on the same document, frequency and date', async () => {
+      const machine = await makeJobbableMachine();
+      await createJob({
+        assetId: machine.assetId,
+        assetDocumentId: machine.assetDocumentId,
+        templateRevisionId: machine.templateRevisionId,
+        approvalRouteId: machine.approvalRouteId,
+        jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+        status: 'in_progress',
+        frequency: 'M3',
+        dueOn: machine.nextDueOn,
+        isAdhoc: true,
+        adhocReason: 'bearing seized on the night shift, unplanned service',
+      });
+
+      const row = await rowFor(await plannerToken(), machine.ruleId);
+      expect(row.nextDueJob).toBeNull();
+    });
+
+    /**
+     * SYS-19: a voided job releases its schedule period so the scheduler can
+     * raise a replacement. Linking it would send a planner to dead work AND
+     * hide the fact that the live job is still to come.
+     */
+    it('never links a VOIDED job — its period is free again', async () => {
+      const machine = await makeJobbableMachine();
+      await createJob({
+        assetId: machine.assetId,
+        assetDocumentId: machine.assetDocumentId,
+        templateRevisionId: machine.templateRevisionId,
+        approvalRouteId: machine.approvalRouteId,
+        jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+        status: 'voided',
+        frequency: 'M3',
+        frequencyScope: ['M3'],
+        dueOn: machine.nextDueOn,
+        voidReason: 'raised against the wrong machine, voided by the team leader',
+      });
+
+      const row = await rowFor(await plannerToken(), machine.ruleId);
+      expect(row.nextDueJob).toBeNull();
+    });
+
+    /**
+     * The case that makes date proximity useless. Since slice 27 a machine can
+     * carry several documents, so one date can carry several unrelated jobs —
+     * the owner's own example is a wire bonder with both its PM record and a
+     * separate pH-meter check. Each rule must reach ITS job.
+     */
+    it('resolves per DOCUMENT when one machine carries two, both due the same day', async () => {
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const templateA = await createFormTemplate(`DOC-A-${randomUUID()}`);
+      const templateB = await createFormTemplate(`DOC-B-${randomUUID()}`);
+      const assetTypeId = await createAssetType(templateA, approvalRouteId, `AT-${randomUUID()}`);
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`, {
+        scheduleAnchorDate: '2026-01-01',
+      });
+      const documentA = await getAssetDocumentId(assetId);
+      const documentB = await createAssetDocument(assetId, templateB);
+      const authorId = await createUser('template-author');
+      const revisionA = await createTemplateRevision(templateA, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+      });
+      const revisionB = await createTemplateRevision(templateB, authorId, {
+        sequenceOrdinal: 0,
+        status: 'current',
+      });
+
+      const ruleA = await createScheduleRule(assetId, {
+        frequency: 'M3',
+        intervalMonths: 3,
+        anchorDate: '2026-01-01',
+        nextDueOn: '2026-03-19',
+        assetDocumentId: documentA,
+      });
+      const ruleB = await createScheduleRule(assetId, {
+        frequency: 'M3',
+        intervalMonths: 3,
+        anchorDate: '2026-01-01',
+        nextDueOn: '2026-03-19',
+        assetDocumentId: documentB,
+      });
+
+      const jobA = await createJob({
+        assetId,
+        assetDocumentId: documentA,
+        templateRevisionId: revisionA,
+        approvalRouteId,
+        jobNumber: `PM-2026-A${randomUUID().slice(0, 6)}`,
+        status: 'scheduled',
+        frequency: 'M3',
+        frequencyScope: ['M3'],
+        dueOn: '2026-03-19',
+      });
+      const jobB = await createJob({
+        assetId,
+        assetDocumentId: documentB,
+        templateRevisionId: revisionB,
+        approvalRouteId,
+        jobNumber: `PM-2026-B${randomUUID().slice(0, 6)}`,
+        status: 'scheduled',
+        frequency: 'M3',
+        frequencyScope: ['M3'],
+        dueOn: '2026-03-19',
+      });
+      expect(jobA).not.toBe(jobB);
+
+      const token = await plannerToken();
+      expect((await rowFor(token, ruleA)).nextDueJob?.id).toBe(jobA);
+      expect((await rowFor(token, ruleB)).nextDueJob?.id).toBe(jobB);
+    });
+
+    /**
+     * `schedule_rule` is `@@unique([asset_document_id, frequency])`, which is
+     * why `(assetDocumentId, frequency, dueOn)` names one rule's job. Two rules
+     * at different frequencies on one document, both due the same day, is the
+     * case that proves `frequency` is really part of the match rather than
+     * decoration.
+     */
+    it('does not borrow the job of a DIFFERENT frequency on the same document and date', async () => {
+      const machine = await makeJobbableMachine({ frequency: 'M3', intervalMonths: 3 });
+      const monthlyRuleId = await createScheduleRule(machine.assetId, {
+        frequency: 'M1',
+        intervalMonths: 1,
+        anchorDate: '2026-01-01',
+        nextDueOn: machine.nextDueOn,
+        assetDocumentId: machine.assetDocumentId,
+      });
+      // Only the MONTHLY rule has a job.
+      const monthlyJob = await createJob({
+        assetId: machine.assetId,
+        assetDocumentId: machine.assetDocumentId,
+        templateRevisionId: machine.templateRevisionId,
+        approvalRouteId: machine.approvalRouteId,
+        jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+        status: 'scheduled',
+        frequency: 'M1',
+        frequencyScope: ['M1'],
+        dueOn: machine.nextDueOn,
+      });
+
+      const token = await plannerToken();
+      expect((await rowFor(token, monthlyRuleId)).nextDueJob?.id).toBe(monthlyJob);
+      expect((await rowFor(token, machine.ruleId)).nextDueJob).toBeNull();
+    });
+
+    /**
+     * The previous period's job is real, finished work — it must not be
+     * offered as the job for the visit still to come. This is the assertion
+     * that "the nearest job on this machine" would fail.
+     */
+    it('ignores a job at any other due date, however close', async () => {
+      const machine = await makeJobbableMachine({ nextDueOn: '2026-03-19' });
+      await createJob({
+        assetId: machine.assetId,
+        assetDocumentId: machine.assetDocumentId,
+        templateRevisionId: machine.templateRevisionId,
+        approvalRouteId: machine.approvalRouteId,
+        jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+        status: 'verified',
+        frequency: 'M3',
+        frequencyScope: ['M3'],
+        // One day out — the last period, already done.
+        dueOn: '2026-03-18',
+      });
+
+      const row = await rowFor(await plannerToken(), machine.ruleId);
+      expect(row.nextDueJob).toBeNull();
+    });
+
+    /**
+     * A projected visit gets no job of its own, ever: `JobGenerationService`
+     * reads `schedule_rule.next_due_on` and writes `job.due_on` from it, so
+     * only the STORED date can carry one. Proven by writing a job at a
+     * projected date and showing the row still reports none — the row would
+     * otherwise have to grow a per-date job map, and the grid would start
+     * claiming work exists for dates nothing has been written against.
+     */
+    it('belongs to the stored date only — a job at a projected date is not this visit’s', async () => {
+      const machine = await makeJobbableMachine({ nextDueOn: '2026-03-19' });
+      await createJob({
+        assetId: machine.assetId,
+        assetDocumentId: machine.assetDocumentId,
+        templateRevisionId: machine.templateRevisionId,
+        approvalRouteId: machine.approvalRouteId,
+        jobNumber: `PM-2026-${randomUUID().slice(0, 8)}`,
+        status: 'scheduled',
+        frequency: 'M3',
+        frequencyScope: ['M3'],
+        // The next PROJECTED visit — a date the scheduler will only reach
+        // after this rule has been completed and advanced.
+        dueOn: '2026-06-19',
+      });
+
+      const row = await rowFor(await plannerToken(), machine.ruleId);
+      expect(row.plannedDates).toContain('2026-06-19');
+      expect(row.nextDueJob).toBeNull();
+    });
+  });
+
+  describe('jobGenerationOpensOn — when a job will appear', () => {
+    it('is the due date less THIS machine type’s lead time, not a fixed 30 days', async () => {
+      const approvalRouteId = await getSeededApprovalRouteId();
+      const formTemplateId = await createFormTemplate(`DOC-${randomUUID()}`);
+      const assetTypeId = await createAssetType(
+        formTemplateId,
+        approvalRouteId,
+        `AT-${randomUUID()}`,
+        { leadTimeDays: 45 },
+      );
+      const assetId = await createAsset(assetTypeId, `AS-${randomUUID()}`, {
+        scheduleAnchorDate: '2026-01-01',
+      });
+      const ruleId = await createScheduleRule(assetId, {
+        frequency: 'M3',
+        intervalMonths: 3,
+        anchorDate: '2026-01-01',
+        nextDueOn: '2026-03-19',
+      });
+
+      const res = await get(await plannerToken()).expect(200);
+      const row = (res.body.data as PlannerRow[]).find((r) => r.id === ruleId);
+      // 19 March less 45 days. A client printing "30 days" would be wrong for
+      // this machine, which is exactly why the server computes it.
+      expect(row?.jobGenerationOpensOn).toBe('2026-02-02');
+    });
+
+    it('is computed for every row, including one already past its window', async () => {
+      const assetTypeId = await makeAssetType();
+      await makeScheduledMachine({ assetTypeId, nextDueOn: '2026-01-10' });
+
+      const res = await get(await plannerToken()).expect(200);
+      // Default lead time of 30 days: 10 January less 30 days crosses the year
+      // end, which is precisely the arithmetic a client should not be doing.
+      expect(res.body.data[0].jobGenerationOpensOn).toBe('2025-12-11');
+    });
   });
 
   // ------------------------------------------------------------ the window
