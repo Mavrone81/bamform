@@ -6,18 +6,33 @@
 # high/critical advisory still fails the build unless its exact GHSA id is
 # named below with a reason. A NEW advisory (any id not on the list) fails.
 #
+# Fixed by upgrade (NOT allowlisted — recorded here only so nobody relaxes
+# the root package.json `overrides` that hold these at patched versions):
+#   brace-expansion — GHSA-mh99-v99m-4gvg (previously allowlisted) and
+#     GHSA-rgw5-rvv9-x895 (unbounded intermediate arrays). Both are now
+#     fixed outright: the override moved ^5.0.8 -> ^5.0.9 (the first release
+#     patched for rgw5), which also let npm drop the deeply nested 1.1.16 /
+#     2.1.2 copies under jest, test-exclude and
+#     fork-ts-checker-webpack-plugin that the old allowlist entry existed
+#     for. mh99 has therefore been REMOVED from ALLOW below — the tree is
+#     clean, so a reappearance should fail CI and be re-examined, not pass
+#     silently.
+#   fast-uri — GHSA-7p8r-x3mc-p8w7 (host confusion via backslash authority).
+#     Fixed by an override to ^3.1.5. Only reachable via ajv under
+#     @nestjs/cli and @stoplight/spectral-*; still, a patched release exists
+#     and satisfies ajv's own `^3.0.1` range, so it is upgraded rather than
+#     accepted.
+#   undici — GHSA-4cwx-7wf7-3272 (cross-user information disclosure). Fixed
+#     by an override to ^7.29.0. NOTE for future readers: `npm audit`'s
+#     top-level summary suggests a semver-major `puppeteer` bump here, which
+#     is misleading — undici's own entry carries `fixAvailable: true` and an
+#     empty `effects` list. The only edge onto undici in the whole tree is
+#     web -> jsdom -> undici@^7.25.0 (dev-only, the vitest DOM environment).
+#     puppeteer 21.x does not depend on undici at all; it uses cross-fetch.
+#     No puppeteer bump is required for this advisory.
+#
 # Accepted advisories (each: why it is acceptable + why it can't be cleanly
 # fixed):
-#   GHSA-mh99-v99m-4gvg — brace-expansion DoS via a crafted brace pattern
-#     causing unbounded expansion. Present ONLY as a transitive dev/build
-#     dependency under jest, @rollup/plugin-commonjs, @stoplight/spectral-*
-#     and fork-ts-checker-webpack-plugin — none of which ever receive an
-#     attacker-controlled brace pattern in CI (trusted source globs only),
-#     and none ship in any runtime image. We override brace-expansion to
-#     ^5.0.8 (the patched line) wherever npm can hoist it; a few deeply
-#     nested copies inside the above tools resist the override. No runtime
-#     exposure.
-#
 #   GHSA-vj76-c3g6-qr5v / GHSA-8cj5-5rvv-wf4v / GHSA-pq67-2wwv-3xjx —
 #     tar-fs symlink-validation / path-traversal issues on a CRAFTED tarball.
 #     Transitive via `puppeteer` -> `@puppeteer/browsers` -> `tar-fs@3.0.4`
@@ -49,7 +64,7 @@
 #     constraint as tar-fs above.
 set -euo pipefail
 
-ALLOW="GHSA-mh99-v99m-4gvg,GHSA-vj76-c3g6-qr5v,GHSA-8cj5-5rvv-wf4v,GHSA-pq67-2wwv-3xjx,GHSA-3h5v-q93c-6h6q,GHSA-96hv-2xvq-fx4p"
+ALLOW="GHSA-vj76-c3g6-qr5v,GHSA-8cj5-5rvv-wf4v,GHSA-pq67-2wwv-3xjx,GHSA-3h5v-q93c-6h6q,GHSA-96hv-2xvq-fx4p"
 
 audit_json="$(npm audit --json 2>/dev/null || true)"
 
