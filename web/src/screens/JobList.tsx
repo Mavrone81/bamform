@@ -48,6 +48,23 @@ export function JobList() {
   const [storageUnprotected, setStorageUnprotected] = useState(false);
   const [unsentAtRisk, setUnsentAtRisk] = useState(0);
   const [legacyHold, setLegacyHold] = useState<LegacyHoldSummary | null>(null);
+  /**
+   * This device's own storage could not be read. Every read below is
+   * fire-and-forget — they run from an effect and again after every drain —
+   * so their rejections used to go nowhere at all, and each failure had its
+   * own way of lying quietly:
+   *
+   * - `listCachedJobs` failing leaves `rows` at `null`, i.e. "Loading…" for
+   *   ever, when nothing is still loading.
+   * - `legacyHoldSummary` and the storage-persistence pair exist ONLY to warn
+   *   about unsent work at risk. A warning that silently fails to appear is
+   *   worse than no warning: the screen looks like a clean bill of health.
+   *
+   * `bootstrapError` is deliberately not reused — that one says the SERVER
+   * could not be reached and the device's own copy is being shown instead,
+   * which is the opposite claim to this one.
+   */
+  const [deviceReadFailed, setDeviceReadFailed] = useState(false);
 
   const refresh = useCallback(async () => {
     const { db } = getServices();
@@ -62,27 +79,39 @@ export function JobList() {
     // — warning about the loss of records that did not exist. Crying wolf on
     // the first screen a technician sees is how real warnings get ignored.
     // Eviction can only destroy work that is UNSENT, so that is the trigger.
-    void Promise.all([getStoragePersistence(db), pendingCountForUser(db, userId)]).then(
-      ([outcome, pending]) => {
+    void Promise.all([getStoragePersistence(db), pendingCountForUser(db, userId)])
+      .then(([outcome, pending]) => {
         setStorageUnprotected(Boolean(outcome && !outcome.persisted) && pending > 0);
         setUnsentAtRisk(pending);
-      },
-    );
+      })
+      .catch(() => setDeviceReadFailed(true));
     // H-4: pre-upgrade work quarantined for OTHER users must be visible,
     // not silently parked in IndexedDB.
-    void legacyHoldSummary(db).then((summary) => {
-      setLegacyHold(summary.count > 0 ? summary : null);
-    });
-    const jobs = await listCachedJobs(db, userId);
-    const withState = await Promise.all(
-      jobs.map(async (job) => ({ job, syncState: await jobSyncState(db, userId, job.id) })),
-    );
+    void legacyHoldSummary(db)
+      .then((summary) => {
+        setLegacyHold(summary.count > 0 ? summary : null);
+      })
+      .catch(() => setDeviceReadFailed(true));
+    let withState: Row[];
+    try {
+      const jobs = await listCachedJobs(db, userId);
+      withState = await Promise.all(
+        jobs.map(async (job) => ({ job, syncState: await jobSyncState(db, userId, job.id) })),
+      );
+    } catch {
+      // `refresh` is only ever invoked floating (`void refresh()` from the
+      // effect and from `onSynced`), so this rejection had nowhere to go and
+      // left the screen spinning on "Loading…" with nothing retrying.
+      setDeviceReadFailed(true);
+      return;
+    }
     withState.sort((a, b) => {
       const aOverdue = a.job.job.overdue ? 0 : 1;
       const bOverdue = b.job.job.overdue ? 0 : 1;
       if (aOverdue !== bOverdue) return aOverdue - bOverdue;
       return a.job.job.dueOn.localeCompare(b.job.job.dueOn);
     });
+    setDeviceReadFailed(false);
     setRows(withState);
   }, []);
 
@@ -119,9 +148,13 @@ export function JobList() {
       });
     // Covers the case where a skew was recorded on an earlier bootstrap
     // this session and the banner should still be visible on remount.
-    void getClockSkew(db).then((skew) => {
-      if (!cancelled && skew?.skewDetected) setClockSkew(skew);
-    });
+    void getClockSkew(db)
+      .then((skew) => {
+        if (!cancelled && skew?.skewDetected) setClockSkew(skew);
+      })
+      .catch(() => {
+        if (!cancelled) setDeviceReadFailed(true);
+      });
 
     // The actual drain trigger is registered once, app-wide, in App.tsx —
     // this only re-renders the list whenever that (or any) drain completes,
@@ -181,7 +214,15 @@ export function JobList() {
         </p>
       )}
 
-      {rows === null && (
+      {deviceReadFailed && (
+        <p className="banner" data-tone="bad" role="alert">
+          <span aria-hidden="true">⚠</span> This device’s storage could not be read, so this list —
+          and any warning about unsent work — may be incomplete. Nothing has been deleted. Close the
+          app and open it again before starting a job.
+        </p>
+      )}
+
+      {rows === null && !deviceReadFailed && (
         <p className="loading-state">
           <span className="loading-spinner" aria-hidden="true" />
           Loading…

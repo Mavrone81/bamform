@@ -111,6 +111,18 @@ function failNextOutboxWrite() {
   }) as typeof db.outbox.add;
 }
 
+/** The OTHER way a write fails: not "full", but "this database is not
+ * usable" — a closed or faulted IndexedDB. `outbox.append()` returns a
+ * result for the quota case and RE-THROWS this one, which is the whole
+ * point of the distinction. */
+function failNextOutboxWriteHard() {
+  const original = db.outbox.add.bind(db.outbox);
+  db.outbox.add = (() => {
+    db.outbox.add = original;
+    throw new Error('DatabaseClosedError: Database has been closed');
+  }) as typeof db.outbox.add;
+}
+
 beforeEach(() => {
   db = createTestDB(`test-parts-${counter++}-${Math.random()}`);
   transport = new MockSyncTransport();
@@ -398,6 +410,102 @@ describe('RecordCapture — Parts Used capture (slice 30-PARTS, Task 6)', () => 
       expect(await screen.findByText(/device storage is full/i)).toBeInTheDocument();
       expect(await db.outbox.where('jobId').equals('job-1').count()).toBe(0);
       expect(screen.getByText('Bearing 6203')).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * The gap review M-1 named and left. `outbox.append()` RETURNS a result for
+   * a quota refusal but RE-THROWS everything else (a closed or faulted
+   * IndexedDB — e.g. another tab upgrading the schema fires `versionchange`
+   * and Dexie closes this connection). `savePart`/`removePart` run from
+   * `void`ed click handlers, so that throw was an unhandled rejection and
+   * NOTHING ELSE: no banner, no error, the part simply never appeared. A part
+   * that does not show up after "Add part" reads as a mis-tap, not a fault.
+   *
+   * These tests exist so the surface cannot quietly disappear again — a
+   * blanket `.catch` that swallowed the throw would pass the old suite and
+   * fail this one.
+   */
+  describe('a non-quota IndexedDB fault is STATED, never silently dropped', () => {
+    it('add: states the device fault, does not blame full storage, and does not show the part as saved', async () => {
+      await seedJob(makeJob({ partsUsed: [] }));
+      renderScreen();
+      await screen.findByText('PM-2026-000001');
+
+      fireEvent.click(screen.getByRole('button', { name: /add a part/i }));
+      fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Drive belt' } });
+      fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '3' } });
+      failNextOutboxWriteHard();
+      fireEvent.click(screen.getByRole('button', { name: 'Add part' }));
+
+      expect(
+        await screen.findByText(/last entry could NOT be held on this device/i),
+      ).toBeInTheDocument();
+      // Not the storage-full message — that would send them to free up space
+      // that was never the problem.
+      expect(screen.queryByText(/device storage is full/i)).not.toBeInTheDocument();
+      expect(await db.outbox.where('jobId').equals('job-1').count()).toBe(0);
+      expect(screen.queryAllByTestId('part-row')).toHaveLength(0);
+    });
+
+    it('remove: states the device fault and the row STAYS in the list', async () => {
+      const part: PartUsed = {
+        id: 'part-1',
+        partNo: null,
+        description: 'Bearing 6203',
+        quantity: 2,
+        remarks: null,
+      };
+      await seedJob(makeJob({ partsUsed: [part] }));
+      renderScreen();
+      await screen.findByText('Bearing 6203');
+
+      failNextOutboxWriteHard();
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Bearing 6203' }));
+
+      expect(
+        await screen.findByText(/last entry could NOT be held on this device/i),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/device storage is full/i)).not.toBeInTheDocument();
+      expect(await db.outbox.where('jobId').equals('job-1').count()).toBe(0);
+      // A row that vanished without a queued `active:false` would read as
+      // removed here and stay on the record for ever.
+      expect(screen.getByText('Bearing 6203')).toBeInTheDocument();
+    });
+
+    it('a failed READ of this device is stated, not shown as a record with no parts', async () => {
+      const part: PartUsed = {
+        id: 'part-1',
+        partNo: null,
+        description: 'Bearing 6203',
+        quantity: 2,
+        remarks: null,
+      };
+      await seedJob(makeJob({ partsUsed: [part] }));
+      // `refreshState` is the ONLY writer of `parts`. Both it and
+      // `loadCached` are fire-and-forget, so a faulted read used to reject
+      // into nothing and leave the Parts used section stating that no parts
+      // were used — when the truth was that nobody could find out.
+      db.outbox.where = (() => {
+        throw new Error('DatabaseClosedError: Database has been closed');
+      }) as typeof db.outbox.where;
+
+      renderScreen();
+
+      expect(await screen.findByText(/held entries could not be read/i)).toBeInTheDocument();
+    });
+
+    it('a cached copy that cannot be read says so instead of spinning for ever', async () => {
+      await seedJob(makeJob({ partsUsed: [] }));
+      db.jobs.get = (() =>
+        Promise.reject(
+          new Error('DatabaseClosedError: Database has been closed'),
+        )) as unknown as typeof db.jobs.get;
+
+      renderScreen();
+
+      expect(await screen.findByText(/storage could not be read/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Loading/)).not.toBeInTheDocument();
     });
   });
 

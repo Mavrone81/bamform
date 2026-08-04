@@ -147,14 +147,16 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup();
-  // Let the screen's `void`ed effects (`loadCached`/`refreshState`) settle
-  // before the database goes. Deleting it underneath an in-flight Dexie read
-  // makes vitest report a `DatabaseClosedError` that is an artefact of
-  // teardown, not of the code under test — and vitest reports unhandled
-  // rejections WITHOUT failing the run, so a noisy suite is a suite whose
-  // real signal is easy to miss (review M-1 was found in exactly that noise).
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Deliberately deletes the database WITHOUT first waiting for the screen's
+  // `void`ed effects (`loadCached`/`refreshState`) to settle. Two
+  // `setTimeout(0)` ticks used to sit here to make that race less likely; they
+  // are gone because the race was never the defect. `loadCached` and
+  // `refreshState` now catch their own read failures and put them on screen,
+  // so an in-flight Dexie read that finds the database closed is HANDLED
+  // rather than escaping as an unhandled rejection — and deleting the db out
+  // from under them here is what keeps proving it. (Vitest 4 fails the run on
+  // an unhandled rejection while still reporting every test as passed, which
+  // is exactly how this shipped red on `main` with 18/18 green.)
   await db.delete();
   vi.unstubAllGlobals();
 });
