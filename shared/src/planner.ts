@@ -140,8 +140,99 @@ export type SetDefaultAssigneeRequest = z.infer<typeof setDefaultAssigneeRequest
 export const setDefaultAssigneeResultSchema = z.object({
   scheduleRuleId: z.string().uuid(),
   defaultAssignee: plannerDefaultAssigneeSchema.nullable(),
+  /**
+   * Slice 33-APPLYDEFAULT — HOW MANY JOBS ALREADY RAISED FOR THIS RULE COULD
+   * STILL BE GIVEN TO THIS PERSON.
+   *
+   * The standing assignee is a rule for jobs NOT YET GENERATED, and that is
+   * correct: a planner editing next year's plan must not silently reassign
+   * work already in progress. But on day one it made the feature useless as
+   * guidance — the owner set a standing assignee on four plans, logged in as
+   * the technician, and saw nothing, because 195 jobs were already raised and
+   * unassigned. The panel explained the rule only in terms of what it would
+   * NOT do.
+   *
+   * So the server now says how many jobs the planner could ALSO hand over, and
+   * the screen offers it as a separate, deliberate confirmation. Nothing is
+   * applied by this endpoint — this number is an OFFER, not a side effect.
+   *
+   * IT IS THE NUMBER THAT WOULD ACTUALLY CHANGE, not "jobs on this plan":
+   * counted over the same predicate the apply endpoint iterates
+   * (`rule-unassigned-jobs.ts`), so a job that already has an assignee, or has
+   * passed out of the technician's hands (SUBMITTED/ARCHIVED/VOIDED, where
+   * `POST /jobs/{jobId}/assign` is a 409), or is ad-hoc, is excluded from BOTH.
+   * A count that included them would put a number in front of a planner that
+   * the confirmation could never deliver.
+   */
+  unassignedJobsAlreadyRaised: z.number().int().nonnegative(),
 });
 export type SetDefaultAssigneeResult = z.infer<typeof setDefaultAssigneeResultSchema>;
+
+/**
+ * `POST /schedule/{scheduleRuleId}/default-assignee/apply-to-existing` request
+ * — slice 33-APPLYDEFAULT.
+ *
+ * THE ASSIGNEE IS SENT BACK, not implied, and the server refuses it if it is
+ * no longer the rule's standing assignee. The planner is answering a question
+ * about a NAMED person ("also assign them to Priya Sundaram?"), and between
+ * the offer and the answer somebody else may have changed the plan. Applying
+ * whatever the column happens to hold at that moment would assign real work to
+ * a person the planner never saw named.
+ */
+export const applyDefaultAssigneeRequestSchema = z.object({
+  assigneeId: z.string().uuid(),
+});
+export type ApplyDefaultAssigneeRequest = z.infer<typeof applyDefaultAssigneeRequestSchema>;
+
+/** One job the batch actually assigned. */
+export const appliedJobSchema = z.object({
+  jobId: z.string().uuid(),
+  jobNumber: z.string(),
+});
+export type AppliedJob = z.infer<typeof appliedJobSchema>;
+
+/**
+ * One job the batch could NOT assign, and why — in the server's own words.
+ *
+ * `reason` is the `detail` of the RFC 9457 problem `POST /jobs/{jobId}/assign`
+ * raised for that job, carried through verbatim rather than summarised: a
+ * planner told "3 of 4 were assigned" and nothing else has no way to find the
+ * fourth, and a batch that reported success while silently dropping one would
+ * be worse than the original defect.
+ */
+export const refusedJobSchema = z.object({
+  jobId: z.string().uuid(),
+  jobNumber: z.string(),
+  reason: z.string(),
+});
+export type RefusedJob = z.infer<typeof refusedJobSchema>;
+
+/**
+ * `POST /schedule/{scheduleRuleId}/default-assignee/apply-to-existing`
+ * response — slice 33-APPLYDEFAULT.
+ *
+ * PARTIAL SUCCESS IS A FIRST-CLASS OUTCOME, not an error case. Each job is
+ * assigned through `POST /jobs/{jobId}/assign`'s own service, in its own
+ * transaction, with its own audit event and its own `JOB_ASSIGNED`
+ * notification. One refusal therefore cannot roll back the jobs already
+ * assigned and must not abort the ones not yet attempted, so the response
+ * enumerates both sides by job number.
+ */
+export const applyDefaultAssigneeResultSchema = z.object({
+  scheduleRuleId: z.string().uuid(),
+  /** Echoed so a client can prove the batch applied the person it offered. */
+  assigneeId: z.string().uuid(),
+  assigned: z.array(appliedJobSchema),
+  refused: z.array(refusedJobSchema),
+  /**
+   * Jobs that matched but were beyond this batch's cap and were NOT touched.
+   * Normally 0 — a rule holds one live job per due date — but a number that
+   * silently omitted them would make `assigned.length + refused.length` read
+   * as "all of them" when it was not.
+   */
+  notAttempted: z.number().int().nonnegative(),
+});
+export type ApplyDefaultAssigneeResult = z.infer<typeof applyDefaultAssigneeResultSchema>;
 
 /**
  * `GET /schedule` — the CROSS-MACHINE schedule read (slice 31-PLANNER).

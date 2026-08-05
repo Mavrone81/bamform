@@ -43,6 +43,8 @@ export type PlannerScheduleRow = components['schemas']['PlannerScheduleRow'];
 export type PlannerVisitJob = components['schemas']['PlannerVisitJob'];
 export type PlannerDefaultAssignee = components['schemas']['PlannerDefaultAssignee'];
 export type AssignableUser = components['schemas']['AssignableUser'];
+/** Slice 33-APPLYDEFAULT — what a batch apply assigned, and what it refused. */
+export type ApplyDefaultAssigneeResult = components['schemas']['ApplyDefaultAssigneeResult'];
 export type Job = components['schemas']['Job'];
 
 export interface AdminPage<T> {
@@ -408,6 +410,42 @@ export function setScheduleDefaultAssignee(
     headers: jsonHeaders,
     body: JSON.stringify({ defaultAssigneeId }),
   });
+}
+
+/**
+ * `POST /schedule/{scheduleRuleId}/default-assignee/apply-to-existing` —
+ * slice 33-APPLYDEFAULT. ALSO give the standing assignee the jobs this plan
+ * has already raised.
+ *
+ * A SECOND, DELIBERATE CALL, never chained onto the PUT above. The owner set
+ * "who normally does this" on four plans on day one, logged in as the
+ * technician and saw nothing: the default only affects jobs not yet generated,
+ * and 195 were already raised and unassigned. The fix is not to make the PUT
+ * cascade — that would silently reassign work in progress, which is the thing
+ * the split exists to prevent — it is to say what is sitting there and ask.
+ *
+ * `assigneeId` is sent back rather than implied, and the server refuses it
+ * with 409 if the plan's standing assignee changed in between: the planner
+ * answered a question about a named person and must not end up assigning work
+ * to somebody else's name.
+ *
+ * PARTIAL SUCCESS COMES BACK AS 200. `assigned` and `refused` are both
+ * populated per job, because one refusal cannot undo the assignments that
+ * already committed — the caller must render both rather than treating this
+ * as pass/fail.
+ */
+export function applyDefaultAssigneeToExistingJobs(
+  scheduleRuleId: string,
+  assigneeId: string,
+): Promise<AdminResult<components['schemas']['ApplyDefaultAssigneeResult']>> {
+  return call(
+    `/schedule/${encodeURIComponent(scheduleRuleId)}/default-assignee/apply-to-existing`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ assigneeId }),
+    },
+  );
 }
 
 /**

@@ -36,8 +36,19 @@ import { parseIsoDateOnly, projectVisitDates, toIsoDateOnly } from './planner-pr
 import {
   PlannerScheduleRepository,
   type PlannerScheduleRuleRow,
+  type RuleUnassignedJobRow,
   type ScheduledVisitJobRow,
 } from './planner-schedule.repository';
+
+/**
+ * What `findRuleForMutation` returns — the rule with the machine it hangs off.
+ * Named here so the two public methods that hand it out (slice 33-APPLYDEFAULT)
+ * have a type to declare rather than an inferred one that would change shape
+ * the moment the repository's include did.
+ */
+export type PlannerRuleForMutation = NonNullable<
+  Awaited<ReturnType<PlannerScheduleRepository['findRuleForMutation']>>
+>;
 
 /**
  * The longest window one request may ask for. `MAX_PROJECTED_VISITS_PER_RULE`
@@ -227,8 +238,40 @@ export class PlannerScheduleService {
     scheduleRuleId: string,
     query: { limit?: unknown; cursor?: string },
   ): Promise<Page<import('@bamform/shared').AssignableUser>> {
-    const rule = await this.loadRuleInScope(userId, scheduleRuleId);
+    const { rule } = await this.loadRuleInScope(userId, scheduleRuleId);
     return this.assignableUsers.list(rule.assetDocument.asset.areaId, query);
+  }
+
+  /**
+   * Slice 33-APPLYDEFAULT — the rule, plus the jobs it has ALREADY raised that
+   * its standing assignee could still be given.
+   *
+   * PUBLIC, AND CALLED FROM `JobsModule`. The batch that applies the standing
+   * assignee must go through `AssignmentService` (the real
+   * `POST /jobs/{jobId}/assign` path — audited, state-machine-checked,
+   * notifying), which lives in `JobsModule`; `JobsModule` imports THIS module,
+   * so the dependency can only run in that direction. This method is therefore
+   * the seam: everything schedule-shaped — resolving the rule, refusing an
+   * out-of-scope machine, and selecting its jobs through the area-scoped
+   * repository — happens HERE, and the job-shaped half happens there. Neither
+   * side restates the other's rule, which is why the count a planner is shown
+   * and the batch they confirm cannot disagree.
+   *
+   * `take` is the caller's cap PLUS ONE, so it can distinguish "exactly the
+   * cap" from "more than the cap" — see the repository.
+   */
+  async findRuleWithUnassignedJobs(
+    userId: string,
+    scheduleRuleId: string,
+    take: number,
+  ): Promise<{ rule: PlannerRuleForMutation; jobs: RuleUnassignedJobRow[] }> {
+    const { rule, allowedAreaIds } = await this.loadRuleInScope(userId, scheduleRuleId);
+    const jobs = await this.repo.findUnassignedJobsForRule(
+      { assetDocumentId: rule.assetDocumentId, frequency: rule.frequency },
+      allowedAreaIds,
+      take,
+    );
+    return { rule, jobs };
   }
 
   /**
@@ -253,7 +296,7 @@ export class PlannerScheduleService {
     scheduleRuleId: string,
     dto: SetDefaultAssigneeRequest,
   ): Promise<SetDefaultAssigneeResult> {
-    const rule = await this.loadRuleInScope(actor.actorId, scheduleRuleId);
+    const { rule, allowedAreaIds } = await this.loadRuleInScope(actor.actorId, scheduleRuleId);
     const areaId = rule.assetDocument.asset.areaId;
 
     if (dto.defaultAssigneeId) {
@@ -283,8 +326,31 @@ export class PlannerScheduleService {
       });
     });
 
+    /*
+     * Slice 33-APPLYDEFAULT — WHAT THIS CHANGE DID NOT DO, AS A NUMBER.
+     *
+     * The write above still touches exactly one column and no job, which is
+     * the property the whole panel is built around. What was missing was the
+     * other half of the sentence: on day one the owner set a standing assignee
+     * on four plans, logged in as the technician and saw nothing, because 195
+     * jobs were already raised and unassigned. The behaviour was right and the
+     * guidance was useless.
+     *
+     * So the response now carries the count of jobs this rule has ALREADY
+     * raised that could still be handed to somebody, and the screen offers to
+     * apply it as a SEPARATE, explicit confirmation. Reported on the clear
+     * (`defaultAssigneeId: null`) too, where it is simply a true fact about the
+     * plan that the screen has nothing to offer against — a field that meant
+     * "jobs" on one branch and "nothing" on the other would be the kind of
+     * quiet asymmetry a client eventually reads wrong.
+     */
+    const unassignedJobsAlreadyRaised = await this.repo.countUnassignedJobsForRule(
+      { assetDocumentId: rule.assetDocumentId, frequency: rule.frequency },
+      allowedAreaIds,
+    );
+
     if (!dto.defaultAssigneeId) {
-      return { scheduleRuleId, defaultAssignee: null };
+      return { scheduleRuleId, defaultAssignee: null, unassignedJobsAlreadyRaised };
     }
     const resolved = await this.assignableUsers.resolveEligibility([
       { userId: dto.defaultAssigneeId, areaId },
@@ -295,6 +361,7 @@ export class PlannerScheduleService {
       defaultAssignee: entry
         ? { id: dto.defaultAssigneeId, fullName: entry.fullName, eligibility: entry.verdict }
         : null,
+      unassignedJobsAlreadyRaised,
     };
   }
 
@@ -309,7 +376,10 @@ export class PlannerScheduleService {
    * `AssetScheduleService` already settled this distinction for
    * `GET /assets/{assetId}/schedule`.
    */
-  private async loadRuleInScope(userId: string, scheduleRuleId: string) {
+  private async loadRuleInScope(
+    userId: string,
+    scheduleRuleId: string,
+  ): Promise<{ rule: PlannerRuleForMutation; allowedAreaIds: string[] | null }> {
     const rule = await this.repo.findRuleForMutation(scheduleRuleId);
     if (!rule) {
       throw notFoundProblem('ScheduleRule', scheduleRuleId);
@@ -319,7 +389,11 @@ export class PlannerScheduleService {
     if (allowedAreaIds !== null && (!areaId || !allowedAreaIds.includes(areaId))) {
       throw outOfScopeProblem('Asset');
     }
-    return rule;
+    // The scope is returned WITH the rule, not re-derived by each caller:
+    // every read that follows one of these lookups feeds it straight back into
+    // the repository, and a second `getAllowedAreaIds` call would be a second
+    // chance to forget.
+    return { rule, allowedAreaIds };
   }
 
   /**

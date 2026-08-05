@@ -27,6 +27,9 @@ const adjustAssetSchedule = vi.fn();
 const listAssignableUsers = vi.fn();
 const setScheduleDefaultAssignee = vi.fn();
 const assignJob = vi.fn();
+// Slice 33-APPLYDEFAULT — the batch that hands a plan's already-raised jobs
+// to its new standing assignee.
+const applyDefaultAssigneeToExistingJobs = vi.fn();
 const navigate = vi.fn();
 
 vi.mock('../api/admin-client', () => ({
@@ -36,6 +39,8 @@ vi.mock('../api/admin-client', () => ({
   listAssignableUsers: (...args: unknown[]) => listAssignableUsers(...args),
   setScheduleDefaultAssignee: (...args: unknown[]) => setScheduleDefaultAssignee(...args),
   assignJob: (...args: unknown[]) => assignJob(...args),
+  applyDefaultAssigneeToExistingJobs: (...args: unknown[]) =>
+    applyDefaultAssigneeToExistingJobs(...args),
 }));
 vi.mock('../router', () => ({ useRouter: () => ({ navigate, path: '/planner' }) }));
 
@@ -1094,6 +1099,9 @@ describe('Planner — assigning the work', () => {
         value: {
           scheduleRuleId: 'rule-1',
           defaultAssignee: { id: 'tech-1', fullName: 'Sam Maintainer', eligibility: 'assignable' },
+          // Slice 33-APPLYDEFAULT — this plan has raised nothing yet, so there
+          // is nothing to offer and the save completes in one step.
+          unassignedJobsAlreadyRaised: 0,
         },
       });
       const detail = await openVisit([withJob()]);
@@ -1116,7 +1124,11 @@ describe('Planner — assigning the work', () => {
       setScheduleDefaultAssignee.mockResolvedValue({
         ok: true,
         status: 200,
-        value: { scheduleRuleId: 'rule-1', defaultAssignee: null },
+        value: {
+          scheduleRuleId: 'rule-1',
+          defaultAssignee: null,
+          unassignedJobsAlreadyRaised: 0,
+        },
       });
       const detail = await openVisit([
         rule({
@@ -1259,6 +1271,323 @@ describe('Planner — assigning the work', () => {
         }),
       ]);
       expect(within(detail).queryByTestId('default-assignee-lapsed')).toBeNull();
+    });
+  });
+
+  /**
+   * Slice 33-APPLYDEFAULT — THE OFFER THAT CLOSES THE DAY-ONE GAP.
+   *
+   * The owner set "who normally does this" on four plans, logged in as the
+   * technician, and saw nothing: 4 rules carried a default, 0 jobs were
+   * assigned, 195 were still unassigned. The behaviour was right — the
+   * standing assignee only affects jobs raised from then on — and the guidance
+   * was useless, because the panel only ever said what it would NOT do.
+   *
+   * What is worth pinning here is that the offer is honest and deliberate: it
+   * appears only when there is something to offer, it says the server's number
+   * rather than one this screen guessed, nothing is pre-ticked, "leave them"
+   * is a real answer that assigns nothing, and a partial result is shown job by
+   * job instead of being rounded up to "done".
+   */
+  describe('also assigning the jobs already raised', () => {
+    /** `PUT .../default-assignee` succeeded and left N jobs sitting there. */
+    function savedWith(unassignedJobsAlreadyRaised: number) {
+      setScheduleDefaultAssignee.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: {
+          scheduleRuleId: 'rule-1',
+          defaultAssignee: {
+            id: 'tech-1',
+            fullName: 'Priya Sundaram',
+            eligibility: 'assignable',
+          },
+          unassignedJobsAlreadyRaised,
+        },
+      });
+    }
+
+    async function saveTheStandingAssignee(detail: HTMLElement) {
+      fireEvent.click(within(detail).getByRole('button', { name: /Set who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+      fireEvent.change(screen.getByLabelText('Technician'), { target: { value: 'tech-1' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save who normally does this' }));
+    }
+
+    it('says how many jobs are already sitting there, and offers to hand them over', async () => {
+      savedWith(4);
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+
+      const offer = await screen.findByTestId('apply-default-offer');
+      // The server's number, said plainly — the sentence the owner never got.
+      expect(offer).toHaveTextContent('4 unassigned jobs already exist for this plan');
+      expect(offer).toHaveTextContent('Also assign them to Priya Sundaram?');
+      // And the plan change itself is already saved and reported as such.
+      expect(offer).toHaveTextContent(/Saved/);
+    });
+
+    /**
+     * NOT A SIDE EFFECT AND NOT A PRE-TICKED BOX. Showing the offer must not
+     * assign anything, and the two answers must both be present and equal.
+     */
+    it('assigns nothing until the planner says so', async () => {
+      savedWith(4);
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+      await screen.findByTestId('apply-default-offer');
+
+      expect(applyDefaultAssigneeToExistingJobs).not.toHaveBeenCalled();
+      expect(assignJob).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /Leave them unassigned/ })).toBeEnabled();
+      expect(
+        screen.getByRole('button', { name: /Also assign these 4 jobs to Priya Sundaram/ }),
+      ).toBeEnabled();
+    });
+
+    it('is not shown at all when the plan has raised nothing yet', async () => {
+      savedWith(0);
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+
+      await waitFor(() => expect(setScheduleDefaultAssignee).toHaveBeenCalled());
+      expect(screen.queryByTestId('apply-default-offer')).toBeNull();
+    });
+
+    /** Clearing the standing assignee has nothing to offer — "assign these to
+     * nobody" is not a thing the API can even express. */
+    it('is not shown when the planner cleared the standing assignee', async () => {
+      setScheduleDefaultAssignee.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: {
+          scheduleRuleId: 'rule-1',
+          defaultAssignee: null,
+          unassignedJobsAlreadyRaised: 4,
+        },
+      });
+      const detail = await openVisit([
+        withJob({
+          defaultAssignee: { id: 'tech-1', fullName: 'Priya Sundaram', eligibility: 'assignable' },
+        }),
+      ]);
+      fireEvent.click(within(detail).getByRole('button', { name: /Change who normally does/ }));
+      await screen.findByRole('form', { name: /Set who normally does/ });
+      fireEvent.change(screen.getByLabelText('Technician'), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save who normally does this' }));
+
+      await waitFor(() => expect(setScheduleDefaultAssignee).toHaveBeenCalledWith('rule-1', null));
+      expect(screen.queryByTestId('apply-default-offer')).toBeNull();
+    });
+
+    it('applies to exactly this rule, with exactly the person that was offered', async () => {
+      savedWith(4);
+      applyDefaultAssigneeToExistingJobs.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: {
+          scheduleRuleId: 'rule-1',
+          assigneeId: 'tech-1',
+          assigned: [
+            { jobId: 'job-1', jobNumber: 'PM-1' },
+            { jobId: 'job-2', jobNumber: 'PM-2' },
+            { jobId: 'job-3', jobNumber: 'PM-3' },
+            { jobId: 'job-4', jobNumber: 'PM-4' },
+          ],
+          refused: [],
+          notAttempted: 0,
+        },
+      });
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Also assign these 4 jobs to Priya Sundaram/ }),
+      );
+
+      await waitFor(() =>
+        expect(applyDefaultAssigneeToExistingJobs).toHaveBeenCalledWith('rule-1', 'tech-1'),
+      );
+      // ONE call for the whole rule — never the screen looping over jobs it
+      // can see, which would have covered only the one visit it draws.
+      expect(applyDefaultAssigneeToExistingJobs).toHaveBeenCalledTimes(1);
+      expect(assignJob).not.toHaveBeenCalled();
+      expect(await screen.findByText(/4 unassigned jobs already raised/)).toBeInTheDocument();
+    });
+
+    it('"leave them unassigned" is a complete answer that assigns nothing', async () => {
+      savedWith(4);
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+      fireEvent.click(await screen.findByRole('button', { name: /Leave them unassigned/ }));
+
+      await waitFor(() => expect(screen.queryByTestId('apply-default-offer')).toBeNull());
+      expect(applyDefaultAssigneeToExistingJobs).not.toHaveBeenCalled();
+      // The plan change is still reported — it did happen.
+      expect(screen.getByText(/Priya Sundaram now normally does/)).toBeInTheDocument();
+    });
+
+    /**
+     * THE PARTIAL RESULT. A batch reported as "done" while quietly dropping a
+     * job would be a worse version of the defect this feature fixes, so the
+     * refused job is named, with the server's own reason, and the planner has
+     * to acknowledge it before the panel closes.
+     */
+    it('names every job it could not assign, and why, instead of rounding up to "done"', async () => {
+      savedWith(3);
+      applyDefaultAssigneeToExistingJobs.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: {
+          scheduleRuleId: 'rule-1',
+          assigneeId: 'tech-1',
+          assigned: [
+            { jobId: 'job-1', jobNumber: 'PM-2026-000001' },
+            { jobId: 'job-2', jobNumber: 'PM-2026-000002' },
+          ],
+          refused: [
+            {
+              jobId: 'job-3',
+              jobNumber: 'PM-2026-000003',
+              reason: "The assignee's area scope does not include this job's area.",
+            },
+          ],
+          notAttempted: 0,
+        },
+      });
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Also assign these 3 jobs to Priya Sundaram/ }),
+      );
+
+      const outcome = await screen.findByTestId('apply-default-outcome');
+      expect(outcome).toHaveTextContent('2 of 3 jobs assigned to Priya Sundaram');
+      const refused = within(outcome).getByTestId('apply-default-refused');
+      expect(refused).toHaveTextContent('PM-2026-000003');
+      expect(refused).toHaveTextContent("area scope does not include this job's area");
+      // A-05: the refusal is a sentence, announced — not a red row.
+      expect(outcome).toHaveAttribute('role', 'alert');
+      // It stays on screen until acknowledged.
+      expect(screen.getByRole('button', { name: 'Done' })).toBeVisible();
+    });
+
+    it('says what it did not attempt rather than letting a partial read as complete', async () => {
+      savedWith(150);
+      applyDefaultAssigneeToExistingJobs.mockResolvedValue({
+        ok: true,
+        status: 200,
+        value: {
+          scheduleRuleId: 'rule-1',
+          assigneeId: 'tech-1',
+          assigned: [{ jobId: 'job-1', jobNumber: 'PM-1' }],
+          refused: [],
+          notAttempted: 149,
+        },
+      });
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Also assign these 150 jobs to Priya Sundaram/ }),
+      );
+
+      expect(await screen.findByTestId('apply-default-not-attempted')).toHaveTextContent(
+        /149 further unassigned jobs on this plan were not attempted/,
+      );
+    });
+
+    /** The plan is already saved; only the extra step failed. Saying so is the
+     * difference between "try again" and "did my change go in at all?". */
+    it('says the plan is still saved when the extra step is refused', async () => {
+      savedWith(2);
+      applyDefaultAssigneeToExistingJobs.mockResolvedValue({
+        ok: false,
+        status: 409,
+        problem: { title: 'Conflict', detail: 'The standing assignee changed.' },
+      });
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Also assign these 2 jobs to Priya Sundaram/ }),
+      );
+
+      const error = await screen.findByTestId('apply-default-error');
+      expect(error).toHaveTextContent(/The standing assignee changed/);
+      expect(error).toHaveTextContent(/The plan itself is saved/);
+      // The offer is still there to retry or decline.
+      expect(screen.getByRole('button', { name: /Leave them unassigned/ })).toBeEnabled();
+    });
+
+    /** THE HONEST BOUNDARY. The count must never be read as "all this plan's
+     * jobs" — the exclusions are stated where the number is. */
+    it('states what the count deliberately leaves out', async () => {
+      savedWith(4);
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+
+      expect(await screen.findByTestId('apply-default-scope')).toHaveTextContent(
+        /Only jobs nobody holds are counted/,
+      );
+      expect(screen.getByTestId('apply-default-scope')).toHaveTextContent(
+        /already has a technician, or that has passed out of their hands, is left exactly as it is/,
+      );
+    });
+
+    /**
+     * A-11Y. A keyboard or screen-reader user must not be left on a Save
+     * button that no longer exists while a new question waits several controls
+     * away, so focus is moved to the offer and the region names itself.
+     */
+    it('moves focus to the offer and labels it', async () => {
+      savedWith(4);
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+
+      const offer = await screen.findByTestId('apply-default-offer');
+      await waitFor(() => expect(offer).toHaveFocus());
+      expect(offer).toHaveAttribute('tabindex', '-1');
+      expect(offer).toHaveAccessibleName(/unassigned jobs already exist for this plan/);
+    });
+
+    /** ONE QUESTION AT A TIME. Reassigning THIS job underneath the offer would
+     * make its count wrong by one with nothing to say so. */
+    it('withdraws the other assignment controls while the offer is open', async () => {
+      savedWith(4);
+      const detail = await openVisit([
+        withJob({
+          nextDueJob: {
+            id: 'job-1',
+            jobNumber: 'PM-2026-000123',
+            status: 'SCHEDULED',
+            assignedTo: null,
+            assignedToName: null,
+          },
+        }),
+      ]);
+      expect(
+        within(detail).getByRole('button', { name: /Assign job PM-2026-000123/ }),
+      ).toBeVisible();
+
+      await saveTheStandingAssignee(detail);
+      await screen.findByTestId('apply-default-offer');
+
+      expect(screen.queryByRole('button', { name: /Assign job PM-2026-000123/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /who normally does/ })).toBeNull();
+      // The state of the job is still readable — only the control waits.
+      expect(within(detail).getByTestId('job-assignee-none')).toBeVisible();
+    });
+
+    it('singular reads as one job, not "1 jobs"', async () => {
+      savedWith(1);
+      const detail = await openVisit([withJob()]);
+      await saveTheStandingAssignee(detail);
+
+      const offer = await screen.findByTestId('apply-default-offer');
+      expect(offer).toHaveTextContent('1 unassigned job already exists for this plan');
+      expect(offer).not.toHaveTextContent('1 unassigned jobs');
+      expect(
+        screen.getByRole('button', { name: /Also assign this job to Priya Sundaram/ }),
+      ).toBeVisible();
+      expect(screen.getByRole('button', { name: /Leave it unassigned/ })).toBeVisible();
     });
   });
 

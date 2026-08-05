@@ -16,6 +16,8 @@ import { JobsRepository } from './jobs.repository';
 import { JobsService } from './jobs.service';
 import { PartsService } from './parts.service';
 import { ResultsService } from './results.service';
+import { RuleDefaultAssignmentController } from './rule-default-assignment.controller';
+import { RuleDefaultAssignmentService } from './rule-default-assignment.service';
 import { StageEscalationService } from './stage-escalation.service';
 import { SubmissionService } from './submission.service';
 import { TitleMachineNumberService } from './title-machine-number.service';
@@ -52,7 +54,17 @@ import { VerificationService } from './verification.service';
   // declared outside both. See that module's own note for why it cannot live
   // here.
   imports: [QueueModule, SchedulingModule, AssignableUserModule],
-  controllers: [JobsController, AttachmentsController, ApprovalController],
+  // `RuleDefaultAssignmentController` serves a `/schedule` path from this
+  // module — slice 33-APPLYDEFAULT. Its own header says why: the URL belongs
+  // to the schedule surface, but applying a standing assignee to the jobs a
+  // plan has already raised means calling `AssignmentService` below, and
+  // `SchedulingModule` cannot import this module back (see `imports`).
+  controllers: [
+    JobsController,
+    AttachmentsController,
+    ApprovalController,
+    RuleDefaultAssignmentController,
+  ],
   providers: [
     JobAccessService,
     JobsRepository,
@@ -62,6 +74,7 @@ import { VerificationService } from './verification.service';
     TitleMachineNumberService,
     SubmissionService,
     AssignmentService,
+    RuleDefaultAssignmentService,
     AdhocJobService,
     StageEscalationService,
     AttachmentsService,

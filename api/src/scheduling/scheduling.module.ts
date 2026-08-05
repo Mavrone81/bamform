@@ -53,6 +53,15 @@ import { VoidScheduleRecomputeService } from './void-schedule-recompute.service'
     JobGenerationService,
     CompletionCascadeService,
     VoidScheduleRecomputeService,
+    // Slice 33-APPLYDEFAULT. `JobsModule` serves
+    // `POST /schedule/{id}/default-assignee/apply-to-existing`, because
+    // applying a standing assignee means calling `AssignmentService` and the
+    // import only runs in that direction. It asks THIS service for the
+    // schedule-shaped half — resolve the rule, refuse an out-of-scope machine,
+    // select the rule's still-unassigned jobs through the area-scoped
+    // repository — rather than restating any of it. See
+    // `PlannerScheduleService#findRuleWithUnassignedJobs`.
+    PlannerScheduleService,
   ],
 })
 export class SchedulingModule {}

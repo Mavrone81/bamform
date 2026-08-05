@@ -417,6 +417,14 @@ function addCalendarMonthsClamped(iso: string, months: number): string {
  */
 const JOB_RECORD_ROLES: readonly string[] = ['MAINTAINER', 'TEAM_LEADER', 'ENGINEER'];
 
+/**
+ * Slice 33-APPLYDEFAULT — the job states from which `ASSIGN` is legal,
+ * mirroring `api/src/jobs/job-state-machine.ts`. The same three
+ * `handleAssignJob` accepts, named once so the single-job gate and the batch
+ * cannot drift apart in the fake the way they once did in the real system.
+ */
+const ASSIGNABLE_JOB_STATUSES = ['SCHEDULED', 'ASSIGNED', 'IN_PROGRESS'];
+
 /** The four roles that may assign — `@Roles()` on both assignment routes. */
 const ASSIGN_ROLES: string[] = ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'];
 
@@ -506,7 +514,21 @@ export class FakeServer {
    */
   private generatedJobsByVisit = new Map<
     string,
-    { id: string; jobNumber: string; status: string }
+    {
+      id: string;
+      jobNumber: string;
+      status: string;
+      /**
+       * Slice 33-APPLYDEFAULT — the visit key, carried on the VALUE as well as
+       * in the map key. `POST .../default-assignee/apply-to-existing` is scoped
+       * to a RULE, which is `(assetDocumentId, frequency)` across every due
+       * date, so the fake has to be able to find a rule's jobs without parsing
+       * its own map keys back apart.
+       */
+      assetDocumentId: string;
+      frequency: Frequency;
+      dueOn: string;
+    }
   >();
   private generatedJobSeq = 0;
   /**
@@ -721,7 +743,14 @@ export class FakeServer {
     const jobNumber = `PM-2026-${String(1000 + n).padStart(6, '0')}`;
     this.generatedJobsByVisit.set(
       visitJobKey(input.assetDocumentId, input.frequency, input.dueOn),
-      { id, jobNumber, status: input.status ?? 'SCHEDULED' },
+      {
+        id,
+        jobNumber,
+        status: input.status ?? 'SCHEDULED',
+        assetDocumentId: input.assetDocumentId,
+        frequency: input.frequency,
+        dueOn: input.dueOn,
+      },
     );
     this.seedJob({
       id,
@@ -760,6 +789,26 @@ export class FakeServer {
    */
   setRuleDefaultAssignee(scheduleRuleId: string, userId: string | null): void {
     this.ruleDefaultAssignee.set(scheduleRuleId, userId);
+  }
+
+  /**
+   * Slice 33-APPLYDEFAULT — puts somebody on a generated job DIRECTLY, so a
+   * spec can present a plan whose jobs are partly covered already. The
+   * property that matters is that the batch NEVER touches these, and a spec
+   * cannot prove it without a job that starts out held.
+   */
+  setJobAssignee(jobId: string, userId: string | null): void {
+    this.jobAssignees.set(jobId, userId);
+    if (userId && (this.jobStatus.get(jobId) ?? 'SCHEDULED') === 'SCHEDULED') {
+      this.jobStatus.set(jobId, 'ASSIGNED');
+      const generated = Array.from(this.generatedJobsByVisit.values()).find((g) => g.id === jobId);
+      if (generated) generated.status = 'ASSIGNED';
+    }
+  }
+
+  /** What the fake believes a job's assignee is — for a spec's assertions. */
+  jobAssigneeOf(jobId: string): string | null {
+    return this.jobAssignees.get(jobId) ?? null;
   }
 
   /**
@@ -3142,6 +3191,138 @@ export class FakeServer {
                 : 'not-assignable',
             }
           : null,
+        // Slice 33-APPLYDEFAULT — what this write did NOT do, as a number.
+        // Computed AFTER the column write and from the same predicate the
+        // apply endpoint walks, so the count the screen offers is the count
+        // the confirmation delivers.
+        unassignedJobsAlreadyRaised: this.unassignedJobsForRule(rule).length,
+      }),
+    });
+  }
+
+  /**
+   * Slice 33-APPLYDEFAULT — the jobs THIS RULE has already raised that could
+   * still be given to somebody: the fake's copy of
+   * `rule-unassigned-jobs.ts#unassignedJobsForRuleWhere`.
+   *
+   * Mirrored rather than simplified, and for the sharpest possible reason: the
+   * number the screen shows a planner and the jobs the confirmation assigns
+   * both come from this predicate, so a fake that counted loosely — "every job
+   * on the machine", "every job on the plan" — would let a screen that
+   * over-promises pass CI green. The three exclusions are the real ones:
+   * somebody already holds it, it has left the technician's hands (the same
+   * states `handleAssignJob` answers 409 for), or it is not on this rule.
+   */
+  private unassignedJobsForRule(rule: FakeScheduleRule): Array<{
+    id: string;
+    jobNumber: string;
+  }> {
+    return Array.from(this.generatedJobsByVisit.values())
+      .filter(
+        (generated) =>
+          generated.assetDocumentId === rule.assetDocumentId &&
+          generated.frequency === rule.frequency &&
+          (this.jobAssignees.get(generated.id) ?? null) === null &&
+          ASSIGNABLE_JOB_STATUSES.includes(
+            this.jobStatus.get(generated.id) ?? generated.status ?? 'SCHEDULED',
+          ),
+      )
+      .sort((a, b) => a.dueOn.localeCompare(b.dueOn) || a.id.localeCompare(b.id))
+      .map((generated) => ({ id: generated.id, jobNumber: generated.jobNumber }));
+  }
+
+  /**
+   * `POST /schedule/{scheduleRuleId}/default-assignee/apply-to-existing` —
+   * slice 33-APPLYDEFAULT. ALSO give the standing assignee the jobs this plan
+   * has already raised.
+   *
+   * A SEPARATE ENDPOINT IN THE FAKE TOO, never folded into
+   * `handleSetDefaultAssignee`: the whole point of the feature is that setting
+   * the plan still touches no job, and a fake that applied it as a side effect
+   * would make the spec proving that impossible to write.
+   *
+   * PARTIAL SUCCESS IS 200 with both lists populated, exactly as the real
+   * service returns it — including the case where the assignee has lapsed
+   * since the offer, which refuses every job individually rather than failing
+   * the request. That is the shape the screen has to render, so it is the
+   * shape the fake has to produce.
+   */
+  private async handleApplyDefaultAssignee(route: Route, scheduleRuleId: string): Promise<void> {
+    const requester = await this.requireRoles(route, ASSIGN_ROLES);
+    if (!requester) return;
+
+    const rule = this.scheduleRulesById.get(scheduleRuleId);
+    const asset = rule ? this.assetOfRule(rule) : undefined;
+    if (!rule || !asset) {
+      await this.fulfillProblem(route, 404, 'Not found', '/errors/not-found');
+      return;
+    }
+    if (!this.assetInScope(requester, asset)) {
+      await this.fulfillProblem(route, 403, 'Out of scope', '/errors/out-of-scope');
+      return;
+    }
+
+    const body = route.request().postDataJSON() as { assigneeId?: string };
+    const standing = this.ruleDefaultAssignee.get(scheduleRuleId) ?? null;
+    if (standing === null) {
+      await this.fulfillProblem(
+        route,
+        422,
+        'Validation failed',
+        '/errors/validation-failed',
+        'This plan has no standing assignee, so there is nothing to apply.',
+      );
+      return;
+    }
+    if (standing !== body.assigneeId) {
+      await this.fulfillProblem(
+        route,
+        409,
+        'Conflict',
+        '/errors/validation-failed',
+        'The standing assignee for this plan changed after you were offered this.',
+      );
+      return;
+    }
+
+    const assignee = this.adminUsers.get(standing);
+    const assignable = assignee ? this.isAssignableTo(assignee, asset.areaId ?? null) : false;
+
+    const assigned: Array<{ jobId: string; jobNumber: string }> = [];
+    const refused: Array<{ jobId: string; jobNumber: string; reason: string }> = [];
+    for (const job of this.unassignedJobsForRule(rule)) {
+      if (!assignable) {
+        // ONE JOB AT A TIME, even when every one of them will fail: the real
+        // batch runs `POST /jobs/{jobId}/assign` per job and reports each
+        // refusal, and a fake that short-circuited to a 422 would hide the
+        // partial-failure rendering the screen exists to do.
+        refused.push({
+          jobId: job.id,
+          jobNumber: job.jobNumber,
+          reason: 'That person cannot be assigned to this job.',
+        });
+        continue;
+      }
+      this.jobAssignees.set(job.id, standing);
+      if ((this.jobStatus.get(job.id) ?? 'SCHEDULED') === 'SCHEDULED') {
+        this.jobStatus.set(job.id, 'ASSIGNED');
+        const generated = Array.from(this.generatedJobsByVisit.values()).find(
+          (g) => g.id === job.id,
+        );
+        if (generated) generated.status = 'ASSIGNED';
+      }
+      assigned.push({ jobId: job.id, jobNumber: job.jobNumber });
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        scheduleRuleId,
+        assigneeId: standing,
+        assigned,
+        refused,
+        notAttempted: 0,
       }),
     });
   }
@@ -3165,7 +3346,7 @@ export class FakeServer {
       return;
     }
     const status = this.jobStatus.get(jobId) ?? job.status ?? 'SCHEDULED';
-    if (!['SCHEDULED', 'ASSIGNED', 'IN_PROGRESS'].includes(status)) {
+    if (!ASSIGNABLE_JOB_STATUSES.includes(status)) {
       await this.fulfillProblem(
         route,
         409,
@@ -3626,6 +3807,22 @@ export class FakeServer {
           .url()
           .match(/\/schedule\/([^/]+)\/default-assignee$/);
         return this.handleSetDefaultAssignee(
+          route,
+          match ? decodeURIComponent(match[1]) : 'unknown',
+        );
+      }),
+    );
+    // Slice 33-APPLYDEFAULT. Registered AFTER `default-assignee` above so
+    // Playwright's last-registered-first resolution reaches the longer path
+    // first; they could not collide regardless (that pattern is `$`-anchored).
+    await page.route(
+      /\/api\/v1\/schedule\/([^/]+)\/default-assignee\/apply-to-existing$/,
+      this.guarded((route) => {
+        const match = route
+          .request()
+          .url()
+          .match(/\/schedule\/([^/]+)\/default-assignee\/apply-to-existing$/);
+        return this.handleApplyDefaultAssignee(
           route,
           match ? decodeURIComponent(match[1]) : 'unknown',
         );
