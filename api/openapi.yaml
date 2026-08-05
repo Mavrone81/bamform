@@ -1084,6 +1084,83 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /schedule/{scheduleRuleId}/default-assignee/apply-to-existing:
+    parameters:
+      - $ref: '#/components/parameters/ScheduleRuleId'
+    post:
+      tags: [Scheduling]
+      operationId: applyDefaultAssigneeToExistingJobs
+      summary: Also give this plan's standing assignee the jobs it has already raised
+      description: |
+        Slice 33-APPLYDEFAULT. PLANNER/TEAM_LEADER/ENGINEER/ADMIN — exactly the
+        set on `POST /jobs/{jobId}/assign` and on
+        `PUT /schedule/{scheduleRuleId}/default-assignee`, because this is
+        neither more nor less than doing the first of those, several times, to
+        the jobs the second one named.
+
+        WHY IT EXISTS. Setting a standing assignee deliberately does not
+        cascade: a planner editing next year's plan must not silently reassign
+        work in progress. That is still true and still enforced. But on day one
+        it made the feature useless as guidance — an owner set it on four
+        plans, logged in as the technician, and saw nothing, because 195 jobs
+        were already raised and unassigned. So the planner is now told how many
+        are sitting there (`SetDefaultAssigneeResult.unassignedJobsAlreadyRaised`)
+        and offered this, as a second, deliberate act. It never runs as a side
+        effect of the PUT.
+
+        SCOPE IS ONE SCHEDULE RULE — the jobs generation raised from
+        `(asset_document_id, frequency)`, which names exactly one rule. Not
+        every job on the machine, and not every job for that technician.
+
+        ONLY GENUINELY UNASSIGNED JOBS. A job that already has an assignee is
+        never touched — that is the rule the non-cascading default exists to
+        protect. Jobs past the technician's hands (SUBMITTED/ARCHIVED/VOIDED,
+        where `POST /jobs/{jobId}/assign` answers 409) and ad-hoc jobs are
+        excluded, by the same predicate that produced the count.
+
+        THE REAL PATH, PER JOB. Each assignment goes through the service
+        `POST /jobs/{jobId}/assign` uses: SCHEDULED -> ASSIGNED via the state
+        machine, one transaction and one `audit_event` per job, one
+        `JOB_ASSIGNED` notification per job. Nothing bulk-UPDATEs the column.
+
+        PARTIAL SUCCESS IS 200, NOT AN ERROR. One refusal must not roll back
+        the jobs already assigned nor abort the ones after it, so the response
+        enumerates `assigned` and `refused` by job number, each refusal
+        carrying the server's own `detail`.
+
+        409 when the plan's standing assignee changed after the offer was made
+        (nothing is assigned); 422 when the plan has no standing assignee to
+        apply; 404 for an unknown rule; 403 when the rule's machine is outside
+        the caller's area scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplyDefaultAssigneeRequest' }
+      responses:
+        '200':
+          description: What was assigned, and what was refused and why
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplyDefaultAssigneeResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403':
+          description: "`/errors/out-of-scope` - the rule's machine is outside the caller's area scope"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409':
+          description: '`/errors/validation-failed` - the standing assignee changed after the offer; nothing was assigned'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: '`/errors/validation-failed` - the plan has no standing assignee to apply'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /approval-routes:
     get:
       tags: [Asset Types]
@@ -3376,13 +3453,97 @@ components:
     SetDefaultAssigneeResult:
       # Mirrors shared/src/planner.ts `setDefaultAssigneeResultSchema` exactly.
       type: object
-      required: [scheduleRuleId, defaultAssignee]
+      required: [scheduleRuleId, defaultAssignee, unassignedJobsAlreadyRaised]
       properties:
         scheduleRuleId: { type: string, format: uuid }
         defaultAssignee:
           oneOf:
             - $ref: '#/components/schemas/PlannerDefaultAssignee'
             - type: 'null'
+        unassignedJobsAlreadyRaised:
+          type: integer
+          minimum: 0
+          description: |
+            Slice 33-APPLYDEFAULT — how many jobs this rule has ALREADY raised
+            that could still be given to somebody.
+
+            The standing assignee only affects jobs not yet generated, and that
+            is deliberate. But on day one it made the feature useless as
+            guidance: an owner set it on four plans, logged in as the
+            technician, and saw nothing, because 195 jobs were already raised
+            and unassigned. So the response says how many the planner could
+            ALSO hand over, and the screen offers it as a separate, explicit
+            confirmation. Nothing is applied by this endpoint.
+
+            IT IS THE NUMBER THAT WOULD ACTUALLY CHANGE. Counted over the same
+            predicate `POST .../apply-to-existing` iterates: a job that already
+            has an assignee, or has left the technician's hands
+            (SUBMITTED/ARCHIVED/VOIDED, where `POST /jobs/{jobId}/assign` is a
+            409), or is ad-hoc, is excluded from both.
+
+    ApplyDefaultAssigneeRequest:
+      # Mirrors shared/src/planner.ts `applyDefaultAssigneeRequestSchema` exactly.
+      type: object
+      required: [assigneeId]
+      properties:
+        assigneeId:
+          type: string
+          format: uuid
+          description: |
+            The person the planner was offered. Sent back rather than implied,
+            and refused with 409 if it is no longer the rule's standing
+            assignee: the planner answered a question about a NAMED person, and
+            between the offer and the answer somebody else may have changed the
+            plan. Applying whatever the column holds at that moment would
+            assign real work to somebody they never saw named.
+
+    AppliedJob:
+      type: object
+      required: [jobId, jobNumber]
+      properties:
+        jobId: { type: string, format: uuid }
+        jobNumber: { type: string, examples: ['PM-2026-000123'] }
+
+    RefusedJob:
+      type: object
+      required: [jobId, jobNumber, reason]
+      properties:
+        jobId: { type: string, format: uuid }
+        jobNumber: { type: string, examples: ['PM-2026-000123'] }
+        reason:
+          type: string
+          description: |
+            The `detail` of the problem `POST /jobs/{jobId}/assign` raised for
+            this job, carried through verbatim. A planner told "3 of 4 were
+            assigned" and nothing else has no way to find the fourth.
+
+    ApplyDefaultAssigneeResult:
+      # Mirrors shared/src/planner.ts `applyDefaultAssigneeResultSchema` exactly.
+      type: object
+      description: |
+        Slice 33-APPLYDEFAULT. PARTIAL SUCCESS IS A FIRST-CLASS OUTCOME, not an
+        error case: each job is assigned through `POST /jobs/{jobId}/assign`'s
+        own service, in its own transaction, with its own audit event and its
+        own `JOB_ASSIGNED` notification, so one refusal can neither roll back
+        the jobs already assigned nor abort the ones not yet attempted.
+      required: [scheduleRuleId, assigneeId, assigned, refused, notAttempted]
+      properties:
+        scheduleRuleId: { type: string, format: uuid }
+        assigneeId: { type: string, format: uuid }
+        assigned:
+          type: array
+          items: { $ref: '#/components/schemas/AppliedJob' }
+        refused:
+          type: array
+          items: { $ref: '#/components/schemas/RefusedJob' }
+        notAttempted:
+          type: integer
+          minimum: 0
+          description: |
+            Jobs that matched but were beyond this batch's cap and were NOT
+            touched. Normally 0 — a rule holds one live job per due date — but
+            omitting it would let `assigned + refused` read as "all of them"
+            when it was not.
 
     PlannerVisitJob:
       type: object

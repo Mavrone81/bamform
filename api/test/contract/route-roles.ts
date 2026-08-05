@@ -86,6 +86,24 @@ export const EXPECTED_ROUTE_ROLES: Readonly<Record<string, readonly string[]>> =
     'ENGINEER',
     'ADMIN',
   ],
+  // Slice 33-APPLYDEFAULT — applying the standing assignee to the jobs the
+  // plan has ALREADY raised. The SAME set again, and it must stay the same
+  // set: the route is a loop over `POST /jobs/{jobId}/assign` above, so any
+  // role that could reach this and not that would be a way to assign work
+  // through a door the single-job gate refuses.
+  //
+  // NOTE THE MODULE. This handler is declared in `JobsModule`
+  // (`rule-default-assignment.controller.ts`), not in `SchedulingModule` with
+  // its `/schedule` siblings, because applying the default means calling
+  // `AssignmentService` and the import only runs in that direction. The path
+  // is what this inventory keys on, so the split is invisible here — which is
+  // exactly why it is written down.
+  'POST /api/v1/schedule/{scheduleRuleId}/default-assignee/apply-to-existing': [
+    'PLANNER',
+    'TEAM_LEADER',
+    'ENGINEER',
+    'ADMIN',
+  ],
   'PUT /api/v1/assets/{assetId}/schedule': ['PLANNER', 'TEAM_LEADER', 'ENGINEER', 'ADMIN'],
 
   // ---- document tagging (slice 27-ASSETDOC). Deliberately the SAME gate as

@@ -649,11 +649,21 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
     await planForm.getByLabel('Technician').selectOption({ value: E2E_USERS.technician.id });
     await planForm.getByRole('button', { name: 'Save who normally does this' }).click();
 
+    // Slice 33-APPLYDEFAULT — a job for this plan is already raised and
+    // unassigned, so the planner is now told and asked. DECLINED here, which
+    // is what makes the rest of this journey a proof rather than a
+    // coincidence: the plan-only behaviour is exactly what the owner saw, and
+    // it must still be available on purpose.
+    const offer = page.getByTestId('apply-default-offer');
+    await expect(offer).toContainText('1 unassigned job already exists for this plan');
+    await offer.getByRole('button', { name: /Leave it unassigned/ }).click();
+
     await expect(page.getByText(/now normally does/)).toBeVisible();
     await page.getByRole('button', { name: /AW01.*WW38/ }).click();
     await expect(detail.getByTestId('default-assignee-name')).toContainText('Test Technician');
 
-    // The plan changed; the job that already exists did NOT move.
+    // The plan changed; the job that already exists did NOT move — the
+    // planner declined, and declining means nothing happened.
     await expect(detail.getByTestId('job-assignee-none')).toBeVisible();
 
     // ---- level 2: THIS OCCURRENCE. Somebody else covers it.
@@ -670,6 +680,83 @@ test.describe('E-17: a planner reads the year and moves a visit', () => {
     await page.getByRole('button', { name: /AW01.*WW38/ }).click();
     await expect(detail.getByTestId('default-assignee-name')).toContainText('Test Technician');
     await expect(detail.getByTestId('job-assignee-name')).toContainText('Test Team Leader');
+  });
+
+  /**
+   * SLICE 33-APPLYDEFAULT — THE DAY-ONE GAP, WALKED END TO END.
+   *
+   * What actually happened: the owner set "who normally does this" on four
+   * plans, logged in as the technician, and saw nothing. 4 rules carried a
+   * default, 0 jobs were assigned, 195 were unassigned. Nothing was broken —
+   * the standing assignee only applies to jobs raised from then on — but the
+   * panel explained that only in terms of what it would NOT do, so a planner
+   * who did the sensible thing was left with no next step.
+   *
+   * This is the journey that closes it, and the assertions are deliberately
+   * about the OTHER plan's job as much as this one's: the offer is scoped to
+   * ONE schedule rule, and a batch that swept up the machine's other plans
+   * would be a far worse bug than the one it fixes.
+   */
+  test('a planner sets the standing assignee and hands it the jobs that are already sitting there', async ({
+    page,
+    server,
+  }) => {
+    const machine = server.seedAsset({
+      code: 'AW01',
+      assetTypeId: 'at-1',
+      scheduleAnchorDate: `${YEAR}-09-17`,
+    });
+    const doc = server.seedAssetDocument({
+      assetId: machine.id,
+      formTemplateId: E2E_TEMPLATES.wireBond,
+    });
+    // Two jobs on THIS plan: one nobody holds, one the team leader already
+    // has. Only the first may move.
+    const free = server.seedGeneratedJob({
+      assetDocumentId: doc.id,
+      frequency: 'M1',
+      dueOn: `${YEAR}-09-17`,
+      assetCode: 'AW01',
+    });
+    const held = server.seedGeneratedJob({
+      assetDocumentId: doc.id,
+      frequency: 'M1',
+      dueOn: `${YEAR}-10-17`,
+      assetCode: 'AW01',
+    });
+    server.setJobAssignee(held.id, E2E_USERS.teamLeader.id);
+
+    await signInAs(page, E2E_USERS.teamLeader.email);
+    await page.goto('/planner');
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+    const detail = page.getByTestId('planner-detail');
+    await detail.getByRole('button', { name: /Set who normally does/ }).click();
+    const planForm = page.getByRole('form', { name: /Set who normally does/ });
+    await planForm.getByLabel('Technician').selectOption({ value: E2E_USERS.technician.id });
+    await planForm.getByRole('button', { name: 'Save who normally does this' }).click();
+
+    // THE SENTENCE THE OWNER NEVER GOT. One job, not two: the one the team
+    // leader already holds is deliberately not in the count.
+    const offer = page.getByTestId('apply-default-offer');
+    await expect(offer).toContainText('1 unassigned job already exists for this plan');
+    await expect(offer).toContainText('Also assign it to Test Technician?');
+    await expect(offer).toContainText('Only jobs nobody holds are counted');
+
+    await offer.getByRole('button', { name: /Also assign this job to Test Technician/ }).click();
+
+    await expect(page.getByText(/already raised for it is now theirs/)).toBeVisible();
+
+    // The unassigned job is now the technician's, through the real assign
+    // path — the fake mirrors SCHEDULED -> ASSIGNED for exactly this reason.
+    expect(server.jobAssigneeOf(free.id)).toBe(E2E_USERS.technician.id);
+    // AND THE ONE SOMEBODY ALREADY HELD IS UNTOUCHED. This is the property
+    // the non-cascading default exists to protect; the new offer must not be
+    // a back door to breaking it.
+    expect(server.jobAssigneeOf(held.id)).toBe(E2E_USERS.teamLeader.id);
+
+    await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+    await expect(detail.getByTestId('job-assignee-name')).toContainText('Test Technician');
   });
 
   /**

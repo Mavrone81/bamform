@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { JobStatusT, type FrequencyT, type Prisma } from '@prisma/client';
 import { applyAreaScope } from '../common/area-scope';
+import { unassignedJobsForRuleWhere } from '../jobs/rule-unassigned-jobs';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface PlannerScheduleFilters {
@@ -229,7 +230,84 @@ export class PlannerScheduleRepository {
       orderBy: { generatedAt: 'asc' },
     });
   }
+
+  /** See `RuleJobSelection` — how many jobs the offer may honestly claim. */
+  countUnassignedJobsForRule(
+    rule: RuleJobSelection,
+    allowedAreaIds: string[] | null,
+  ): Promise<number> {
+    return this.prisma.job.count({
+      where: {
+        ...unassignedJobsForRuleWhere(rule),
+        asset: applyAreaScope<Prisma.AssetWhereInput>({}, allowedAreaIds),
+      },
+    });
+  }
+
+  /**
+   * See `RuleJobSelection` — the jobs the confirmation will actually walk.
+   *
+   * `take` is one MORE than the batch cap at the caller's request, so it can
+   * tell "exactly the cap" from "more than the cap" without a second count and
+   * report `notAttempted` honestly. Ordered by due date so a partial
+   * application takes the most overdue work first, which is the order a
+   * planner would have done it by hand.
+   */
+  findUnassignedJobsForRule(
+    rule: RuleJobSelection,
+    allowedAreaIds: string[] | null,
+    take: number,
+  ): Promise<RuleUnassignedJobRow[]> {
+    return this.prisma.job.findMany({
+      where: {
+        ...unassignedJobsForRuleWhere(rule),
+        asset: applyAreaScope<Prisma.AssetWhereInput>({}, allowedAreaIds),
+      },
+      select: RULE_UNASSIGNED_JOB_SELECT,
+      orderBy: [{ dueOn: 'asc' }, { id: 'asc' }],
+      take,
+    });
+  }
 }
+
+/**
+ * Slice 33-APPLYDEFAULT — the jobs a rule has ALREADY raised that its standing
+ * assignee could still be applied to, and how many there are.
+ *
+ * TWO METHODS, ONE `where`. The count is what the planner is shown after
+ * setting a standing assignee ("4 unassigned jobs already exist for this
+ * plan"); the list is what the confirmation actually iterates. Both take their
+ * filter from `rule-unassigned-jobs.ts#unassignedJobsForRuleWhere`, so the
+ * number offered is by construction the number attempted — see that module for
+ * why each exclusion is there.
+ *
+ * DIFFERENT FROM `findScheduledJobsForVisits` ABOVE, and deliberately: that
+ * one is keyed on `dueOn` too, because it answers "the job for THIS visit".
+ * This answers "every job this plan still owns", across due dates — a rule
+ * whose visits were missed can be carrying more than one.
+ *
+ * AREA SCOPE IS APPLIED HERE, as it is on every read in this file. Strictly
+ * redundant (the caller has already resolved the rule through
+ * `findRuleForMutation` and checked its machine), but ADR-005 puts the scope
+ * in the repository precisely so no read has to rely on a caller having done
+ * it — and this one feeds a WRITE, where a missing scope would not merely leak
+ * a row but hand somebody else's machine to somebody else's technician.
+ */
+export interface RuleJobSelection {
+  assetDocumentId: string;
+  frequency: FrequencyT;
+}
+
+const RULE_UNASSIGNED_JOB_SELECT = {
+  id: true,
+  jobNumber: true,
+  status: true,
+  dueOn: true,
+} as const;
+
+export type RuleUnassignedJobRow = Prisma.JobGetPayload<{
+  select: typeof RULE_UNASSIGNED_JOB_SELECT;
+}>;
 
 /** The tuple that names one visit's job — see `findScheduledJobsForVisits`. */
 export interface VisitKey {

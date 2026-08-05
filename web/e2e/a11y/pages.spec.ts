@@ -711,6 +711,108 @@ test('A-05: the lapsed and unchecked standing-assignee states are words, not col
   await expectNoViolations(page);
 });
 
+/**
+ * Slice 33-APPLYDEFAULT — the offer to also assign the jobs a plan has already
+ * raised, and the partial outcome it can produce.
+ *
+ * Two states that would be easy to build badly: a question that appears after
+ * a save (a keyboard user must not be stranded on the button they just
+ * pressed) and a partial result (which invites a red row instead of a
+ * sentence). Both are scanned, and the count and the refusals are asserted as
+ * WORDS so a colour-only regression cannot pass.
+ */
+test('A-01/A-05: the "also assign the jobs already raised" offer, and its partial outcome', async ({
+  page,
+  server,
+}) => {
+  await page.clock.setFixedTime(new Date('2026-08-03T12:00:00.000Z'));
+  const machine = server.seedAsset({
+    code: 'AW01',
+    assetTypeId: 'at-1',
+    scheduleAnchorDate: '2026-09-17',
+  });
+  const doc = server.seedAssetDocument({
+    assetId: machine.id,
+    formTemplateId: E2E_TEMPLATES.wireBond,
+  });
+  server.seedGeneratedJob({
+    assetDocumentId: doc.id,
+    frequency: 'M1',
+    dueOn: '2026-09-17',
+    assetCode: 'AW01',
+  });
+
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.goto('/planner');
+  await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+  const detail = page.getByTestId('planner-detail');
+  await detail.getByRole('button', { name: /Set who normally does/ }).click();
+  const planForm = page.getByRole('form', { name: /Set who normally does/ });
+  await planForm.getByLabel('Technician').selectOption({ value: E2E_USERS.technician.id });
+  await planForm.getByRole('button', { name: 'Save who normally does this' }).click();
+
+  const offer = page.getByTestId('apply-default-offer');
+  await expect(offer).toBeVisible();
+  // The count and the exclusion are sentences, not a tint or a badge.
+  await expect(offer).toContainText('1 unassigned job already exists for this plan');
+  await expect(page.getByTestId('apply-default-scope')).toContainText(
+    'Only jobs nobody holds are counted',
+  );
+  // Focus followed the question rather than leaving a keyboard user on a Save
+  // button that no longer exists.
+  await expect(offer).toBeFocused();
+  await expectNoViolations(page);
+});
+
+test('A-01/A-05: a refused job in the batch is named in words and announced', async ({
+  page,
+  server,
+}) => {
+  await page.clock.setFixedTime(new Date('2026-08-03T12:00:00.000Z'));
+  const machine = server.seedAsset({
+    code: 'AW01',
+    assetTypeId: 'at-1',
+    scheduleAnchorDate: '2026-09-17',
+  });
+  const doc = server.seedAssetDocument({
+    assetId: machine.id,
+    formTemplateId: E2E_TEMPLATES.wireBond,
+  });
+  const job = server.seedGeneratedJob({
+    assetDocumentId: doc.id,
+    frequency: 'M1',
+    dueOn: '2026-09-17',
+    assetCode: 'AW01',
+  });
+  const rule = server.scheduleRuleFor(doc.id, 'M1');
+  // The standing assignee was set while eligible and has since lapsed — the
+  // real refusal, reached honestly rather than stubbed.
+  server.setRuleDefaultAssignee(rule.id, E2E_USERS.technician.id);
+
+  await signInAs(page, E2E_USERS.teamLeader.email);
+  await page.goto('/planner');
+  await page.getByRole('button', { name: /AW01.*WW38/ }).click();
+
+  const detail = page.getByTestId('planner-detail');
+  await detail.getByRole('button', { name: /Change who normally does/ }).click();
+  const planForm = page.getByRole('form', { name: /Set who normally does/ });
+  await planForm.getByLabel('Technician').selectOption({ value: E2E_USERS.teamLeader.id });
+  await planForm.getByRole('button', { name: 'Save who normally does this' }).click();
+  await expect(page.getByTestId('apply-default-offer')).toBeVisible();
+
+  // They lose eligibility between the offer and the answer.
+  server.deactivateUser(E2E_USERS.teamLeader.id);
+  await page.getByRole('button', { name: /Also assign this job to Test Team Leader/ }).click();
+
+  const outcome = page.getByTestId('apply-default-outcome');
+  await expect(outcome).toBeVisible();
+  // The job is NAMED, with the server's own reason — never "some failed".
+  await expect(page.getByTestId('apply-default-refused')).toContainText(job.jobNumber);
+  await expect(outcome).toHaveAttribute('role', 'alert');
+  await expectNoViolations(page);
+});
+
 test('A-01: the ad-hoc document picker has zero axe violations', async ({ page, server }) => {
   const machine = server.seedAsset({ code: 'AW10', assetTypeId: 'at-1' });
   server.seedAssetDocument({

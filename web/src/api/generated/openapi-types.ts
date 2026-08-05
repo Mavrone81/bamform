@@ -808,6 +808,68 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/schedule/{scheduleRuleId}/default-assignee/apply-to-existing': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A `schedule_rule` id, as `GET /schedule` returns on every row. */
+        scheduleRuleId: components['parameters']['ScheduleRuleId'];
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Also give this plan's standing assignee the jobs it has already raised
+     * @description Slice 33-APPLYDEFAULT. PLANNER/TEAM_LEADER/ENGINEER/ADMIN — exactly the
+     *     set on `POST /jobs/{jobId}/assign` and on
+     *     `PUT /schedule/{scheduleRuleId}/default-assignee`, because this is
+     *     neither more nor less than doing the first of those, several times, to
+     *     the jobs the second one named.
+     *
+     *     WHY IT EXISTS. Setting a standing assignee deliberately does not
+     *     cascade: a planner editing next year's plan must not silently reassign
+     *     work in progress. That is still true and still enforced. But on day one
+     *     it made the feature useless as guidance — an owner set it on four
+     *     plans, logged in as the technician, and saw nothing, because 195 jobs
+     *     were already raised and unassigned. So the planner is now told how many
+     *     are sitting there (`SetDefaultAssigneeResult.unassignedJobsAlreadyRaised`)
+     *     and offered this, as a second, deliberate act. It never runs as a side
+     *     effect of the PUT.
+     *
+     *     SCOPE IS ONE SCHEDULE RULE — the jobs generation raised from
+     *     `(asset_document_id, frequency)`, which names exactly one rule. Not
+     *     every job on the machine, and not every job for that technician.
+     *
+     *     ONLY GENUINELY UNASSIGNED JOBS. A job that already has an assignee is
+     *     never touched — that is the rule the non-cascading default exists to
+     *     protect. Jobs past the technician's hands (SUBMITTED/ARCHIVED/VOIDED,
+     *     where `POST /jobs/{jobId}/assign` answers 409) and ad-hoc jobs are
+     *     excluded, by the same predicate that produced the count.
+     *
+     *     THE REAL PATH, PER JOB. Each assignment goes through the service
+     *     `POST /jobs/{jobId}/assign` uses: SCHEDULED -> ASSIGNED via the state
+     *     machine, one transaction and one `audit_event` per job, one
+     *     `JOB_ASSIGNED` notification per job. Nothing bulk-UPDATEs the column.
+     *
+     *     PARTIAL SUCCESS IS 200, NOT AN ERROR. One refusal must not roll back
+     *     the jobs already assigned nor abort the ones after it, so the response
+     *     enumerates `assigned` and `refused` by job number, each refusal
+     *     carrying the server's own `detail`.
+     *
+     *     409 when the plan's standing assignee changed after the offer was made
+     *     (nothing is assigned); 422 when the plan has no standing assignee to
+     *     apply; 404 for an unknown rule; 403 when the rule's machine is outside
+     *     the caller's area scope.
+     */
+    post: operations['applyDefaultAssigneeToExistingJobs'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/approval-routes': {
     parameters: {
       query?: never;
@@ -2605,6 +2667,77 @@ export interface components {
       /** Format: uuid */
       scheduleRuleId: string;
       defaultAssignee: components['schemas']['PlannerDefaultAssignee'] | null;
+      /**
+       * @description Slice 33-APPLYDEFAULT — how many jobs this rule has ALREADY raised
+       *     that could still be given to somebody.
+       *
+       *     The standing assignee only affects jobs not yet generated, and that
+       *     is deliberate. But on day one it made the feature useless as
+       *     guidance: an owner set it on four plans, logged in as the
+       *     technician, and saw nothing, because 195 jobs were already raised
+       *     and unassigned. So the response says how many the planner could
+       *     ALSO hand over, and the screen offers it as a separate, explicit
+       *     confirmation. Nothing is applied by this endpoint.
+       *
+       *     IT IS THE NUMBER THAT WOULD ACTUALLY CHANGE. Counted over the same
+       *     predicate `POST .../apply-to-existing` iterates: a job that already
+       *     has an assignee, or has left the technician's hands
+       *     (SUBMITTED/ARCHIVED/VOIDED, where `POST /jobs/{jobId}/assign` is a
+       *     409), or is ad-hoc, is excluded from both.
+       */
+      unassignedJobsAlreadyRaised: number;
+    };
+    ApplyDefaultAssigneeRequest: {
+      /**
+       * Format: uuid
+       * @description The person the planner was offered. Sent back rather than implied,
+       *     and refused with 409 if it is no longer the rule's standing
+       *     assignee: the planner answered a question about a NAMED person, and
+       *     between the offer and the answer somebody else may have changed the
+       *     plan. Applying whatever the column holds at that moment would
+       *     assign real work to somebody they never saw named.
+       */
+      assigneeId: string;
+    };
+    AppliedJob: {
+      /** Format: uuid */
+      jobId: string;
+      /** @example PM-2026-000123 */
+      jobNumber: string;
+    };
+    RefusedJob: {
+      /** Format: uuid */
+      jobId: string;
+      /** @example PM-2026-000123 */
+      jobNumber: string;
+      /**
+       * @description The `detail` of the problem `POST /jobs/{jobId}/assign` raised for
+       *     this job, carried through verbatim. A planner told "3 of 4 were
+       *     assigned" and nothing else has no way to find the fourth.
+       */
+      reason: string;
+    };
+    /**
+     * @description Slice 33-APPLYDEFAULT. PARTIAL SUCCESS IS A FIRST-CLASS OUTCOME, not an
+     *     error case: each job is assigned through `POST /jobs/{jobId}/assign`'s
+     *     own service, in its own transaction, with its own audit event and its
+     *     own `JOB_ASSIGNED` notification, so one refusal can neither roll back
+     *     the jobs already assigned nor abort the ones not yet attempted.
+     */
+    ApplyDefaultAssigneeResult: {
+      /** Format: uuid */
+      scheduleRuleId: string;
+      /** Format: uuid */
+      assigneeId: string;
+      assigned: components['schemas']['AppliedJob'][];
+      refused: components['schemas']['RefusedJob'][];
+      /**
+       * @description Jobs that matched but were beyond this batch's cap and were NOT
+       *     touched. Normally 0 — a rule holds one live job per due date — but
+       *     omitting it would let `assigned + refused` read as "all of them"
+       *     when it was not.
+       */
+      notAttempted: number;
     };
     /**
      * @description Slice 32-PLANNERJOB — a HANDLE on the job raised for a planned visit:
@@ -4481,6 +4614,62 @@ export interface operations {
       };
       404: components['responses']['Problem'];
       /** @description `/errors/validation-failed` - the assignee is unknown, inactive, holds no result-recording role, or cannot reach the machine's area */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+    };
+  };
+  applyDefaultAssigneeToExistingJobs: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A `schedule_rule` id, as `GET /schedule` returns on every row. */
+        scheduleRuleId: components['parameters']['ScheduleRuleId'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ApplyDefaultAssigneeRequest'];
+      };
+    };
+    responses: {
+      /** @description What was assigned, and what was refused and why */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApplyDefaultAssigneeResult'];
+        };
+      };
+      401: components['responses']['Problem'];
+      /** @description `/errors/out-of-scope` - the rule's machine is outside the caller's area scope */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      404: components['responses']['Problem'];
+      /** @description `/errors/validation-failed` - the standing assignee changed after the offer; nothing was assigned */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/problem+json': components['schemas']['Problem'];
+        };
+      };
+      /** @description `/errors/validation-failed` - the plan has no standing assignee to apply */
       422: {
         headers: {
           [name: string]: unknown;
