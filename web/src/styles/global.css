@@ -870,16 +870,24 @@ dialog.dialog::backdrop {
   display: none;
 }
 
-/* Focus rings on graphite chrome need a light ring to stay visible. */
+/* Focus rings on graphite chrome need a light ring to stay visible. Covers
+ * every button on the rail's dark chrome — nav items AND the sign-out
+ * control in its foot — not just `.nav-item`, so nothing added to the foot
+ * later silently falls back to the low-contrast default ring. */
 .nav-tabs .nav-item:focus-visible,
-.nav-rail .nav-item:focus-visible {
+.nav-rail button:focus-visible {
   outline-color: var(--color-focus-chrome);
   outline-offset: -3px;
 }
 
 @media (min-width: 768px) {
+  /* `.menu-signout` wraps the Menu screen's own SignOutControl (Menu.tsx):
+   * the rail's foot (below) carries the same control at this breakpoint,
+   * and this copy would otherwise leave two "Sign out" controls in the
+   * accessibility tree at once. */
   .appbar,
-  .nav-tabs {
+  .nav-tabs,
+  .menu-signout {
     display: none;
   }
 
@@ -899,6 +907,10 @@ dialog.dialog::backdrop {
     z-index: var(--z-nav);
     display: flex;
     flex-direction: column;
+    /* The foot (below) now carries a sign-out button as well as the
+     * identity block; at a short window height the nav items + foot can
+     * exceed the fixed rail's height. Scroll rather than overlap. */
+    overflow-y: auto;
     background: var(--color-chrome);
     color: var(--color-chrome-ink);
     padding: var(--space-5) var(--space-3) calc(env(safe-area-inset-bottom, 0px) + var(--space-4))
@@ -965,6 +977,27 @@ dialog.dialog::backdrop {
     letter-spacing: var(--tracking-caps);
     color: var(--color-chrome-ink-soft);
     text-transform: uppercase;
+  }
+
+  /* Quiet outline button, native to the narrow dark chrome — the Menu
+   * screen's Sign out is a shouting `.btn-block`; this is the same control
+   * (SignOutControl.tsx) asked to look like it belongs in a footer, not a
+   * page. */
+  .nav-rail-signout {
+    width: 100%;
+    border: var(--border-width) solid var(--color-chrome-line);
+    border-radius: var(--radius-1);
+    background: transparent;
+    color: var(--color-chrome-ink);
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: var(--text-sm);
+    letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+  }
+
+  .nav-rail-signout:hover:not(:disabled) {
+    background: var(--color-chrome-line);
   }
 }
 

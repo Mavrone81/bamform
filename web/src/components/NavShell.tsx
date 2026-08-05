@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from '../router';
 import { getCurrentUser, onCurrentUserChange } from '../auth';
 import { BrandMark } from './BrandMark';
+import { SignOutControl } from './SignOutControl';
 
 /**
  * The navigation shell (slice 14-DESIGN §3.2): bottom tab bar on phones,
@@ -211,6 +212,12 @@ export function NavShell({ children }: { children: ReactNode }) {
               <span className="nav-rail-roles">{user.roles.join(' · ')}</span>
             </>
           )}
+          {/* Same control as the Menu screen's (SignOutControl.tsx) — the
+              guard against stranding unsent offline work lives in exactly
+              one place. Menu's own copy is `display: none` at this
+              breakpoint (`.menu-signout`, global.css) so only one "Sign
+              out" is ever in the accessibility tree. */}
+          <SignOutControl variant="rail" />
         </div>
       </nav>
 
